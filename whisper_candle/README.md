@@ -1,0 +1,1 @@
+This folder contains experiments with speech recognition using Whisper from the [Candle](https://github.com/huggingface/candle) project. As of March 2024, I am not satisfied with the result.
