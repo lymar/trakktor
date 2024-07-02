@@ -1,3 +1,4 @@
+unstable_features = true
 binop_separator = "Back"
 edition = "2021"
 fn_single_line = true
@@ -8,3 +9,4 @@ imports_granularity = "Crate"
 newline_style = "Unix"
 group_imports = "StdExternalCrate"
 wrap_comments = true
+skip_macro_invocations = ["trace", "debug", "info", "warn", "error"]

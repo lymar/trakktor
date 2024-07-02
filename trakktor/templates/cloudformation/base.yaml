@@ -1,0 +1,163 @@
+AWSTemplateFormatVersion: 2010-09-09
+Transform: AWS::Serverless-2016-10-31
+
+Resources:
+
+  ##############################################################################
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      EnableDnsSupport: 'true'
+      EnableDnsHostnames: 'true'
+      CidrBlock: 10.0.0.0/16
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId:
+        Ref: VPC
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId:
+        Ref: VPC
+      InternetGatewayId:
+        Ref: InternetGateway
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Trakktor Network Security Group
+      VpcId:
+        Ref: VPC
+  Route:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId:
+        Ref: RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId:
+        Ref: InternetGateway
+
+{% for subnet in subnets %}
+  {{subnet}}:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: 10.0.{{loop.index0 * 10}}.0/22
+      AvailabilityZone: !Select [ {{loop.index0}}, Fn::GetAZs: "" ]
+      VpcId:
+        Ref: VPC
+      MapPublicIpOnLaunch: 'True'
+  {{subnet}}RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId:
+        Ref: RouteTable
+      SubnetId:
+        Ref: {{subnet}}
+{% endfor %}
+
+  ##############################################################################
+
+  S3StorageBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: {{s3_storage_name}}
+      AccelerateConfiguration:
+        AccelerationStatus: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: AbortIncompleteMultipartUpload
+            Prefix: ''
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+
+  ##############################################################################
+
+  BatchServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: batch.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSBatchServiceRole
+
+  IamInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - Ref: EcsInstanceRole
+
+  EcsInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2008-10-17'
+        Statement:
+          - Sid: ''
+            Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+
+  GenericJobRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Action: 'sts:AssumeRole'
+            Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+      Policies:
+        - PolicyName: !Sub "${AWS::StackName}-storage-access"
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: [ 's3:*' ]
+                Resource:
+                  - !Sub 'arn:aws:s3:::${S3StorageBucket}'
+                  - !Sub 'arn:aws:s3:::${S3StorageBucket}/*'
+
+Outputs:
+  VPCID:
+    Value: !Ref VPC
+    Export:
+      Name: !Sub "${AWS::StackName}-VPCID"
+  SecurityGroup:
+    Value: !Ref SecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-SecurityGroup"
+{% for subnet in subnets %}
+  {{subnet}}:
+    Value: !Ref {{subnet}}
+    Export:
+      Name: !Sub "${AWS::StackName}-{{subnet}}"
+{% endfor %}
+  S3StorageBucket:
+    Value: !Ref S3StorageBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-S3StorageBucket"
+  BatchServiceRole:
+    Value: !Ref BatchServiceRole
+    Export:
+      Name: !Sub "${AWS::StackName}-BatchServiceRole"
+  IamInstanceProfile:
+    Value: !Ref IamInstanceProfile
+    Export:
+      Name: !Sub "${AWS::StackName}-IamInstanceProfile"
+  GenericJobRole:
+    Value: !Ref GenericJobRole
+    Export:
+      Name: !Sub "${AWS::StackName}-GenericJobRole"

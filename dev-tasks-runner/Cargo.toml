@@ -1,0 +1,11 @@
+[package]
+name = "dev-tasks-runner"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+trakktor = { path = "../trakktor" }
+
+cmd_lib = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }

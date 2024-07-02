@@ -1,0 +1,89 @@
+AWSTemplateFormatVersion: 2010-09-09
+Transform: AWS::Serverless-2016-10-31
+
+Resources:
+  GpuLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeType: gp2
+              VolumeSize: 64
+
+  GpuComputeEnvironment:
+    Type: AWS::Batch::ComputeEnvironment
+    Properties:
+      Type: Managed
+      State: ENABLED
+      ServiceRole:
+        Fn::ImportValue: {{base_stack_name}}-BatchServiceRole
+      ComputeResources:
+        Type: EC2
+        MinvCpus: 0
+        DesiredvCpus: 0
+        MaxvCpus: 16
+        InstanceRole:
+          Fn::ImportValue: {{base_stack_name}}-IamInstanceProfile
+        InstanceTypes:
+          - g6.xlarge
+        SecurityGroupIds:
+          - Fn::ImportValue: {{base_stack_name}}-SecurityGroup
+        Subnets:
+{%- for subnet in subnets %}
+          - Fn::ImportValue: {{base_stack_name}}-{{subnet}}
+{%- endfor %}
+        LaunchTemplate:
+          LaunchTemplateId: !Ref GpuLaunchTemplate
+
+  GpuJobQueue:
+    Type: AWS::Batch::JobQueue
+    Properties:
+      Priority: 1
+      ComputeEnvironmentOrder:
+        - Order: 1
+          ComputeEnvironment:
+            Ref: GpuComputeEnvironment
+
+  GpuDockerHelloWorldJob:
+    Type: AWS::Batch::JobDefinition
+    Properties:
+      Type: container
+      ContainerProperties:
+        Image: "docker.io/hello-world"
+        Vcpus: 1
+        Memory: 1800
+        JobRoleArn:
+          Fn::ImportValue: {{base_stack_name}}-GenericJobRole
+      RetryStrategy:
+        Attempts: 1
+
+  GpuWhisperLargeJob:
+    Type: AWS::Batch::JobDefinition
+    Properties:
+      Type: container
+      ContainerProperties:
+        Image: "{{whisper_large_image_name}}"
+        Vcpus: 4
+        Memory: 15000
+        ResourceRequirements:
+          - Type: "GPU"
+            Value: "1"
+        JobRoleArn:
+          Fn::ImportValue: {{base_stack_name}}-GenericJobRole
+        Environment:
+          - Name: S3_STORAGE_BUCKET
+            Value:
+              Fn::ImportValue: {{base_stack_name}}-S3StorageBucket
+        Privileged: true
+      RetryStrategy:
+        Attempts: 1
+      Timeout:
+        AttemptDurationSeconds: 21600 # 6 hours
+
+Outputs:
+  GpuJobQueue:
+    Value: !Ref GpuJobQueue
+  GpuWhisperLargeJob:
+    Value: !Ref GpuWhisperLargeJob

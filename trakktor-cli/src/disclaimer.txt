@@ -1,0 +1,11 @@
+Disclaimer:
+
+By using this utility, you acknowledge and agree to the following terms:
+
+1. This utility launches jobs on Amazon Web Services (AWS) which can incur significant costs.
+2. You are fully responsible for any charges resulting from the use of this utility.
+3. You understand that these jobs are not free and you accept full financial responsibility for all expenses incurred.
+4. The author of this utility is not liable for any errors or issues that may result in additional charges.
+5. You use this utility at your own risk and you waive any claims against the author for any potential or actual financial losses.
+
+Do you agree to these terms? (yes/no)
