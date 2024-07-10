@@ -3,6 +3,7 @@ use std::{path::Path, sync::Arc, time::Duration};
 use anyhow::{anyhow, bail};
 use aws_config::timeout::TimeoutConfig;
 use aws_sdk_s3::{
+    config::StalledStreamProtectionConfig,
     operation::create_multipart_upload::CreateMultipartUploadOutput,
     primitives::ByteStream,
     types::{
@@ -22,17 +23,25 @@ const PARALLEL_DOWNLOADS: usize = 4;
 
 fn get_client(
     config: &impl AwsConfigProvider,
-    with_long_timeout: bool,
+    long_op: bool,
 ) -> Client {
     let mut s3_config =
         aws_sdk_s3::config::Builder::from(config.get_aws_config())
             .accelerate(true);
-    if with_long_timeout {
-        s3_config = s3_config.timeout_config(
-            TimeoutConfig::builder()
-                .operation_attempt_timeout(Duration::from_secs(60 * 5))
-                .build(),
-        );
+    if long_op {
+        s3_config = s3_config
+            .timeout_config(
+                TimeoutConfig::builder()
+                    .operation_attempt_timeout(Duration::from_secs(60 * 5))
+                    .build(),
+            )
+            // Workaround for "minimum throughput was specified at 1 B/s,
+            // but throughput of 0 B/s was observed"
+            .stalled_stream_protection(
+                StalledStreamProtectionConfig::enabled()
+                    .upload_enabled(false)
+                    .build(),
+            );
     }
     Client::from_conf(s3_config.build())
 }
