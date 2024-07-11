@@ -21,10 +21,7 @@ const CHUNK_SIZE: u64 = 1024 * 1024 * 5;
 const PARALLEL_UPLOADS: usize = 4;
 const PARALLEL_DOWNLOADS: usize = 4;
 
-fn get_client(
-    config: &impl AwsConfigProvider,
-    long_op: bool,
-) -> Client {
+fn get_client(config: &impl AwsConfigProvider, long_op: bool) -> Client {
     let mut s3_config =
         aws_sdk_s3::config::Builder::from(config.get_aws_config())
             .accelerate(true);

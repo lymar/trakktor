@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
-use tokio::sync::Semaphore;
-use tokio::task::JoinHandle;
+use tokio::{sync::Semaphore, task::JoinHandle};
 use tracing::{info_span, Instrument};
 
-use crate::aws::config::{AwsConfigProvider, S3Provider};
-use crate::aws::s3::delete_dir;
-use crate::job::JobUid;
+use crate::aws_batch::{
+    config::{AwsConfigProvider, S3Provider},
+    job::JobUid,
+    s3::delete_dir,
+};
 
 #[derive(clap::Args, Debug)]
 pub struct DeleteArgs {

@@ -8,7 +8,7 @@ use tokio::{sync::Semaphore, task::JoinHandle};
 use tracing::{info_span, Instrument};
 
 use super::config::{AwsConfigProvider, CloudFormationStackProvider};
-use crate::job::JobUid;
+use crate::aws_batch::job::JobUid;
 
 const PARALLEL_REQS: usize = 8;
 

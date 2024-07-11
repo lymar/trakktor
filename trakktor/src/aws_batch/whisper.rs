@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use crate::{aws::batch::ContainerEnvs, job::JobUid};
+use crate::aws_batch::{batch::ContainerEnvs, job::JobUid};
 
 const VERSION_TAG: &str = "1";
 const DEV_VERSION_TAG: &str = "dev";

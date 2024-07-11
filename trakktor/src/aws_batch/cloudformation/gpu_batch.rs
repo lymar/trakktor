@@ -2,7 +2,7 @@ use askama::Template;
 use serde::Deserialize;
 
 use super::base::gen_subnet_names;
-use crate::whisper;
+use crate::aws_batch::whisper;
 
 #[derive(Template)]
 #[template(path = "cloudformation/gpu_batch.yaml", escape = "none")]

@@ -37,7 +37,7 @@ async fn main() -> anyhow::Result<()> {
         }));
     tracing_subscriber::registry().with(layer).init();
 
-    trakktor_cli::TrakktorCli::run(cli).await?;
+    cli.run().await?;
 
     Ok(())
 }

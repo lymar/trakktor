@@ -1,9 +1,3 @@
 pub mod app_config;
-pub mod aws;
-pub mod delete;
-pub mod download;
+pub mod aws_batch;
 mod hasher;
-pub mod job;
-pub mod list;
-pub mod transcribe;
-pub mod whisper;

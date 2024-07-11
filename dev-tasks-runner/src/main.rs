@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 use cmd_lib::*;
-use trakktor::whisper;
+use trakktor::aws_batch::whisper;
 
 #[derive(Debug)]
 struct TasksRunner {

@@ -1,9 +1,7 @@
-use crate::{
-    aws::{
-        config::{AwsConfigProvider, S3Provider},
-        s3::{download_folder, list_objects},
-    },
+use crate::aws_batch::{
+    config::{AwsConfigProvider, S3Provider},
     job::{make_output_storage_prefix, JobUid, JOB_DONE_FLAG},
+    s3::{download_folder, list_objects},
 };
 
 #[derive(clap::Args, Debug)]

@@ -6,13 +6,11 @@ use chrono::{DateTime, Local};
 use duration_str::HumanFormat;
 use tracing::{info_span, Instrument};
 
-use crate::{
-    aws::{
-        cloudformation::load_all_batch_jobs,
-        config::{AwsConfigProvider, CloudFormationStackProvider, S3Provider},
-        s3::list_objects,
-    },
+use crate::aws_batch::{
+    cloudformation::load_all_batch_jobs,
+    config::{AwsConfigProvider, CloudFormationStackProvider, S3Provider},
     job::{JobInfo, JobUid, JOB_DONE_FLAG, JOB_IN_PREFIX, JOB_OUT_PREFIX},
+    s3::list_objects,
 };
 
 #[derive(Debug, strum_macros::Display)]
@@ -24,9 +22,7 @@ enum JobStatus {
 }
 
 impl Default for JobStatus {
-    fn default() -> Self {
-        Self::Unknown
-    }
+    fn default() -> Self { Self::Unknown }
 }
 
 #[derive(Debug, Default)]
@@ -129,11 +125,11 @@ pub async fn list_all_jobs(
                     use aws_sdk_batch::types::JobStatus as JS;
                     match summ.status {
                         Some(s)
-                            if s == JS::Pending
-                                || s == JS::Runnable
-                                || s == JS::Running
-                                || s == JS::Starting
-                                || s == JS::Submitted =>
+                            if s == JS::Pending ||
+                                s == JS::Runnable ||
+                                s == JS::Running ||
+                                s == JS::Starting ||
+                                s == JS::Submitted =>
                         {
                             info.status = JobStatus::InProgress;
                         },

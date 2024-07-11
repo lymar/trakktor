@@ -2,16 +2,17 @@ use anyhow::{anyhow, Context};
 
 use crate::{
     app_config::AppConfigProvider,
-    aws::{
+    aws_batch::{
         batch::submit_job,
         cloudformation::{load_gpu_stack_outputs, StackId},
         config::{AwsConfigProvider, CloudFormationStackProvider, S3Provider},
+        job::{
+            make_info_storage_key, make_input_storage_key, JobInfo, JobType,
+            JobUid,
+        },
         s3::{put_object, upload_file},
+        whisper::WhisperJobArgs,
     },
-    job::{
-        make_info_storage_key, make_input_storage_key, JobInfo, JobType, JobUid,
-    },
-    whisper::WhisperJobArgs,
 };
 
 #[derive(clap::Args, Debug)]
@@ -41,7 +42,7 @@ pub async fn run_transcribe_job(
           + AppConfigProvider),
     job: &TranscribeJobArgs,
 ) -> anyhow::Result<()> {
-    crate::aws::cloudformation::manage_cloudformation_stacks(
+    crate::aws_batch::cloudformation::manage_cloudformation_stacks(
         config,
         [StackId::Base, StackId::GpuBatch].into(),
     )
