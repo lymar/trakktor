@@ -15,11 +15,13 @@ impl std::fmt::Display for JobUid {
 
 impl JobUid {
     pub fn new() -> Self {
-        Self(
-            URL_SAFE_NO_PAD
-                .encode(uuid::Uuid::new_v4().as_bytes())
-                .into(),
-        )
+        loop {
+            let uid = URL_SAFE_NO_PAD.encode(uuid::Uuid::new_v4().as_bytes());
+            if !uid.chars().next().unwrap().is_ascii_alphanumeric() {
+                continue;
+            }
+            return Self(uid.into());
+        }
     }
 
     pub fn parse_job_uid(s: &str) -> Result<Self, String> {
@@ -34,7 +36,9 @@ impl JobUid {
 }
 
 impl AsRef<str> for JobUid {
-    fn as_ref(&self) -> &str { &self.0 }
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
 }
 
 #[test]
