@@ -271,6 +271,9 @@ struct StackInfo {
     stack_id: StackId,
     status: StackStatus,
     uid: Box<str>,
+    // This field is intended for recording the version of Trakktor that
+    // created this stack, which can be viewed in the AWS console.
+    #[allow(dead_code)]
     version: Box<str>,
     outputs: serde_json::Value,
 }

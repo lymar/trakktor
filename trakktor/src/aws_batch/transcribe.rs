@@ -20,6 +20,7 @@ pub struct TranscribeJobArgs {
     /// File to transcribe.
     pub file: std::path::PathBuf,
     /// The language of the audio.
+    #[arg(short, long)]
     pub language: Box<str>,
 }
 

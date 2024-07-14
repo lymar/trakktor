@@ -3,6 +3,7 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
+use aws_config::Region;
 use clap::{Args, Parser, Subcommand};
 use trakktor::aws_batch::{
     cloudformation::{verify_base_stack_presence, StackId},
@@ -17,8 +18,11 @@ use super::Cli;
 #[derive(Parser, Debug)]
 pub struct AwsBatch {
     /// The AWS profile to use.
-    #[arg(short('p'), long)]
-    pub aws_profile: Arc<str>,
+    #[arg(long)]
+    pub profile: Option<Arc<str>>,
+    /// The AWS region to use.
+    #[arg(long)]
+    pub region: Option<Arc<str>>,
     /// The prefix to use for the CloudFormation stack names.
     #[arg(short, long, default_value = "trakktor")]
     pub stack_prefix: Arc<str>,
@@ -49,10 +53,15 @@ pub struct Initialize {
 
 impl Cli {
     pub async fn run_aws_batch(&self, args: &AwsBatch) -> anyhow::Result<()> {
-        let aws_config = aws_config::from_env()
-            .profile_name(args.aws_profile.as_ref())
-            .load()
-            .await;
+        let mut aws_config = aws_config::from_env();
+        if let Some(profile) = &args.profile {
+            aws_config = aws_config.profile_name(profile.as_ref());
+        }
+        if let Some(region) = &args.region {
+            aws_config =
+                aws_config.region(Region::new(region.as_ref().to_owned()));
+        }
+        let aws_config = aws_config.load().await;
         let config_provider = Arc::new(GenericConfigProvider {
             aws_config,
             stack_prefix: Arc::clone(&args.stack_prefix),
