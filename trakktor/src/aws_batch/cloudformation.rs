@@ -14,7 +14,7 @@ use gpu_batch::GpuBatchStackOutputs;
 use super::{
     batch,
     config::{AwsConfigProvider, CloudFormationStackProvider},
-    get_availability_zone_count,
+    ec2::get_availability_zone_count,
 };
 use crate::app_config::AppConfigProvider;
 

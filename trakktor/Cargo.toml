@@ -25,3 +25,19 @@ strum = { workspace = true }
 strum_macros = { workspace = true }
 chrono = { workspace = true }
 duration-str = { workspace = true }
+toml_edit = { workspace = true }
+async-recursion = { workspace = true }
+reqwest = { workspace = true }
+# similar = { workspace = true } # diff
+bon = { workspace = true } 
+url = { workspace = true }
+async-trait = { workspace = true }
+redb = { workspace = true }
+# regex = { workspace = true }
+itertools = { workspace = true }
+edit-distance = { workspace = true }
+
+
+# [dev-dependencies]
+# proptest = "1"
+# rand = "*"

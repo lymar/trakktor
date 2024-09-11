@@ -12,3 +12,4 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 aws-config = { workspace = true }
 clap = { workspace = true }
+url = { workspace = true }

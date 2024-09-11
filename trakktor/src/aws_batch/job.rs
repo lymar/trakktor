@@ -36,9 +36,7 @@ impl JobUid {
 }
 
 impl AsRef<str> for JobUid {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
+    fn as_ref(&self) -> &str { &self.0 }
 }
 
 #[test]

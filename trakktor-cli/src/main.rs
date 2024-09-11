@@ -28,6 +28,7 @@ async fn main() -> anyhow::Result<()> {
         .with_level(true)
         .with_target(false)
         .without_time()
+        .with_writer(std::io::stderr)
         .with_filter(filter_fn(move |metadata| {
             if metadata.target().starts_with("trakktor") {
                 metadata.level() <= &log_level
