@@ -4,10 +4,10 @@ use bon::builder;
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
-pub mod open_ai;
+use crate::config_hash::ConfigHash;
 
 #[derive(ValueEnum, Clone, Copy, Debug, Deserialize)]
-pub enum Provider {
+pub enum ChatCompletionPlatform {
     #[serde(rename = "open-ai")]
     OpenAI,
     // #[serde(rename = "aws-bedrock")]
@@ -30,27 +30,27 @@ pub struct Message<'a> {
 
 #[builder]
 #[derive(Debug)]
-pub struct ChatCompletions<'a> {
+pub struct ChatCompletionsArgs<'a> {
     pub model_overwrite: Option<&'a str>,
     pub messages: &'a [Message<'a>],
     pub response_format: Option<&'a serde_json::Value>,
 }
 
-impl<'a> ChatCompletions<'a> {
+impl<'a> ChatCompletionsArgs<'a> {
     pub async fn run_with(
         self,
-        provider: &impl ChatCompletionsProvider,
+        api: &impl ChatCompletionChatAPI,
     ) -> anyhow::Result<Message<'static>> {
-        provider.run_chat(self).await
+        api.run_chat(self).await
     }
 }
 
 #[async_trait::async_trait]
-pub trait ChatCompletionsProvider {
+pub trait ChatCompletionChatAPI {
     async fn run_chat(
         &self,
-        args: ChatCompletions<'_>,
+        args: ChatCompletionsArgs<'_>,
     ) -> anyhow::Result<Message<'static>>;
-
-    fn config_hash(&self) -> String;
 }
+
+pub trait ChatCompletionAPI: ChatCompletionChatAPI + ConfigHash {}

@@ -4,11 +4,13 @@ use anyhow::bail;
 use clap::Parser;
 use itertools::Itertools;
 use redb::TableDefinition;
+use serde::{de::DeserializeOwned, Serialize};
 use tokio::task::spawn_blocking;
 
 use crate::{
+    embedding::{self, EmbeddingsAPI, EmbeddingsArgs},
     hasher::get_hash_value,
-    llm::{ChatCompletions, ChatCompletionsProvider, Message, Role},
+    llm::{ChatCompletionAPI, ChatCompletionsArgs, Message, Role},
 };
 
 #[derive(Parser, Debug)]
@@ -19,10 +21,12 @@ pub struct StructifyText {
 }
 
 const CHUNK_WORDS_THRESHOLD: usize = 1000;
+const CACHE_FILE_EXT: &str = "trakktor.cache";
 
 pub async fn run_structify_text(
     args: &StructifyText,
-    chat_provider: &Box<dyn ChatCompletionsProvider>,
+    chat_api: &Box<dyn ChatCompletionAPI>,
+    embeddings_api: &Box<dyn EmbeddingsAPI>,
 ) -> anyhow::Result<()> {
     let input_text = tokio::fs::read_to_string(&args.file).await?;
     let mut all_words = Arc::new(
@@ -37,7 +41,7 @@ pub async fn run_structify_text(
     }
 
     let cache = Arc::new({
-        let db_name = args.file.with_extension("trakktor.cache");
+        let db_name = args.file.with_extension(CACHE_FILE_EXT);
         spawn_blocking(move || CallCache::open(&db_name)).await??
     });
 
@@ -56,14 +60,9 @@ pub async fn run_structify_text(
         let last_chunk = llm_text == orig_text;
 
         let paragraphs =
-            get_paragraphs(Arc::clone(&cache), chat_provider, &llm_text)
-                .await?;
-
-        // println!("{:#?}", paragraphs);
+            get_paragraphs(Arc::clone(&cache), chat_api, &llm_text).await?;
 
         if last_chunk {
-            // todo: выводить если указан флаг dev
-            result_paragraphs.push("**************************".into());
             result_paragraphs.extend(paragraphs.iter().cloned());
             break;
         }
@@ -76,8 +75,6 @@ pub async fn run_structify_text(
         }
 
         let accepted_paragraphs = &paragraphs[0..paragraphs.len() - 1];
-        // todo: выводить если указан флаг dev
-        result_paragraphs.push("**************************".into());
         result_paragraphs.extend(accepted_paragraphs.iter().cloned());
 
         all_words = get_next_text_words(
@@ -88,12 +85,89 @@ pub async fn run_structify_text(
         .await?;
     }
 
+    // println!("****** {:?}", tst_embed);
+    make_sections(
+        args,
+        chat_api,
+        embeddings_api,
+        &result_paragraphs,
+        Arc::clone(&cache),
+    )
+    .await?;
+
     let full_text_file = args.file.with_extension("trakktor.text.md");
     tokio::fs::write(&full_text_file, &result_paragraphs.join("\n\n")).await?;
 
     tracing::info!("Wrote structified text to: {}", full_text_file.display());
 
     Ok(())
+}
+
+async fn make_sections(
+    args: &StructifyText,
+    chat_api: &Box<dyn ChatCompletionAPI>,
+    embeddings_api: &Box<dyn EmbeddingsAPI>,
+    paragraphs: &[String],
+    call_cache: Arc<CallCache>,
+) -> anyhow::Result<()> {
+    let mut embeddings = vec![];
+    for w in paragraphs.windows(3) {
+        let text = w.join("\n\n");
+
+        let call_hash =
+            Arc::new(get_hash_value(format!("make_sections:\n{text}")));
+
+        if let Some(e) = spawn_blocking({
+            let call_cache = Arc::clone(&call_cache);
+            let call_hash = Arc::clone(&call_hash);
+            move || call_cache.get_data::<Arc<Vec<f64>>>(&call_hash)
+        })
+        .await??
+        {
+            tracing::debug!("Using cached embeddings");
+            embeddings.push(e);
+        } else {
+            let e = Arc::new(
+                embeddings_api
+                    .get_embedding(
+                        EmbeddingsArgs::builder().input(&text).build(),
+                    )
+                    .await?,
+            );
+            spawn_blocking({
+                let e = Arc::clone(&e);
+                let call_cache = Arc::clone(&call_cache);
+                move || call_cache.put_data(&call_hash, &e)
+            })
+            .await??;
+            embeddings.push(e);
+        }
+    }
+
+    for (idx, pairs) in embeddings.windows(2).enumerate() {
+        let sim = cosine_similarity(&pairs[0], &pairs[1], true);
+        tracing::info!("Cosine similarity: {}", sim);
+        if sim < 0.7 {
+            tracing::info!("Section break detected: {}", paragraphs[idx + 1]);
+        }
+    }
+
+    Ok(())
+}
+
+pub fn cosine_similarity(vec1: &[f64], vec2: &[f64], normalized: bool) -> f64 {
+    let dot_product: f64 =
+        vec1.iter().zip(vec2.iter()).map(|(a, b)| a * b).sum();
+
+    if normalized {
+        dot_product
+    } else {
+        let magnitude1: f64 =
+            vec1.iter().map(|x| x.powi(2)).sum::<f64>().sqrt();
+        let magnitude2: f64 =
+            vec2.iter().map(|x| x.powi(2)).sum::<f64>().sqrt();
+        dot_product / (magnitude1 * magnitude2)
+    }
 }
 
 fn push_word(text: &mut String, word: &str) {
@@ -120,7 +194,7 @@ async fn get_next_text_words(
     if let Some(words) = spawn_blocking({
         let call_cache = Arc::clone(&call_cache);
         let call_hash = Arc::clone(&call_hash);
-        move || call_cache.get_vec_string(&call_hash)
+        move || call_cache.get_data::<Vec<String>>(&call_hash)
     })
     .await??
     {
@@ -183,7 +257,7 @@ async fn get_next_text_words(
 
     spawn_blocking({
         let words = Arc::clone(&next_words);
-        move || call_cache.insert_vec_string(&call_hash, &words)
+        move || call_cache.put_data(&call_hash, &words)
     })
     .await??;
 
@@ -192,19 +266,19 @@ async fn get_next_text_words(
 
 async fn get_paragraphs(
     call_cache: Arc<CallCache>,
-    chat_provider: &Box<dyn ChatCompletionsProvider>,
+    chat_api: &Box<dyn ChatCompletionAPI>,
     text: &str,
 ) -> anyhow::Result<Arc<Vec<String>>> {
     let call_hash = Arc::new(get_hash_value(format!(
         "get_paragraphs:\n{}\n{}",
-        chat_provider.config_hash(),
+        chat_api.config_hash(),
         text
     )));
 
     if let Some(paragraphs) = spawn_blocking({
         let call_cache = Arc::clone(&call_cache);
         let call_hash = Arc::clone(&call_hash);
-        move || call_cache.get_vec_string(&call_hash)
+        move || call_cache.get_data::<Vec<String>>(&call_hash)
     })
     .await??
     {
@@ -217,9 +291,9 @@ async fn get_paragraphs(
         let mut retries = vec![];
 
         loop {
-            let content = chat_provider
+            let content = chat_api
                 .run_chat(
-                    ChatCompletions::builder()
+                    ChatCompletionsArgs::builder()
                         .messages(&[
                             Message {
                                 role: Role::System,
@@ -288,7 +362,7 @@ async fn get_paragraphs(
 
     spawn_blocking({
         let paragraphs = Arc::clone(&paragraphs);
-        move || call_cache.insert_vec_string(&call_hash, &paragraphs)
+        move || call_cache.put_data(&call_hash, &paragraphs)
     })
     .await??;
 
@@ -299,15 +373,15 @@ struct CallCache {
     db: redb::Database,
 }
 
-const VEC_STRING_TABLE: TableDefinition<&str, Vec<u8>> =
-    TableDefinition::new("vec_string_table");
+const KV_TABLE: TableDefinition<&str, Vec<u8>> =
+    TableDefinition::new("kv_table");
 
 impl CallCache {
     fn open(file_path: &Path) -> anyhow::Result<Self> {
         let db = redb::Database::create(file_path)?;
         let write_txn = db.begin_write()?;
 
-        let table = write_txn.open_table(VEC_STRING_TABLE)?;
+        let table = write_txn.open_table(KV_TABLE)?;
         drop(table);
 
         write_txn.commit()?;
@@ -315,33 +389,31 @@ impl CallCache {
         Ok(Self { db })
     }
 
-    fn get_vec_string(
-        &self,
-        call_hash: &str,
-    ) -> anyhow::Result<Option<Vec<String>>> {
+    fn get_data<T>(&self, call_hash: &str) -> anyhow::Result<Option<T>>
+    where
+        T: DeserializeOwned,
+    {
         let read_txn = self.db.begin_read()?;
-        let table = read_txn.open_table(VEC_STRING_TABLE)?;
+        let table = read_txn.open_table(KV_TABLE)?;
 
         let data = table.get(call_hash)?;
         if let Some(data) = data {
-            let vec_string = rmp_serde::from_slice(&data.value())?;
-            Ok(Some(vec_string))
+            Ok(Some(rmp_serde::from_slice(&data.value())?))
         } else {
             Ok(None)
         }
     }
 
-    fn insert_vec_string(
-        &self,
-        call_hash: &str,
-        vec_string: &[String],
-    ) -> anyhow::Result<()> {
+    fn put_data<T>(&self, call_hash: &str, data: &T) -> anyhow::Result<()>
+    where
+        T: Serialize,
+    {
         let write_txn = self.db.begin_write()?;
 
         {
-            let mut table = write_txn.open_table(VEC_STRING_TABLE)?;
+            let mut table = write_txn.open_table(KV_TABLE)?;
 
-            let data = rmp_serde::to_vec(vec_string)?;
+            let data = rmp_serde::to_vec(data)?;
             table.insert(call_hash, data)?;
         }
 

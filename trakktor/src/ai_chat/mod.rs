@@ -4,8 +4,9 @@ use anyhow::Context;
 use chat_doc::{ChatDoc, Msg};
 use clap::Parser;
 
-use crate::llm::{
-    open_ai::OpenAIChatProvider, ChatCompletions, Message, Provider,
+use crate::{
+    llm::{ChatCompletionPlatform, ChatCompletionsArgs, Message},
+    open_ai::OpenAiAPI,
 };
 
 pub mod chat_doc;
@@ -25,12 +26,12 @@ pub struct AIChat {
 }
 
 pub struct AllChatProviders {
-    pub open_ai: OpenAIChatProvider,
+    pub open_ai: OpenAiAPI,
 }
 
 pub async fn run_ai_chat(
     ai_chat: &AIChat,
-    chat_provider: &Option<Provider>,
+    chat_platform: &Option<ChatCompletionPlatform>,
     chat_model: &Option<Arc<str>>,
     all_providers: &AllChatProviders,
 ) -> anyhow::Result<()> {
@@ -64,13 +65,13 @@ pub async fn run_ai_chat(
         doc_configs.get(0).map(|v| v.clone()).unwrap_or_default()
     };
 
-    if config.provider.is_none() {
+    if config.platform.is_none() {
         // If the provider is not specified in the configuration, use the
         // command line argument.
-        if chat_provider.is_none() {
+        if chat_platform.is_none() {
             anyhow::bail!("Chat Provider not specified");
         } else {
-            config.provider = chat_provider.clone();
+            config.platform = chat_platform.clone();
         }
     }
 
@@ -104,17 +105,19 @@ pub async fn run_ai_chat(
         None
     };
 
-    let chat = ChatCompletions::builder()
+    let chat = ChatCompletionsArgs::builder()
         .maybe_model_overwrite(config.model.as_deref())
         .messages(&messages)
         .maybe_response_format(response_format.as_ref())
         .build();
 
     let chat_msg = match config
-        .provider
-        .ok_or_else(|| anyhow::anyhow!("Chat Provider not specified"))?
+        .platform
+        .ok_or_else(|| anyhow::anyhow!("Chat Platform not specified"))?
     {
-        Provider::OpenAI => chat.run_with(&all_providers.open_ai).await?,
+        ChatCompletionPlatform::OpenAI => {
+            chat.run_with(&all_providers.open_ai).await?
+        },
     };
 
     let mut msg = Msg::Text {

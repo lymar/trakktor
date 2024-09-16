@@ -6,7 +6,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
 
-use crate::llm::{Provider, Role};
+use crate::llm::{ChatCompletionPlatform, Role};
 
 pub struct ChatDoc {
     pub toml_doc: toml_edit::DocumentMut,
@@ -25,7 +25,7 @@ pub struct ChatData {
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct Cfg {
     pub name: Option<String>,
-    pub provider: Option<Provider>,
+    pub platform: Option<ChatCompletionPlatform>,
     pub model: Option<String>,
     pub response_format: Option<String>,
     #[serde(default)]

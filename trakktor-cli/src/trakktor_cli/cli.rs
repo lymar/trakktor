@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand, ValueHint};
-use trakktor::{ai_chat::AIChat, llm::Provider, structify_text::StructifyText};
+use trakktor::{
+    ai_chat::AIChat, embedding::EmbeddingsPlatform,
+    llm::ChatCompletionPlatform, structify_text::StructifyText,
+};
 
 pub mod aws_batch;
 pub mod structify_text;
@@ -21,12 +24,18 @@ pub struct Cli {
     /// The server URL to use for OpenAI.
     #[arg(long, value_hint = ValueHint::Url, value_parser = url::Url::parse)]
     pub openai_server_url: Option<url::Url>,
-    /// The LLM provider for chat tasks.
+    /// The chat platform to use for chat tasks.
     #[arg(long)]
-    pub chat_provider: Option<Provider>,
+    pub chat_platform: Option<ChatCompletionPlatform>,
     /// The model to use for chat tasks.
     #[arg(long)]
     pub chat_model: Option<Arc<str>>,
+    /// The embeddings platform to use for embeddings tasks.
+    #[arg(long)]
+    pub embeddings_platform: Option<EmbeddingsPlatform>,
+    /// The model to use for embeddings tasks.
+    #[arg(long)]
+    pub embeddings_model: Option<Arc<str>>,
 
     #[clap(subcommand)]
     pub command: Commands,
