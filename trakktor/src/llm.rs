@@ -4,8 +4,6 @@ use bon::builder;
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
-use crate::config_hash::ConfigHash;
-
 #[derive(ValueEnum, Clone, Copy, Debug, Deserialize)]
 pub enum ChatCompletionPlatform {
     #[serde(rename = "open-ai")]
@@ -39,18 +37,18 @@ pub struct ChatCompletionsArgs<'a> {
 impl<'a> ChatCompletionsArgs<'a> {
     pub async fn run_with(
         self,
-        api: &impl ChatCompletionChatAPI,
+        api: &impl ChatCompletionAPI,
     ) -> anyhow::Result<Message<'static>> {
         api.run_chat(self).await
     }
 }
 
 #[async_trait::async_trait]
-pub trait ChatCompletionChatAPI {
+pub trait ChatCompletionAPI {
     async fn run_chat(
         &self,
         args: ChatCompletionsArgs<'_>,
     ) -> anyhow::Result<Message<'static>>;
-}
 
-pub trait ChatCompletionAPI: ChatCompletionChatAPI + ConfigHash {}
+    fn config_hash(&self) -> String;
+}

@@ -8,8 +8,7 @@ impl Cli {
         structify_text: &StructifyText,
     ) -> anyhow::Result<()> {
         let chat_api = self.mk_chat_api()?;
-        let embeddings_api = self.mk_embeddings_api()?;
-        run_structify_text(structify_text, &chat_api, &embeddings_api).await?;
+        run_structify_text(structify_text, &chat_api).await?;
 
         Ok(())
     }

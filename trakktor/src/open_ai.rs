@@ -6,12 +6,8 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use url::Url;
 
 use crate::{
-    config_hash::ConfigHash,
-    embedding::{EmbeddingsAPI, EmbeddingsArgs, EmbeddingsGetAPI},
-    llm::{
-        ChatCompletionAPI, ChatCompletionChatAPI, ChatCompletionsArgs, Message,
-        Role,
-    },
+    embedding::{EmbeddingsAPI, EmbeddingsArgs},
+    llm::{ChatCompletionAPI, ChatCompletionsArgs, Message, Role},
 };
 
 pub const OPENAI_DEFAULT_SERVER_URL: &str = "https://api.openai.com";
@@ -76,7 +72,7 @@ impl OpenAiAPI {
 }
 
 #[async_trait::async_trait]
-impl ChatCompletionChatAPI for OpenAiAPI {
+impl ChatCompletionAPI for OpenAiAPI {
     #[tracing::instrument(level = "debug", skip_all)]
     async fn run_chat(
         &self,
@@ -116,17 +112,23 @@ impl ChatCompletionChatAPI for OpenAiAPI {
             content: choice.message.content,
         })
     }
-}
 
-impl ConfigHash for OpenAiAPI {
     fn config_hash(&self) -> String {
         let mut hasher = blake3::Hasher::new();
-        hasher.update(format!("{:?}", self).as_bytes());
+        if let Some(api_key) = &self.api_key {
+            hasher.update(api_key.as_bytes());
+        }
+        hasher.update(b":");
+        if let Some(server_url) = &self.server_url {
+            hasher.update(server_url.as_str().as_bytes());
+        }
+        hasher.update(b":");
+        if let Some(chat_model) = &self.chat_model {
+            hasher.update(chat_model.as_bytes());
+        }
         URL_SAFE_NO_PAD.encode(&hasher.finalize().as_bytes())
     }
 }
-
-impl ChatCompletionAPI for OpenAiAPI {}
 
 #[derive(Debug, Serialize)]
 pub struct OpenAiChatCompletions<'a> {
@@ -158,7 +160,7 @@ pub struct Usage {
 }
 
 #[async_trait::async_trait]
-impl EmbeddingsGetAPI for OpenAiAPI {
+impl EmbeddingsAPI for OpenAiAPI {
     #[tracing::instrument(level = "debug", skip_all)]
     async fn get_embedding(
         &self,
@@ -186,9 +188,23 @@ impl EmbeddingsGetAPI for OpenAiAPI {
             })?
             .embedding)
     }
-}
 
-impl EmbeddingsAPI for OpenAiAPI {}
+    fn config_hash(&self) -> String {
+        let mut hasher = blake3::Hasher::new();
+        if let Some(api_key) = &self.api_key {
+            hasher.update(api_key.as_bytes());
+        }
+        hasher.update(b":");
+        if let Some(server_url) = &self.server_url {
+            hasher.update(server_url.as_str().as_bytes());
+        }
+        hasher.update(b":");
+        if let Some(embeddings_model) = &self.embeddings_model {
+            hasher.update(embeddings_model.as_bytes());
+        }
+        URL_SAFE_NO_PAD.encode(&hasher.finalize().as_bytes())
+    }
+}
 
 #[derive(Debug, Serialize)]
 pub struct OpenAiEmbeddings<'a> {
