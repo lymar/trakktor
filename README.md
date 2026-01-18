@@ -25,7 +25,7 @@ purpose right now is to explore the approach and iterate on the runtime API.
 	`htmlToMarkdown` (3 functions today; more will be added as the project
 	evolves).
 
-## What “no external dependencies” means
+## One executable, no language runtimes
 
 Trakktor is designed to run as **a single Rust binary**:
 
