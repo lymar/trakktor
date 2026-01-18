@@ -1,0 +1,21 @@
+[package]
+name = "trakktor_core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+boa_engine = { workspace = true }
+boa_runtime = { workspace = true }
+futures-lite = { workspace = true }
+futures-concurrency = { workspace = true }
+bon = { workspace = true }
+reqwest = { workspace = true }
+html-to-markdown-rs = "2.22"
+async-openai  = { version = "0.32", features = ["responses", "audio", "video",
+    "image", "embedding", "evals", "batch", "file", "upload", "model", "byot",
+    "vectorstore", "container", "realtime", "chat-completion", "assistant"] }
