@@ -4,6 +4,7 @@ pub(crate) mod args;
 mod chat;
 mod http;
 mod markdown;
+mod preview;
 
 pub(super) fn register(context: &mut Context) -> anyhow::Result<()> {
     context
