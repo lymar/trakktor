@@ -3,6 +3,7 @@ use std::{
     collections::{BTreeMap, VecDeque},
     ops::DerefMut,
     rc::Rc,
+    sync::Arc,
 };
 
 use boa_engine::{
@@ -20,18 +21,21 @@ use tokio::task;
 
 mod config;
 pub use config::EngineConfig;
-mod api;
 
-pub async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
+use crate::trk::Trk;
+mod api;
+mod js_logger;
+
+pub(crate) async fn run(trk_inst: Arc<Trk>) -> anyhow::Result<()> {
     let queue = Rc::new(Queue::new());
     let context = &mut ContextBuilder::new()
         .job_executor(queue.clone())
         .build()
         .map_err(|e| anyhow::anyhow!("Failed to build context: {e}"))?;
-    add_runtime(context)?;
+    add_runtime(&trk_inst, context)?;
     self::api::register(context)?;
 
-    let js_code = std::fs::read_to_string(&cfg.js_file)?;
+    let js_code = std::fs::read_to_string(&trk_inst.cfg.js_file)?;
 
     let local_set = &mut task::LocalSet::default();
     let engine = local_set.run_until(async {
@@ -52,8 +56,13 @@ pub async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn add_runtime(context: &mut Context) -> anyhow::Result<()> {
-    let console = Console::init(context);
+fn add_runtime(
+    trk_inst: &Arc<Trk>,
+    context: &mut Context,
+) -> anyhow::Result<()> {
+    // let console = Console::init(context);
+    let console =
+        Console::init_with_logger(js_logger::JsLogger::new(trk_inst), context);
     context
         .register_global_property(Console::NAME, console, Attribute::all())
         .map_err(|e| anyhow::anyhow!("Failed to register console: {e}"))?;

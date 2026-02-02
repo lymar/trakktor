@@ -4023,6 +4023,7 @@ dependencies = [
  "anyhow",
  "async-openai",
  "boa_engine",
+ "boa_gc",
  "boa_runtime",
  "bon",
  "color-eyre",

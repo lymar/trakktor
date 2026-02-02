@@ -1,6 +1,6 @@
 use std::env::args;
 
-use trakktor_core::engine::{self, EngineConfig};
+use trakktor_core::trk::{self, config::TrkConfig};
 
 // export OPENAI_API_KEY=
 
@@ -13,8 +13,8 @@ async fn main() -> anyhow::Result<()> {
         anyhow::anyhow!("OPENAI_API_KEY environment variable not set")
     })?;
 
-    let ecfg = EngineConfig::builder().js_file(&path).build();
-    engine::run(ecfg).await?;
+    let ecfg = TrkConfig::builder().js_file(&path).build();
+    trk::run_trk(ecfg).await?;
 
     Ok(())
 }
