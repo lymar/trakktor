@@ -6,13 +6,17 @@ use crate::{logger::init_logger, trk::config};
 
 pub(crate) struct Trk {
     pub cfg: config::TrkConfig,
+    pub preview_lock: tokio::sync::Mutex<()>,
 }
 
 impl Trk {
     pub async fn run(cfg: config::TrkConfig) -> anyhow::Result<()> {
         init_logger()?;
 
-        let inst = Arc::new(Self { cfg });
+        let inst = Arc::new(Self {
+            cfg,
+            preview_lock: tokio::sync::Mutex::new(()),
+        });
 
         let exit_signal = tokio::signal::ctrl_c();
 

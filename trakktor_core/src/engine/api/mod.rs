@@ -39,5 +39,13 @@ pub(super) fn register(context: &mut Context) -> anyhow::Result<()> {
             NativeFunction::from_async_fn(file::read_file),
         )
         .map_err(|e| anyhow::anyhow!("Failed to register readFile: {e}"))?;
+
+    context
+        .register_global_builtin_callable(
+            js_string!("preview"),
+            1,
+            NativeFunction::from_async_fn(preview::preview),
+        )
+        .map_err(|e| anyhow::anyhow!("Failed to register preview: {e}"))?;
     Ok(())
 }

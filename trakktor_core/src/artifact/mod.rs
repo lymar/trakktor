@@ -1,13 +1,16 @@
-use std::fmt;
+use std::{fmt, sync::Arc};
 
 use boa_engine::JsData;
 use boa_gc::{Finalize, Trace};
+use mime_guess::Mime;
 
 #[derive(Trace, Finalize, bon::Builder, JsData)]
-pub struct Artifact {
-    data: Vec<u8>,
-    mime: Option<String>,
-    original_name: Option<String>,
+pub(crate) struct Artifact {
+    #[unsafe_ignore_trace]
+    pub data: Arc<[u8]>,
+    #[unsafe_ignore_trace]
+    pub mime: Option<Mime>,
+    pub original_name: Option<String>,
 }
 
 impl fmt::Debug for Artifact {

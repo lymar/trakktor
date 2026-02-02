@@ -42,7 +42,7 @@ async fn main() -> anyhow::Result<()> {
     let sink = rodio::Sink::connect_new(stream_handle.mixer());
 
     let terminal = ratatui::init();
-    let app_result = App {
+    let app_result = AudioPreview {
         sink,
         should_quit: false,
         audio_data,
@@ -61,7 +61,7 @@ async fn main() -> anyhow::Result<()> {
     app_result
 }
 
-struct App {
+struct AudioPreview {
     sink: rodio::Sink,
     should_quit: bool,
     audio_data: Arc<[u8]>,
@@ -70,7 +70,7 @@ struct App {
     text_scrollbar_state: ScrollbarState,
 }
 
-impl App {
+impl AudioPreview {
     const FRAMES_PER_SECOND: f32 = 30.0;
 
     pub async fn run(
@@ -139,7 +139,7 @@ impl App {
     }
 }
 
-impl Widget for &mut App {
+impl Widget for &mut AudioPreview {
     #[allow(clippy::similar_names)]
     fn render(self, area: Rect, buf: &mut Buffer) {
         use Constraint::{Length, Min};
@@ -154,7 +154,7 @@ impl Widget for &mut App {
     }
 }
 
-impl App {
+impl AudioPreview {
     fn render_text(&mut self, area: Rect, buf: &mut Buffer) {
         use Constraint::{Length, Min};
 
