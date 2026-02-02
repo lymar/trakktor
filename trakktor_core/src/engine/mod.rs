@@ -7,13 +7,14 @@ use std::{
 };
 
 use boa_engine::{
-    Context, JsResult, Script, Source,
+    Context, JsData, JsResult, Script, Source,
     context::{ContextBuilder, time::JsInstant},
     job::{
         GenericJob, Job, JobExecutor, NativeAsyncJob, PromiseJob, TimeoutJob,
     },
     property::Attribute,
 };
+use boa_gc::{Finalize, Trace};
 use boa_runtime::{Console, interval};
 use futures_concurrency::future::FutureGroup;
 use futures_lite::{StreamExt, future};
@@ -26,6 +27,12 @@ use crate::trk::Trk;
 mod api;
 mod js_logger;
 
+#[derive(Trace, Finalize, JsData)]
+pub(crate) struct JsTrkHandle {
+    #[unsafe_ignore_trace]
+    pub trk: Arc<Trk>,
+}
+
 pub(crate) async fn run(trk_inst: Arc<Trk>) -> anyhow::Result<()> {
     let queue = Rc::new(Queue::new());
     let context = &mut ContextBuilder::new()
@@ -34,6 +41,11 @@ pub(crate) async fn run(trk_inst: Arc<Trk>) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to build context: {e}"))?;
     add_runtime(&trk_inst, context)?;
     self::api::register(context)?;
+
+    let realm = context.realm().clone();
+    realm.host_defined_mut().insert(JsTrkHandle {
+        trk: Arc::clone(&trk_inst),
+    });
 
     let js_code = std::fs::read_to_string(&trk_inst.cfg.js_file)?;
 
@@ -60,7 +72,6 @@ fn add_runtime(
     trk_inst: &Arc<Trk>,
     context: &mut Context,
 ) -> anyhow::Result<()> {
-    // let console = Console::init(context);
     let console =
         Console::init_with_logger(js_logger::JsLogger::new(trk_inst), context);
     context

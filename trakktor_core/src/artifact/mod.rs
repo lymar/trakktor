@@ -1,3 +1,26 @@
+use std::fmt;
+
+use boa_engine::JsData;
+use boa_gc::{Finalize, Trace};
+
+#[derive(Trace, Finalize, bon::Builder, JsData)]
+pub struct Artifact {
+    data: Vec<u8>,
+    mime: Option<String>,
+    original_name: Option<String>,
+}
+
+impl fmt::Debug for Artifact {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let bs = bytesize::ByteSize::b(self.data.len() as u64);
+        f.debug_struct("Artifact")
+            .field("data", &bs)
+            .field("mime", &self.mime)
+            .field("original_name", &self.original_name)
+            .finish()
+    }
+}
+
 // // src/artifact/types.rs
 // pub enum ArtifactKind {
 //     Image(ImageKind),

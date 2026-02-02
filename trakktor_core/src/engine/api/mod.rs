@@ -2,6 +2,7 @@ use boa_engine::{Context, NativeFunction, js_string};
 
 pub(crate) mod args;
 mod chat;
+mod file;
 mod http;
 mod markdown;
 mod preview;
@@ -31,5 +32,12 @@ pub(super) fn register(context: &mut Context) -> anyhow::Result<()> {
         )
         .map_err(|e| anyhow::anyhow!("Failed to register chat: {e}"))?;
 
+    context
+        .register_global_builtin_callable(
+            js_string!("readFile"),
+            1,
+            NativeFunction::from_async_fn(file::read_file),
+        )
+        .map_err(|e| anyhow::anyhow!("Failed to register readFile: {e}"))?;
     Ok(())
 }

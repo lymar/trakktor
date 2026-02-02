@@ -27,3 +27,5 @@ crossterm = { workspace = true }
 tokio-stream = { workspace = true}
 textwrap = { workspace = true}
 log = { workspace = true }
+mime_guess = { workspace = true}
+bytesize = { workspace = true}

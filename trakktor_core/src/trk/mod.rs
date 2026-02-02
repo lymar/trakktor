@@ -1,3 +1,4 @@
+pub(crate) mod api;
 pub mod config;
 pub mod trk;
 
