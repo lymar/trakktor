@@ -6,6 +6,7 @@ mod file;
 mod http;
 mod markdown;
 mod preview;
+mod tts;
 
 pub(super) fn register(context: &mut Context) -> anyhow::Result<()> {
     context
@@ -47,5 +48,14 @@ pub(super) fn register(context: &mut Context) -> anyhow::Result<()> {
             NativeFunction::from_async_fn(preview::preview),
         )
         .map_err(|e| anyhow::anyhow!("Failed to register preview: {e}"))?;
+
+    context
+        .register_global_builtin_callable(
+            js_string!("textToSpeech"),
+            2,
+            NativeFunction::from_async_fn(tts::tts),
+        )
+        .map_err(|e| anyhow::anyhow!("Failed to register textToSpeech: {e}"))?;
+
     Ok(())
 }
