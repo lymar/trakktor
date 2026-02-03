@@ -1,6 +1,6 @@
 async function run() {
     try {
-        let text = LONG_TEXT_RU;
+        let text = LONG_TEXT_EN;
         let audio = await textToSpeech(text);
         await preview(audio, text);
     } catch (e) {
