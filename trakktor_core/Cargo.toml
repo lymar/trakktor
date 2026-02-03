@@ -29,3 +29,4 @@ textwrap = { workspace = true}
 log = { workspace = true }
 mime_guess = { workspace = true}
 bytesize = { workspace = true}
+termbg = { workspace = true}

@@ -29,6 +29,7 @@ textwrap = { version = "0.16", features = ["smawk"]}
 log = { version = "0.4", features = ["kv", "std"] }
 mime_guess = "2.0"
 bytesize = "2.3"
+termbg = "0.6"
 
 [profile.dev]
 debug = true

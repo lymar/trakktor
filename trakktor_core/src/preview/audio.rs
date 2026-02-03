@@ -19,10 +19,7 @@ use tokio_stream::StreamExt;
 
 use crate::{logger::mute_log, preview::PreviewData};
 
-const CUSTOM_LABEL_COLOR: Color = tailwind::SLATE.c200;
-const GAUGE_COLOR: Color = tailwind::INDIGO.c800;
-
-// TODO: dark/light mode
+// TODO: stream restarting
 
 pub async fn render_audio_preview(preview: PreviewData) -> anyhow::Result<()> {
     log::info!("Rendering audio preview");
@@ -33,6 +30,8 @@ pub async fn render_audio_preview(preview: PreviewData) -> anyhow::Result<()> {
     stream_handle.log_on_drop(false);
 
     let sink = rodio::Sink::connect_new(stream_handle.mixer());
+
+    let theme = ColorScheme::init();
 
     let terminal = ratatui::init();
 
@@ -46,6 +45,7 @@ pub async fn render_audio_preview(preview: PreviewData) -> anyhow::Result<()> {
         current_position: Duration::ZERO,
         text_scrollbar_state: Default::default(),
         text_wrap_cache: None,
+        theme,
     }
     .run(terminal)
     .await;
@@ -58,6 +58,45 @@ pub async fn render_audio_preview(preview: PreviewData) -> anyhow::Result<()> {
     res
 }
 
+struct ColorScheme {
+    text_color: Color,
+    gauge_color: Color,
+    gauge_text_color: Color,
+    bottom_bar_color_1: Color,
+    bottom_bar_color_2: Color,
+}
+
+impl ColorScheme {
+    fn dark_mode() -> Self {
+        Self {
+            text_color: tailwind::SLATE.c200,
+            gauge_color: tailwind::SKY.c900,
+            gauge_text_color: tailwind::SKY.c200,
+            bottom_bar_color_1: tailwind::INDIGO.c900,
+            bottom_bar_color_2: tailwind::INDIGO.c200,
+        }
+    }
+
+    fn light_mode() -> Self {
+        Self {
+            text_color: tailwind::SLATE.c900,
+            gauge_color: tailwind::SKY.c300,
+            gauge_text_color: tailwind::SKY.c800,
+            bottom_bar_color_1: tailwind::INDIGO.c200,
+            bottom_bar_color_2: tailwind::INDIGO.c800,
+        }
+    }
+
+    fn init() -> Self {
+        let theme = termbg::theme(Duration::from_millis(100))
+            .unwrap_or(termbg::Theme::Dark);
+        match theme {
+            termbg::Theme::Dark => Self::dark_mode(),
+            termbg::Theme::Light => Self::light_mode(),
+        }
+    }
+}
+
 struct AudioPreview {
     sink: rodio::Sink,
     should_close: bool,
@@ -68,6 +107,7 @@ struct AudioPreview {
     current_position: Duration,
     text_scrollbar_state: ScrollbarState,
     text_wrap_cache: Option<TextWrapCache>,
+    theme: ColorScheme,
 }
 
 struct TextWrapCache {
@@ -235,14 +275,17 @@ impl AudioPreview {
 
         let scroll_pos = self.text_scrollbar_state.get_position() as u16;
 
-        let Some(txt_cache) = self.get_text_wrap(wrap_width) else {
-            return;
+        let text_color = self.theme.text_color;
+        let joined_lines = {
+            let Some(txt_cache) = self.get_text_wrap(wrap_width) else {
+                return;
+            };
+            txt_cache.joined_lines.clone()
         };
 
-        Paragraph::new(txt_cache.joined_lines.as_str())
-            .bold()
+        Paragraph::new(joined_lines)
             .alignment(Alignment::Left)
-            .fg(CUSTOM_LABEL_COLOR)
+            .fg(text_color)
             .scroll((scroll_pos, 0))
             .render(text_centered_area, buf);
     }
@@ -261,11 +304,15 @@ impl AudioPreview {
             .flat_map(|(key, desc)| {
                 let key = Span::styled(
                     format!(" {key} "),
-                    Style::new().fg(tailwind::BLACK).bg(tailwind::GRAY.c300),
+                    Style::new()
+                        .fg(self.theme.bottom_bar_color_1)
+                        .bg(self.theme.bottom_bar_color_2),
                 );
                 let desc = Span::styled(
                     format!(" {desc} "),
-                    Style::new().fg(tailwind::GRAY.c300).bg(tailwind::BLACK),
+                    Style::new()
+                        .fg(self.theme.bottom_bar_color_2)
+                        .bg(self.theme.bottom_bar_color_1),
                 );
                 [key, desc]
             })
@@ -274,7 +321,9 @@ impl AudioPreview {
     }
 
     fn render_gauge(&self, area: Rect, buf: &mut Buffer) {
-        let block = Block::bordered().padding(Padding::new(1, 1, 0, 0));
+        let block = Block::bordered()
+            .padding(Padding::new(1, 1, 0, 0))
+            .border_style(Style::new().fg(self.theme.gauge_text_color));
 
         let total = self.total_duration.unwrap_or(self.current_position);
         let with_minutes = total.as_secs() >= 60;
@@ -285,10 +334,10 @@ impl AudioPreview {
                 format_duration(self.current_position, with_minutes),
                 format_duration(total, with_minutes)
             ),
-            Style::new().italic().bold().fg(CUSTOM_LABEL_COLOR),
+            Style::new().italic().bold().fg(self.theme.gauge_text_color),
         );
         Gauge::default()
-            .gauge_style(GAUGE_COLOR)
+            .gauge_style(self.theme.gauge_color)
             .ratio(self.current_position.as_secs_f64() / total.as_secs_f64())
             .label(label)
             .block(block)
