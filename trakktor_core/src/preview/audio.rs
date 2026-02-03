@@ -362,7 +362,7 @@ fn format_duration(d: Duration, with_minutes: bool) -> String {
     let millis = total_ms % 1_000;
 
     if with_minutes {
-        return format!("{:02}:{:02}:{:03}", minutes, seconds, millis);
+        return format!("{:02}:{:02}.{:03}", minutes, seconds, millis);
     } else {
         return format!("{}.{:03}", seconds, millis);
     }
