@@ -1,8 +1,7 @@
 async function run() {
     try {
-        console.log("yo!");
         let audio_file = await readFile("audio.mp3");
-        await preview(audio_file, LONG_TEXT);
+        await preview(audio_file, LONG_TEXT_EN);
         // await preview(audio_file);
     } catch (e) {
         console.error("Error:\n" + e);
@@ -11,4 +10,4 @@ async function run() {
 
 run();
 
-const LONG_TEXT = `На рассвете долина Грейфен казалась безобидной: туман собирался в лужицы меж камышей, а река несла бледные листья, словно никогда не знала тяжести зимы. Но старые камни на склоне помнили другие утра — утра, когда небо звенело, как ударенное железо, и вороны летели ровными, безмолвными линиями. Лиора крепче затянула ремень своей сумки и сосчитала вдохи — раз, два, три, — потому что мать учила её делать так, когда истории пытаются выйти из темноты и вступить в мир. Впереди дорога изгибалась к разрушенной сторожевой башне, где в разбитом окне всё ещё горел один-единственный фонарь — ровно и терпеливо, будто кто-то внутри не спал уже много лет.`;
+const LONG_TEXT_EN = `At dawn, the valley of Greyfen looked harmless—mist pooled between the reeds, and the river carried pale leaves as if it had never learned the weight of winter. But the old stones on the hillside remembered other mornings: mornings when the sky rang like struck iron and the crows flew in perfect, silent lines. Liora tightened the strap of her satchel and counted her breaths—one, two, three—because that was what her mother had taught her to do when stories tried to step out of the dark and into the world. Ahead, the road bent toward the ruined watchtower, where a single lantern still burned in the broken window, steady and waiting, as though someone inside had been awake for years.`;

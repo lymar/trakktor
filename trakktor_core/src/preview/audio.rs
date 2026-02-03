@@ -14,10 +14,11 @@ use ratatui::{
         ScrollbarOrientation, ScrollbarState, StatefulWidget, Widget,
     },
 };
-use rodio::Source;
 use tokio_stream::StreamExt;
 
 use crate::{logger::mute_log, preview::PreviewData};
+
+mod duration;
 
 pub async fn render_audio_preview(preview: PreviewData) -> anyhow::Result<()> {
     log::info!("Rendering audio preview");
@@ -33,13 +34,16 @@ pub async fn render_audio_preview(preview: PreviewData) -> anyhow::Result<()> {
 
     let terminal = ratatui::init();
 
+    let total_duration =
+        duration::audio_duration(&preview.data, &preview.mime.to_string()).ok();
+
     let res = AudioPreview {
         sink,
         should_close: false,
         audio_data: preview.data,
         mime: preview.mime,
         text: preview.text,
-        total_duration: None,
+        total_duration,
         current_position: Duration::ZERO,
         text_scrollbar_state: Default::default(),
         text_wrap_cache: None,
@@ -153,7 +157,8 @@ impl AudioPreview {
             .with_data(cur)
             .with_mime_type(&mime)
             .build()?;
-        self.total_duration = decoder.total_duration();
+        // self.total_duration = decoder.total_duration();
+
         self.sink.append(decoder);
         Ok(())
     }
@@ -334,9 +339,15 @@ impl AudioPreview {
             ),
             Style::new().italic().bold().fg(self.theme.gauge_text_color),
         );
+        let mut ratio =
+            self.current_position.as_secs_f64() / total.as_secs_f64();
+        if ratio > 1.0 || ratio < 0.0 || ratio.is_nan() {
+            ratio = 0.0;
+        }
+
         Gauge::default()
             .gauge_style(self.theme.gauge_color)
-            .ratio(self.current_position.as_secs_f64() / total.as_secs_f64())
+            .ratio(ratio)
             .label(label)
             .block(block)
             .render(area, buf);

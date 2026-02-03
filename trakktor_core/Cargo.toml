@@ -21,6 +21,7 @@ async-openai  = { version = "0.32", features = ["responses", "audio", "video",
     "image", "embedding", "evals", "batch", "file", "upload", "model", "byot",
     "vectorstore", "container", "realtime", "chat-completion", "assistant"] }
 rodio = { version = "0.21" }
+symphonia = { version = "0.5", features = ["all"] }
 ratatui = { workspace = true }
 color-eyre = { workspace = true }
 crossterm = { workspace = true }
