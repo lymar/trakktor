@@ -19,8 +19,6 @@ use tokio_stream::StreamExt;
 
 use crate::{logger::mute_log, preview::PreviewData};
 
-// TODO: stream restarting
-
 pub async fn render_audio_preview(preview: PreviewData) -> anyhow::Result<()> {
     log::info!("Rendering audio preview");
 
@@ -130,26 +128,13 @@ impl AudioPreview {
         // self.sink.set_volume(0.0);
 
         let mime = self.mime.to_string();
-        {
-            let cur = Cursor::new(Arc::clone(&self.audio_data));
-            let decoder = rodio::Decoder::builder()
-                .with_data(cur)
-                .with_mime_type(&mime)
-                .build()?;
-            self.total_duration = decoder.total_duration();
-            self.sink.append(decoder);
-        }
+        self.sink_append(&mime)?;
 
         while !self.should_close {
             tokio::select! {
                 _ = interval.tick() => {
                     if self.sink.empty() {
-                        let cur = Cursor::new(Arc::clone(&self.audio_data));
-                        let decoder = rodio::Decoder::builder()
-                            .with_data(cur)
-                            .with_mime_type(&mime)
-                            .build()?;
-                        self.sink.append(decoder);
+                        self.sink_append(&mime)?;
                     }
 
                     self.current_position = self.sink.get_pos();
@@ -159,6 +144,17 @@ impl AudioPreview {
                 Some(Ok(event)) = events.next() => self.handle_event(&event),
             }
         }
+        Ok(())
+    }
+
+    fn sink_append(&mut self, mime: &str) -> anyhow::Result<()> {
+        let cur = Cursor::new(Arc::clone(&self.audio_data));
+        let decoder = rodio::Decoder::builder()
+            .with_data(cur)
+            .with_mime_type(&mime)
+            .build()?;
+        self.total_duration = decoder.total_duration();
+        self.sink.append(decoder);
         Ok(())
     }
 
