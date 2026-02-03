@@ -2,8 +2,8 @@ async function run() {
     try {
         console.log("yo!");
         let audio_file = await readFile("audio.mp3");
-        // await preview(audio_file, LONG_TEXT);
-        await preview(audio_file);
+        await preview(audio_file, LONG_TEXT);
+        // await preview(audio_file);
     } catch (e) {
         console.error("Error:\n" + e);
     }

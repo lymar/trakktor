@@ -20,7 +20,9 @@ use tokio_stream::StreamExt;
 use crate::{logger::mute_log, preview::PreviewData};
 
 const CUSTOM_LABEL_COLOR: Color = tailwind::SLATE.c200;
-const GAUGE2_COLOR: Color = tailwind::INDIGO.c800;
+const GAUGE_COLOR: Color = tailwind::INDIGO.c800;
+
+// TODO: dark/light mode
 
 pub async fn render_audio_preview(preview: PreviewData) -> anyhow::Result<()> {
     log::info!("Rendering audio preview");
@@ -43,6 +45,7 @@ pub async fn render_audio_preview(preview: PreviewData) -> anyhow::Result<()> {
         total_duration: None,
         current_position: Duration::ZERO,
         text_scrollbar_state: Default::default(),
+        text_wrap_cache: None,
     }
     .run(terminal)
     .await;
@@ -64,6 +67,13 @@ struct AudioPreview {
     total_duration: Option<Duration>,
     current_position: Duration,
     text_scrollbar_state: ScrollbarState,
+    text_wrap_cache: Option<TextWrapCache>,
+}
+
+struct TextWrapCache {
+    width: usize,
+    lines_count: usize,
+    joined_lines: String,
 }
 
 impl AudioPreview {
@@ -164,22 +174,51 @@ impl Widget for &mut AudioPreview {
 }
 
 impl AudioPreview {
+    fn get_text_wrap<'a>(
+        &'a mut self,
+        curr_width: usize,
+    ) -> Option<&'a TextWrapCache> {
+        let Some(text) = &self.text else {
+            return None;
+        };
+
+        let cache_hit = self
+            .text_wrap_cache
+            .as_ref()
+            .is_some_and(|c| c.width == curr_width);
+        if cache_hit {
+            return self.text_wrap_cache.as_ref();
+        }
+
+        let lines = textwrap::wrap(text, curr_width);
+        let joined_lines = lines.join("\n");
+
+        self.text_wrap_cache = Some(TextWrapCache {
+            width: curr_width,
+            lines_count: lines.len(),
+            joined_lines,
+        });
+
+        self.text_wrap_cache.as_ref()
+    }
+
     fn render_text(&mut self, area: Rect, buf: &mut Buffer) {
         use Constraint::{Length, Min};
-
-        let Some(text) = &self.text else {
-            return;
-        };
 
         let layout = Layout::horizontal([Min(1), Length(1)]).vertical_margin(1);
         let [text_area, scroll_area] = layout.areas(area);
 
         let text_width = min(text_area.width, 80) as usize;
 
-        let lines = textwrap::wrap(text, text_width);
+        let wrap_width = min(area.width as usize, text_width);
+        let Some(lines_count) =
+            self.get_text_wrap(wrap_width).map(|c| c.lines_count)
+        else {
+            return;
+        };
 
         let content_length =
-            (lines.len() as u16).saturating_sub(text_area.height) as usize;
+            (lines_count as u16).saturating_sub(text_area.height) as usize;
 
         self.text_scrollbar_state =
             self.text_scrollbar_state.content_length(content_length + 1);
@@ -188,20 +227,23 @@ impl AudioPreview {
                 self.text_scrollbar_state.position(content_length);
         }
 
-        // todo: cache !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        let lines = lines.join("\n");
-
         Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .symbols(scrollbar::VERTICAL)
             .render(scroll_area, buf, &mut self.text_scrollbar_state);
 
         let text_centered_area = text_area.centered_horizontally(Length(80));
 
-        Paragraph::new(lines)
+        let scroll_pos = self.text_scrollbar_state.get_position() as u16;
+
+        let Some(txt_cache) = self.get_text_wrap(wrap_width) else {
+            return;
+        };
+
+        Paragraph::new(txt_cache.joined_lines.as_str())
             .bold()
             .alignment(Alignment::Left)
             .fg(CUSTOM_LABEL_COLOR)
-            .scroll((self.text_scrollbar_state.get_position() as u16, 0))
+            .scroll((scroll_pos, 0))
             .render(text_centered_area, buf);
     }
 
@@ -246,7 +288,7 @@ impl AudioPreview {
             Style::new().italic().bold().fg(CUSTOM_LABEL_COLOR),
         );
         Gauge::default()
-            .gauge_style(GAUGE2_COLOR)
+            .gauge_style(GAUGE_COLOR)
             .ratio(self.current_position.as_secs_f64() / total.as_secs_f64())
             .label(label)
             .block(block)
