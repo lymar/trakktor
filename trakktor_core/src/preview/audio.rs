@@ -245,8 +245,10 @@ impl AudioPreview {
     fn render_text(&mut self, area: Rect, buf: &mut Buffer) {
         use Constraint::{Length, Min};
 
-        let layout = Layout::horizontal([Min(1), Length(1)]).vertical_margin(1);
-        let [text_area, scroll_area] = layout.areas(area);
+        let layout =
+            Layout::horizontal([Length(1), Min(1), Length(1), Length(1)])
+                .vertical_margin(1);
+        let [_, text_area, _, scroll_area] = layout.areas(area);
 
         let text_width = min(text_area.width, 80) as usize;
 
