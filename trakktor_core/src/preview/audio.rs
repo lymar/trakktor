@@ -131,14 +131,13 @@ impl AudioPreview {
 
         // self.sink.set_volume(0.0);
 
-        let mime = self.mime.to_string();
-        self.sink_append(&mime)?;
+        self.sink_append()?;
 
         while !self.should_close {
             tokio::select! {
                 _ = interval.tick() => {
                     if self.sink.empty() {
-                        self.sink_append(&mime)?;
+                        self.sink_append()?;
                     }
 
                     self.current_position = self.sink.get_pos();
@@ -151,15 +150,27 @@ impl AudioPreview {
         Ok(())
     }
 
-    fn sink_append(&mut self, mime: &str) -> anyhow::Result<()> {
+    fn sink_append(&mut self) -> anyhow::Result<()> {
         let cur = Cursor::new(Arc::clone(&self.audio_data));
         let decoder = rodio::Decoder::builder()
             .with_data(cur)
-            .with_mime_type(&mime)
+            .with_mime_type(&self.mime.to_string())
             .build()?;
-        // self.total_duration = decoder.total_duration();
 
         self.sink.append(decoder);
+        Ok(())
+    }
+
+    fn restart(&mut self) -> anyhow::Result<()> {
+        let is_paused = self.sink.is_paused();
+
+        self.sink.stop();
+        self.sink_append()?;
+
+        if is_paused {
+            self.sink.pause();
+        }
+
         Ok(())
     }
 
@@ -172,6 +183,11 @@ impl AudioPreview {
                 },
                 KeyCode::Char('k') | KeyCode::Up => {
                     self.text_scrollbar_state.scroll(ScrollDirection::Backward)
+                },
+                KeyCode::Char('r') => {
+                    if let Err(e) = self.restart() {
+                        log::error!("Failed to restart audio: {}", e);
+                    }
                 },
                 KeyCode::Char(' ') => {
                     if self.sink.is_paused() {
@@ -300,6 +316,7 @@ impl AudioPreview {
             ("K/↑", "Scroll up"),
             ("J/↓", "Scroll down"),
             ("Space", space_icon),
+            ("R", "Restart"),
             ("X/Esc", "Close"),
         ];
         let spans = keys
