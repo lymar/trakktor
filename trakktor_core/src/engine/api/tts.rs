@@ -7,10 +7,18 @@ use async_openai::{
     },
 };
 use boa_engine::{
-    Context, JsError, JsNativeError, JsObject, JsResult, JsValue,
+    Context, JsArgs, JsError, JsNativeError, JsObject, JsResult, JsValue,
 };
+use serde::Deserialize;
 
 use crate::artifact::Artifact;
+
+#[derive(Debug, Deserialize, Default)]
+struct TTSOptions {
+    model: Option<String>,
+    voice: Option<String>,
+    speed: Option<f32>,
+}
 
 pub(super) fn tts(
     _this: &JsValue,
@@ -30,18 +38,29 @@ pub(super) fn tts(
                 .into());
         };
 
-        log::debug!(text:?; "TTS requested for text");
+        let opts = args
+            .get_or_undefined(1)
+            .to_json(&mut context.borrow_mut())?
+            .map(|v| serde_json::from_value::<TTSOptions>(v).ok())
+            .flatten()
+            .unwrap_or_default();
 
-        let model = "gpt-4o-mini-tts-2025-12-15";
-        let voice = "cedar";
+        log::debug!(text:?, opts:?; "TTS requested for text");
+
+        let model = opts
+            .model
+            .unwrap_or_else(|| "gpt-4o-mini-tts-2025-12-15".into());
+        let voice = opts.voice.unwrap_or_else(|| "cedar".into());
+        let speed = opts.speed.unwrap_or(1.0);
 
         let client = Client::new();
 
         let request = CreateSpeechRequestArgs::default()
             .input(&text)
-            .voice(Voice::Other(voice.into()))
-            .model(SpeechModel::Other(model.into()))
+            .voice(Voice::Other(voice))
+            .model(SpeechModel::Other(model))
             .response_format(SpeechResponseFormat::Mp3)
+            .speed(speed)
             .build()
             .map_err(|_| -> JsError {
                 JsNativeError::error()

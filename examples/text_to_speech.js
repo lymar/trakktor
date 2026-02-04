@@ -1,7 +1,7 @@
 async function run() {
     try {
         let text = LONG_TEXT_EN;
-        let audio = await textToSpeech(text);
+        let audio = await textToSpeech(text, { speed: 1.0, voice: "marin" });
         await preview(audio, text);
     } catch (e) {
         console.error("Error:\n" + e);
