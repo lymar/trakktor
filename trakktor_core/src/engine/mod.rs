@@ -7,11 +7,15 @@ use std::{
 };
 
 use boa_engine::{
-    Context, JsData, JsResult, Script, Source,
+    Context, JsArgs, JsData, JsError, JsNativeError, JsResult, JsValue, Module,
+    NativeFunction, Source,
+    builtins::promise::PromiseState,
     context::{ContextBuilder, time::JsInstant},
     job::{
         GenericJob, Job, JobExecutor, NativeAsyncJob, PromiseJob, TimeoutJob,
     },
+    js_string,
+    module::SimpleModuleLoader,
     property::Attribute,
 };
 use boa_gc::{Finalize, Trace};
@@ -34,9 +38,35 @@ pub(crate) struct JsTrkHandle {
 }
 
 pub(crate) async fn run(trk_inst: Arc<Trk>) -> anyhow::Result<()> {
+    let js_file = trk_inst.cfg.js_file.canonicalize()?;
+    let js_root = js_file.parent().ok_or_else(|| {
+        anyhow::anyhow!(
+            "JavaScript entry file path has no parent directory: {}",
+            js_file.display()
+        )
+    })?;
+    let js_file_name = js_file
+        .clone()
+        .file_name()
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "JavaScript entry file path has no file name: {}",
+                js_file.display()
+            )
+        })?
+        .to_owned();
+
+    let loader = Rc::new(SimpleModuleLoader::new(js_root).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to create JavaScript module loader (root: {}): {e}",
+            js_root.display()
+        )
+    })?);
+
     let queue = Rc::new(Queue::new());
     let context = &mut ContextBuilder::new()
         .job_executor(queue.clone())
+        .module_loader(loader.clone())
         .build()
         .map_err(|e| anyhow::anyhow!("Failed to build context: {e}"))?;
     add_runtime(&trk_inst, context)?;
@@ -47,18 +77,122 @@ pub(crate) async fn run(trk_inst: Arc<Trk>) -> anyhow::Result<()> {
         trk: Arc::clone(&trk_inst),
     });
 
-    let js_code = std::fs::read_to_string(&trk_inst.cfg.js_file)?;
+    let js_code = tokio::fs::read_to_string(&js_file).await?;
 
     let local_set = &mut task::LocalSet::default();
-    let engine = local_set.run_until(async {
-        let script = Script::parse(
-            Source::from_bytes(js_code.as_bytes()),
-            None,
-            context,
-        )?;
 
-        script.evaluate_async(context).await?;
-        queue.run_jobs_async(&RefCell::new(context)).await
+    let root_module_js_file = format!("./{}", js_file_name.display());
+
+    let engine = local_set.run_until(async {
+        let source = Source::from_reader(
+            js_code.as_bytes(),
+            Some(std::path::Path::new(&root_module_js_file)),
+        );
+        let module = Module::parse(source, None, context)?;
+
+        loader.insert(js_file, module.clone());
+
+        let module_load_promise = module.load_link_evaluate(context);
+
+        queue.clone().run_jobs_async(&RefCell::new(context)).await?;
+
+        match module_load_promise.state() {
+            PromiseState::Pending => {
+                return Err(JsNativeError::typ()
+                    .with_message(
+                        "Root module evaluation did not complete (promise is \
+                         still pending)",
+                    )
+                    .into());
+            },
+            PromiseState::Fulfilled(_v) => {
+                log::debug!("Root module loaded, linked, and evaluated");
+            },
+            PromiseState::Rejected(err) => {
+                return Err(JsError::from_opaque(err)
+                    .try_native(context)
+                    .map_err(|e| {
+                        log::error!(
+                            "Failed to convert module rejection into a native \
+                             error: {e}"
+                        );
+                        JsNativeError::typ().with_message(
+                            "Module evaluation failed (rejected promise)",
+                        )
+                    })?
+                    .into());
+            },
+        }
+
+        let namespace = module.namespace(context);
+        let run_fn = namespace
+            .get(js_string!("run"), context)?
+            .as_callable()
+            .ok_or_else(|| {
+            JsNativeError::typ().with_message(
+                "Root module must export a callable `run` function",
+            )
+        })?;
+
+        let run_fn_promise = run_fn
+            .call(&JsValue::undefined(), &[], context)?
+            .as_promise()
+            .ok_or_else(|| {
+                JsNativeError::typ().with_message(
+                    "`run()` must return a Promise (did you forget to mark it \
+                     async?)",
+                )
+            })?;
+
+        let run_res_promise = run_fn_promise
+            .then(
+                Some(
+                    NativeFunction::from_fn_ptr(|_, args, _context| {
+                        let value = args.get_or_undefined(0);
+                        Ok(value.clone())
+                    })
+                    .to_js_function(context.realm()),
+                ),
+                Some(
+                    NativeFunction::from_fn_ptr(|_, args, _context| {
+                        let error = args.get_or_undefined(0);
+                        let msg = format!("{}", error.display());
+                        log::error!(
+                            msg:? = msg;
+                            "`run()` rejected",
+                        );
+                        Err(JsError::from_opaque(error.clone()))
+                    })
+                    .to_js_function(context.realm()),
+                ),
+                context,
+            )
+            .finally(
+                NativeFunction::from_fn_ptr(|_, _, _| {
+                    log::debug!("`run()` finished (resolved or rejected)");
+                    Ok(JsValue::undefined())
+                })
+                .to_js_function(context.realm()),
+                context,
+            );
+
+        queue.run_jobs_async(&RefCell::new(context)).await?;
+
+        match run_res_promise.state() {
+            PromiseState::Fulfilled(v) => {
+                if let Ok(Some(jv)) = v.to_json(context) {
+                    if let Ok(j) = serde_json::to_string_pretty(&jv) {
+                        println!("{}", j);
+                    }
+                }
+            },
+            PromiseState::Rejected(err) => {
+                return Err(JsError::from_opaque(err));
+            },
+            _ => {},
+        }
+
+        Result::<(), JsError>::Ok(())
     });
 
     engine

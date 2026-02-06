@@ -1,4 +1,4 @@
-async function run() {
+export async function run() {
   let wikiText = await httpGetText("https://en.wikipedia.org/wiki/Main_Page");
   console.log("Fetched text:" + wikiText);
 
@@ -19,8 +19,6 @@ async function run() {
     console.error("Error during chat:\n" + e);
   }
 }
-
-run();
 
 let json_schema = {
   name: "wikipedia_on_this_day",

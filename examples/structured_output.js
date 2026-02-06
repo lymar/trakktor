@@ -1,4 +1,4 @@
-async function run() {
+export async function run() {
   let json_schema = {
     name: "math_reasoning",
     schema: {
@@ -50,5 +50,3 @@ async function run() {
     console.error("Error during chat:\n" + e);
   }
 }
-
-run();
