@@ -976,17 +976,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dev_boa"
-version = "0.1.0"
-dependencies = [
- "boa_engine",
- "boa_runtime",
- "futures-concurrency",
- "futures-lite",
- "tokio",
-]
-
-[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"

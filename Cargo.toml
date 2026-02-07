@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
-  "dev_boa", "trakktor_core",
+  "trakktor_core",
 ]
 
 [workspace.package]
