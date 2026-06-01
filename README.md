@@ -1,1 +1,97 @@
-# Trakktor
+# trakktor
+
+`trakktor` is a Rust command-line utility that exposes helper functions for
+coding agents (Claude Code, OpenCode, etc.). It is built to be **predictable and
+automation-friendly**: stable commands and flags, machine-readable output, and
+meaningful exit codes.
+
+The project's design and specifications live in a separate documentation
+repository (`../trakktor_project`); that is the source of truth. This repository
+holds the implementation.
+
+## Layout
+
+A Cargo workspace with a flat crate layout (see ADR-0002):
+
+- `trakktor` — the CLI binary: argument parsing, configuration, output
+  formatting. A thin layer over the library.
+- `trakktor_core` — the library: all functionality, independent of the CLI.
+
+## Build & test
+
+```sh
+cargo build --workspace
+cargo test --workspace
+```
+
+Formatting uses unstable rustfmt features, so it requires nightly:
+
+```sh
+cargo +nightly fmt --all
+```
+
+## Output and exit codes
+
+The default output is human-readable text; `--json` switches to machine-readable
+JSON (`--json --pretty` indents it). Data is written to stdout, errors to stderr.
+
+- `0` — success.
+- `1` — runtime/validation error (network, parsing, I/O, bad value). Respects
+  `--json`: `{ "error": { "code": "…", "message": "…" } }`.
+- `2` — usage error (unknown flag, missing argument); always text, from the
+  argument parser.
+
+Global options (usable before or after the command): `--work-dir <path>` (also
+`TRAKKTOR_DIR`; default `./.trakktor`), `--json`, `--pretty`.
+
+## `feed` — RSS / Atom / JSON Feed
+
+Full specification: `../trakktor_project/docs/features/feed/design.md`.
+
+### Discover feeds on a page
+
+```sh
+trakktor feed discover https://example.com
+```
+
+Returns the feeds declared on the page (`url`, `type`, `title`). An empty result
+is success.
+
+### Read a feed
+
+```sh
+trakktor feed read https://example.com/feed.xml
+trakktor feed read https://example.com/feed.xml --all --fields all --json
+```
+
+Accepts a feed URL or a regular page (autodiscovery applies, reading the first
+feed found). Each publication carries a stable `uid` and an `is_read` flag.
+
+- By default only **unread** publications are returned; `--all` includes read
+  ones.
+- `--fields <list>` selects output fields: a comma-separated list of
+  `uid,is_read,title,link,published,updated,summary,content,authors`, or the
+  special values `minimal` (default, `uid,title,link`) and `all`.
+
+The `uid` is `hex(BLAKE3(feed_key ‖ 0x00 ‖ tag ‖ 0x00 ‖ item_key))` and is
+stable across runs for the same feed + entry (see design.md §5, ADR-0001).
+
+### Mark publications read
+
+```sh
+trakktor feed mark-read <uid> [<uid>...]
+```
+
+Idempotent. Read state is stored as plain files under `<work-dir>/feed/`, sharded
+by uid; nothing else is needed (no database).
+
+## Typical agent workflow
+
+```sh
+trakktor feed discover https://example.com            # find a feed
+trakktor feed read https://example.com/feed.xml --json # read unread items
+# … process the items …
+trakktor feed mark-read <uid1> <uid2>                  # mark them handled
+```
+
+On the next `read`, marked publications are no longer returned.

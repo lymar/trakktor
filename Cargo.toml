@@ -1,0 +1,31 @@
+# Cargo workspace for trakktor. See ../trakktor_project/docs/architecture.md
+# and ADR-0002 (cargo workspace, thin bin over reusable lib).
+[workspace]
+resolver = "3"
+members = ["trakktor", "trakktor_core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+trakktor_core = { path = "trakktor_core" }
+
+# Shared third-party dependencies (see features/feed/design.md §7 and
+# conventions/http.md).
+blake3 = "1"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+clap = { version = "4", features = ["derive", "env"] }
+feedparser-rs = { version = "0.5", default-features = false }
+reqwest = { version = "0.13", features = [
+    "blocking",
+    "gzip",
+    "deflate",
+    "brotli",
+] }
+scraper = "0.27"
+serde_json = { version = "1", features = ["preserve_order"] }
+thiserror = "2"
+url = "2"

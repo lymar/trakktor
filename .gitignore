@@ -3,6 +3,10 @@
 **/*.rs.bk
 *.pdb
 
+# Claude Code runtime artifacts (the scheduled-tasks lock is per-process state,
+# not project content; tracked skills under .claude/ are kept).
+.claude/scheduled_tasks.lock
+
 # macOS
 .DS_Store
 .AppleDouble
