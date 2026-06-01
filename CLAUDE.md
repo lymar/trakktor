@@ -26,10 +26,10 @@ Key documents (in `../trakktor_project/docs/`):
 - `overview.md` — what the project is and its design principles.
 - `architecture.md` — code organization (this workspace and its crates).
 - `features/<feature>/design.md` — per-feature specs (e.g.
-  `features/rss-atom/design.md`).
+  `features/feed/design.md`).
 - `adr/` — Architecture Decision Records (rationale for big decisions).
 - `conventions/` — cross-cutting rules: `cli.md`, `output.md`,
-  `working-directory.md`, `language.md`.
+  `error-handling.md`, `http.md`, `working-directory.md`, `language.md`.
 
 > The docs are written in **Russian**. Read them as the spec, but all code and
 > code-repo content here must be in **English** (see Language below).
@@ -65,6 +65,8 @@ published separately). Rationale: `../trakktor_project/docs/adr/0002-cargo-works
 - Keep `trakktor` (bin) thin; put real logic in `trakktor_core`.
 - Machine-readable output (e.g. JSON) is a first-class requirement — the primary
   consumers are agents (see `conventions/output.md`).
+- Describe errors with `thiserror` (typed enums); map them to the output contract
+  (stable `code` + exit) at the bin boundary. See `conventions/error-handling.md`.
 
 ## Branches
 
