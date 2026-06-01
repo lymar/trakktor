@@ -1,0 +1,24 @@
+// Folder-specific settings
+//
+// For a full list of overridable settings, and general information on folder-specific settings,
+// see the documentation: https://zed.dev/docs/configuring-zed#settings-files
+{
+  "languages": {
+    "Markdown": {
+      "format_on_save": "off",
+    },
+    "Rust": {
+      "format_on_save": "on",
+      "formatter": "language_server",
+    },
+  },
+  "lsp": {
+    "rust-analyzer": {
+      "initialization_options": {
+        "rustfmt": {
+          "overrideCommand": ["rustup", "run", "nightly", "rustfmt"],
+        },
+      },
+    },
+  },
+}
