@@ -4,6 +4,8 @@
 //! delegate to the library, and format the result. See architecture.md.
 
 mod cli;
+mod error;
 mod output;
+mod skill;
 
 fn main() { std::process::exit(cli::run()); }

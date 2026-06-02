@@ -10,6 +10,9 @@ license.workspace = true
 [dependencies]
 blake3.workspace = true
 chrono.workspace = true
+# clap is used only to introspect the CLI definition (`Command`) when rendering
+# the skill — the single source of truth for commands/flags (ADR-0003).
+clap.workspace = true
 feedparser-rs.workspace = true
 reqwest.workspace = true
 scraper.workspace = true

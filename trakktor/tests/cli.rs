@@ -83,6 +83,17 @@ fn run(args: &[&str]) -> Output {
         .expect("spawn trakktor")
 }
 
+/// Runs the binary in a specific working directory with extra env vars set —
+/// used by skill-install tests so project/`--global` writes land in a tempdir.
+fn run_in(dir: &Path, env: &[(&str, &str)], args: &[&str]) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_trakktor"));
+    command.current_dir(dir).args(args);
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    command.output().expect("spawn trakktor")
+}
+
 fn stdout_json(output: &Output) -> Value {
     assert!(
         output.status.success(),
@@ -303,4 +314,183 @@ fn missing_required_argument_exits_two() {
     // Structural argument error → clap → exit code 2 (cli.md).
     let out = run(&["feed", "mark-read"]);
     assert_eq!(out.status.code(), Some(2));
+}
+
+// ---------------------------------------------------------------------------
+// skill (design.md §2, §5)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn skill_show_prints_narrative_guide() {
+    let out = run(&["skill", "show"]);
+    assert!(out.status.success());
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.starts_with("# trakktor"), "got: {text}");
+    assert!(text.contains("## Commands"));
+    assert!(text.contains("### trakktor feed"));
+    // Narrative only — no reference without --full.
+    assert!(!text.contains("## Reference"));
+}
+
+#[test]
+fn skill_show_full_includes_generated_reference() {
+    let out = run(&["skill", "show", "--full"]);
+    assert!(out.status.success());
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("## Reference"));
+    assert!(text.contains("### trakktor feed read"));
+    // Flags, fixed values, and defaults are generated from clap (ADR-0003).
+    assert!(text.contains("`--fields <list>`"));
+    assert!(text.contains("default: minimal"));
+    assert!(text.contains("values: claude, agents"));
+}
+
+#[test]
+fn skill_show_json_wraps_markdown() {
+    let out = run(&["skill", "show", "--json"]);
+    let value = stdout_json(&out);
+    let content = value["content"].as_str().expect("content string");
+    assert!(content.starts_with("# trakktor"));
+    // The object carries only the prose document.
+    assert_eq!(value.as_object().unwrap().len(), 1);
+}
+
+#[test]
+fn skill_install_writes_stub_to_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let out =
+        run_in(dir.path(), &[], &["skill", "install", "claude", "--json"]);
+    let value = stdout_json(&out);
+    assert_eq!(value["path"], "./.claude/skills/trakktor/SKILL.md");
+    assert_eq!(value["status"], "written");
+
+    let path = dir.path().join(".claude/skills/trakktor/SKILL.md");
+    let stub = std::fs::read_to_string(&path).expect("stub written");
+    assert!(stub.contains("name: trakktor"));
+    assert!(stub.contains("allowed-tools: Bash(trakktor:*)"));
+    // The stub points back at the binary; it must not embed the reference.
+    assert!(stub.contains("trakktor skill show"));
+    assert!(!stub.contains("--fields"));
+}
+
+#[test]
+fn skill_install_skips_existing_until_forced() {
+    let dir = tempfile::tempdir().unwrap();
+    let args = ["skill", "install", "agents", "--json"];
+
+    let first = stdout_json(&run_in(dir.path(), &[], &args));
+    assert_eq!(first["path"], "./.agents/skills/trakktor/SKILL.md");
+    assert_eq!(first["status"], "written");
+
+    // Re-running without --force leaves the file and reports it skipped.
+    let second = stdout_json(&run_in(dir.path(), &[], &args));
+    assert_eq!(second["path"], "./.agents/skills/trakktor/SKILL.md");
+    assert_eq!(second["status"], "skipped");
+
+    // --force overwrites.
+    let forced_args = ["skill", "install", "agents", "--force", "--json"];
+    let forced = stdout_json(&run_in(dir.path(), &[], &forced_args));
+    assert_eq!(forced["status"], "written");
+}
+
+#[test]
+fn skill_install_global_writes_when_claude_dir_exists() {
+    let project = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let home_str = home.path().to_str().unwrap();
+    // The Claude home directory must already exist; we never create it.
+    std::fs::create_dir(home.path().join(".claude")).unwrap();
+
+    let out = run_in(
+        project.path(),
+        &[("HOME", home_str)],
+        &["skill", "install", "claude", "--global", "--json"],
+    );
+    let value = stdout_json(&out);
+    let installed = value["path"].as_str().unwrap();
+    assert!(installed.starts_with(home_str), "got: {installed}");
+    assert_eq!(value["status"], "written");
+
+    let path = home.path().join(".claude/skills/trakktor/SKILL.md");
+    assert!(path.exists(), "stub should be under HOME");
+    // Nothing leaked into the project directory.
+    assert!(!project.path().join(".claude").exists());
+}
+
+#[test]
+fn skill_install_global_errors_when_claude_dir_missing() {
+    let project = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap(); // deliberately has no `.claude`
+    let home_str = home.path().to_str().unwrap();
+
+    let out = run_in(
+        project.path(),
+        &[("HOME", home_str)],
+        &["skill", "install", "claude", "--global", "--json"],
+    );
+    // We refuse to create the agent's home directory (design.md §5).
+    assert_eq!(stderr_error_code(&out), "agent_dir_missing");
+    // Nothing was written anywhere.
+    assert!(!home.path().join(".claude").exists());
+    assert!(!project.path().join(".claude").exists());
+}
+
+#[test]
+fn skill_install_agents_global_is_usage_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let out =
+        run_in(dir.path(), &[], &["skill", "install", "agents", "--global"]);
+    // `--global` is Claude-only; clap reports a usage error (exit 2).
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("global"), "stderr: {stderr}");
+    // Nothing was written.
+    assert!(!dir.path().join(".agents").exists());
+}
+
+#[test]
+fn skill_install_requires_a_target() {
+    let out = run(&["skill", "install"]);
+    // The destination must be explicit; omitting it is a usage error (exit 2).
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("target"), "stderr: {stderr}");
+}
+
+#[test]
+fn no_internal_doc_references_leak_into_user_facing_text() {
+    // `skill show` is reproduced verbatim for coding agents and `--help` is
+    // read by users; neither may expose internal design-doc identifiers (these
+    // live in the docs repo and in `//` code comments, never in clap prose).
+    let surfaces: &[&[&str]] = &[
+        &["skill", "show", "--full"],
+        &["--help"],
+        &["skill", "show", "--help"],
+        &["skill", "install", "--help"],
+    ];
+    let needles = [
+        "ADR-",
+        "design.md",
+        "output.md",
+        "cli.md",
+        "error-handling",
+        "working-directory",
+        "research.md",
+        "§",
+    ];
+    for args in surfaces {
+        let out = run(args);
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        for needle in needles {
+            assert!(
+                !text.contains(needle),
+                "internal reference {needle:?} leaked into `trakktor {}`",
+                args.join(" ")
+            );
+        }
+    }
 }

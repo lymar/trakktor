@@ -19,7 +19,13 @@ the session with `--add-dir` if it is not already available).
 - If the implementation must diverge from the docs, update the docs **first**
   (or within the same logical change) — never let code and docs drift apart.
 - Reference decisions by their identifier in commit messages and doc-comments,
-  e.g. `see ADR-0002`, `design.md §5 (uid)`.
+  e.g. `see ADR-0002`, `design.md §5 (uid)`. **Exception — `clap` items:**
+  doc-comments on the CLI grammar (the `Cli` struct, each subcommand/variant,
+  and every arg) are **user-facing**, not internal. clap renders them into
+  `--help`, and `trakktor skill show` reproduces them **verbatim** for agents
+  (ADR-0003). Never put internal references (`ADR-xxxx`, `design.md`, `§…`,
+  convention filenames) in that prose — cite decisions in adjacent `//`
+  comments or module (`//!`) docs instead.
 
 Key documents (in `../trakktor_project/docs/`):
 
@@ -67,6 +73,14 @@ published separately). Rationale: `../trakktor_project/docs/adr/0002-cargo-works
   consumers are agents (see `conventions/output.md`).
 - Describe errors with `thiserror` (typed enums); map them to the output contract
   (stable `code` + exit) at the bin boundary. See `conventions/error-handling.md`.
+- The CLI is self-documenting and the skill is generated from it (ADR-0003): a
+  command, flag, value, or help string lives once in `clap` and flows to both
+  `--help` and `trakktor skill show`. **After changing any clap doc-comment or
+  help text, you MUST verify what reached the agent-facing output** — run
+  `trakktor skill show`, `trakktor skill show --full`, and the relevant
+  `--help`, and confirm nothing internal leaked. The test
+  `no_internal_doc_references_leak_into_user_facing_text` enforces this; see
+  `conventions/cli.md`.
 
 ## Branches
 

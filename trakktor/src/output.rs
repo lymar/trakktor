@@ -5,14 +5,18 @@
 //! values are omitted (never `null`). In text, lists are one record per line
 //! with tab-separated fields and composite values collapsed onto one line.
 
+use std::path::Path;
+
 use serde_json::{Map, Value, json};
 use trakktor_core::{
     feed::{
-        Author, ContentBlock, DiscoveredFeed, FeedError, Field,
-        MarkReadSummary, Publication,
+        Author, ContentBlock, DiscoveredFeed, Field, MarkReadSummary,
+        Publication,
     },
-    http::HttpError,
+    skill::WriteOutcome,
 };
+
+use crate::error::CliError;
 
 // ---------------------------------------------------------------------------
 // feed discover
@@ -223,38 +227,67 @@ pub fn print_mark_read(summary: &MarkReadSummary, json: bool, pretty: bool) {
 }
 
 // ---------------------------------------------------------------------------
+// skill show / install
+// ---------------------------------------------------------------------------
+
+/// Prints the generated skill guide (`skill show`, design.md §2). The guide is
+/// a prose document, so text mode prints the Markdown verbatim; `--json` (where
+/// a bare document would be uninformative) wraps it as `{ "content": "…" }`
+/// (output.md).
+pub fn print_skill_show(content: &str, json: bool, pretty: bool) {
+    if json {
+        print_json(&json!({ "content": content }), pretty);
+    } else {
+        println!("{content}");
+    }
+}
+
+/// Prints the install result (`skill install`, design.md §2, §5). One
+/// destination per run, so the JSON form is a single object
+/// `{ "path": "<path>", "status": "written" | "skipped" }`: `written` when the
+/// stub was created or overwritten, `skipped` when an existing file was left in
+/// place without `--force` (output.md).
+pub fn print_skill_install(
+    path: &Path,
+    outcome: WriteOutcome,
+    json: bool,
+    pretty: bool,
+) {
+    let status = match outcome {
+        WriteOutcome::Written => "written",
+        WriteOutcome::Skipped => "skipped",
+    };
+    if json {
+        print_json(
+            &json!({ "path": path.display().to_string(), "status": status }),
+            pretty,
+        );
+        return;
+    }
+    match outcome {
+        WriteOutcome::Written => println!("installed: {}", path.display()),
+        WriteOutcome::Skipped => {
+            println!("skipped (exists, use --force): {}", path.display());
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
 // errors
 // ---------------------------------------------------------------------------
 
 /// Emits an error to stderr (output.md). JSON form:
-/// `{ "error": { "code", "message" } }`; text form: a plain message.
-pub fn emit_error(err: &FeedError, json: bool, pretty: bool) {
+/// `{ "error": { "code", "message" } }`; text form: a plain message. The stable
+/// `code` is resolved by [`CliError::code`] at the bin boundary.
+pub fn emit_error(err: &CliError, json: bool, pretty: bool) {
     if json {
         let value = json!({
-            "error": { "code": error_code(err), "message": err.to_string() },
+            "error": { "code": err.code(), "message": err.to_string() },
         });
         let rendered = render_json(&value, pretty);
         eprintln!("{rendered}");
     } else {
         eprintln!("error: {err}");
-    }
-}
-
-/// Maps a [`FeedError`] to its stable `code` (design.md §9). The variant →
-/// `code` mapping lives at the bin boundary (error-handling.md).
-fn error_code(err: &FeedError) -> &'static str {
-    match err {
-        FeedError::Http(http) => match http {
-            HttpError::InvalidUrl(_) => "invalid_url",
-            HttpError::Fetch(_) => "fetch_failed",
-            HttpError::Status(_) => "http_error",
-            HttpError::TooLarge { .. } => "too_large",
-        },
-        FeedError::ParseFailed(_) => "parse_failed",
-        FeedError::FeedNotFound => "feed_not_found",
-        FeedError::InvalidUid(_) => "invalid_uid",
-        FeedError::InvalidField(_) => "invalid_field",
-        FeedError::Io(_) => "io_error",
     }
 }
 
