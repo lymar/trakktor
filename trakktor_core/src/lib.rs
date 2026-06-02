@@ -2,8 +2,7 @@
 //! independent of the CLI.
 //!
 //! The CLI crate (`trakktor`) is a thin layer that parses arguments, resolves
-//! configuration, and formats the values returned here. See
-//! `../trakktor_project/docs/architecture.md` and ADR-0002.
+//! configuration, and formats the values returned here.
 
 pub mod feed;
 pub mod http;

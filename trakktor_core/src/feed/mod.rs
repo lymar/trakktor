@@ -1,8 +1,7 @@
 //! Feeds: discover, read, and mark-read for RSS/Atom/JSON Feed.
 //!
-//! Full specification: `../trakktor_project/docs/features/feed/design.md`.
-//! Key cross-cutting rules: `conventions/{cli,output,http,error-handling,
-//! working-directory}.md`; uid + read-state design: ADR-0001.
+//! Cross-cutting concerns: CLI grammar, output formatting, HTTP policy, error
+//! handling, and the working directory.
 //!
 //! This module exposes the three operations behind `trakktor feed …`; the CLI
 //! crate formats their return values.
@@ -24,7 +23,7 @@ pub use model::{
 
 use crate::http::{HttpClient, HttpError};
 
-/// Discovers the feeds declared on a web page (`feed discover`, design.md §3).
+/// Discovers the feeds declared on a web page (`feed discover`).
 ///
 /// Fetches `page_url` as HTML and returns the feeds found via
 /// `<link rel="alternate">` or, if none are declared, via typical paths. An
@@ -42,7 +41,7 @@ pub fn discover(page_url: &str) -> Result<Vec<DiscoveredFeed>, FeedError> {
     discover::discover_from_page(&client, &base, &body)
 }
 
-/// Reads a feed and returns its publications (`feed read`, design.md §2).
+/// Reads a feed and returns its publications (`feed read`).
 ///
 /// `url` may be a feed or a regular page (autodiscovery applies). When `all`
 /// is false, only unread publications are returned. `work_dir` is the resolved
@@ -62,7 +61,7 @@ pub fn read(
     read::read_feed(&client, &store, url, all)
 }
 
-/// Marks publications as read by uid; idempotent (`feed mark-read`, §2/§6).
+/// Marks publications as read by uid; idempotent (`feed mark-read`).
 ///
 /// # Errors
 ///

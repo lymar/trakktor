@@ -1,4 +1,4 @@
-//! Feed autodiscovery (design.md §3).
+//! Feed autodiscovery.
 //!
 //! Two strategies, in priority order:
 //! 1. `<link rel="alternate" type="…">` elements in the page;
@@ -17,7 +17,7 @@ use crate::{
     http::HttpClient,
 };
 
-/// MIME types that mark a `<link>` as a feed (design.md §3).
+/// MIME types that mark a `<link>` as a feed.
 const FEED_LINK_TYPES: &[&str] = &[
     "application/rss+xml",
     "application/atom+xml",
@@ -25,8 +25,8 @@ const FEED_LINK_TYPES: &[&str] = &[
     "application/feed+json",
 ];
 
-/// Typical feed paths probed when no `<link>` is present (design.md §3),
-/// in the order they are tried.
+/// Typical feed paths probed when no `<link>` is present, in the order they
+/// are tried.
 pub const TYPICAL_PATHS: &[&str] = &[
     "/feed",
     "/feed.xml",
@@ -36,7 +36,7 @@ pub const TYPICAL_PATHS: &[&str] = &[
     "/feed.json",
 ];
 
-/// Discovers feeds from an already-downloaded page body (design.md §3).
+/// Discovers feeds from an already-downloaded page body.
 ///
 /// `base` is the page URL, used to resolve relative `href`s and typical paths.
 /// `<link>` feeds take precedence; typical paths are probed (with network
@@ -60,14 +60,14 @@ pub fn discover_from_page(
 }
 
 /// Extracts feeds declared via `<head>` `<link rel="alternate" type="…">`
-/// (design.md §3 — the search is scoped to `<head>`). Pure: no network.
-/// Relative `href`s are resolved against `base`; results are in document order.
+/// (the search is scoped to `<head>`). Pure: no network. Relative `href`s are
+/// resolved against `base`; results are in document order.
 #[must_use]
 pub fn extract_link_feeds(base: &Url, html: &str) -> Vec<DiscoveredFeed> {
     let document = Html::parse_document(html);
-    // §3 restricts discovery to `<head>`; HTML5 parsing keeps a `<link>` placed
-    // in flow content inside `<body>`, so a `<head>`-scoped selector excludes
-    // stray feed-typed links from the page body.
+    // Discovery is restricted to `<head>`; HTML5 parsing keeps a `<link>`
+    // placed in flow content inside `<body>`, so a `<head>`-scoped selector
+    // excludes stray feed-typed links from the page body.
     let selector =
         Selector::parse("head link").expect("static `head link` selector");
 
@@ -120,8 +120,8 @@ pub fn extract_link_feeds(base: &Url, html: &str) -> Vec<DiscoveredFeed> {
 }
 
 /// Probes the typical feed paths against `base`, returning those that parse as
-/// a feed (design.md §3), in [`TYPICAL_PATHS`] order. Per-path transport and
-/// parse failures are expected for guesses and silently skipped.
+/// a feed, in [`TYPICAL_PATHS`] order. Per-path transport and parse failures
+/// are expected for guesses and silently skipped.
 fn probe_typical_paths(client: &HttpClient, base: &Url) -> Vec<DiscoveredFeed> {
     let mut feeds = Vec::new();
     for path in TYPICAL_PATHS {
@@ -153,8 +153,8 @@ fn probe_typical_paths(client: &HttpClient, base: &Url) -> Vec<DiscoveredFeed> {
     feeds
 }
 
-/// Maps a recognized feed format to the MIME type reported by `discover`
-/// (design.md §3). Returns `None` for [`FeedVersion::Unknown`].
+/// Maps a recognized feed format to the MIME type reported by `discover`.
+/// Returns `None` for [`FeedVersion::Unknown`].
 #[must_use]
 pub fn mime_for_version(version: FeedVersion) -> Option<&'static str> {
     match version {
@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn ignores_feed_links_outside_head() {
-        // §3 scopes discovery to `<head>`; a feed-typed link in `<body>` must
+        // Discovery is scoped to `<head>`; a feed-typed link in `<body>` must
         // not be reported.
         let html = r#"
             <html>

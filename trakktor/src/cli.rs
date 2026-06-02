@@ -1,9 +1,9 @@
 //! Command-line interface: grammar, global options, and dispatch.
 //!
-//! Mirrors `conventions/cli.md`. Global options are declared `global = true`
-//! so they may appear before or after the subcommand. Structural argument
-//! errors are reported by clap with exit code 2; value-validation and runtime
-//! errors return exit code 1 and respect `--json` (see `output.md`).
+//! Global options are declared `global = true` so they may appear before or
+//! after the subcommand. Structural argument errors are reported by clap with
+//! exit code 2; value-validation and runtime errors return exit code 1 and
+//! respect `--json`.
 
 use std::path::PathBuf;
 
@@ -15,14 +15,9 @@ use trakktor_core::{feed, skill::Target};
 use crate::{error::CliError, output};
 
 /// Default working directory when neither `--work-dir` nor `TRAKKTOR_DIR` is
-/// set (working-directory.md).
+/// set.
 const DEFAULT_WORK_DIR: &str = ".trakktor";
 
-// NOTE: every `///` on a clap item in this file is user-facing — clap renders
-// it into `--help`, and `trakktor skill show` reproduces it verbatim for coding
-// agents. Keep internal doc references (ADR-xxxx, design.md, §-sections) OUT of
-// this prose; cite them in `//` comments or module docs instead. (Why the skill
-// is generated from the binary at all: ADR-0003.)
 /// Helper commands for coding agents: predictable, machine-readable building
 /// blocks (RSS/Atom/JSON feeds today, more later) that an agent runs as a
 /// tool. Use trakktor when a task needs one of these helpers — for example,
@@ -46,7 +41,7 @@ pub struct Cli {
     command: Command,
 }
 
-/// Options that apply to every command (cli.md).
+/// Options that apply to every command.
 #[derive(Args)]
 struct GlobalOpts {
     /// Working directory for local state (default: ./.trakktor).
@@ -63,8 +58,8 @@ struct GlobalOpts {
 }
 
 impl GlobalOpts {
-    /// Resolves the working directory: `--work-dir` > `TRAKKTOR_DIR` > default
-    /// (working-directory.md). clap applies the flag-over-env precedence.
+    /// Resolves the working directory: `--work-dir` > `TRAKKTOR_DIR` > default.
+    /// clap applies the flag-over-env precedence.
     fn work_dir(&self) -> PathBuf {
         self.work_dir
             .clone()
@@ -218,8 +213,7 @@ pub fn run() -> i32 {
 }
 
 /// Executes the parsed command, printing successful output to stdout. Feature
-/// errors are converted to [`CliError`] at the `?` boundary
-/// (error-handling.md).
+/// errors are converted to [`CliError`] at the `?` boundary.
 fn dispatch(cli: &Cli) -> Result<(), CliError> {
     let global = &cli.global;
     match &cli.command {

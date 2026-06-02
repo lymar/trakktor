@@ -1,8 +1,7 @@
 //! Typed errors for the feed feature.
 //!
-//! Each variant corresponds to a stable error `code` documented in feed
-//! design.md §9. The variant → `code` → exit-code mapping is performed at the
-//! CLI boundary (see `conventions/error-handling.md`); changing an `#[error]`
+//! Each variant corresponds to a stable error `code`. The variant → `code` →
+//! exit-code mapping is performed at the CLI boundary; changing an `#[error]`
 //! message must never change the external `code`.
 
 use crate::http::HttpError;
@@ -18,8 +17,7 @@ pub enum FeedError {
     Http(#[from] HttpError),
 
     /// Content was recognized as a feed but could not be parsed
-    /// (`parse_failed`). The parser error is preserved as the source
-    /// (error-handling.md).
+    /// (`parse_failed`). The parser error is preserved as the source.
     #[error("content was recognized as a feed but could not be parsed: {0}")]
     ParseFailed(#[source] feedparser_rs::FeedError),
 

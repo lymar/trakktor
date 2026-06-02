@@ -1,9 +1,9 @@
 //! Output formatting: text (default) and JSON (`--json`).
 //!
-//! Implements `conventions/output.md`. Data goes to stdout; errors go to
-//! stderr. In JSON, lists are arrays and a single result is an object; absent
-//! values are omitted (never `null`). In text, lists are one record per line
-//! with tab-separated fields and composite values collapsed onto one line.
+//! Data goes to stdout; errors go to stderr. In JSON, lists are arrays and a
+//! single result is an object; absent values are omitted (never `null`). In
+//! text, lists are one record per line with tab-separated fields and composite
+//! values collapsed onto one line.
 
 use std::path::Path;
 
@@ -22,7 +22,7 @@ use crate::error::CliError;
 // feed discover
 // ---------------------------------------------------------------------------
 
-/// Prints discovered feeds (design.md §3; output.md examples).
+/// Prints discovered feeds.
 pub fn print_discover(feeds: &[DiscoveredFeed], json: bool, pretty: bool) {
     if json {
         let array = feeds
@@ -57,7 +57,7 @@ pub fn print_discover(feeds: &[DiscoveredFeed], json: bool, pretty: bool) {
 // feed read
 // ---------------------------------------------------------------------------
 
-/// Prints publications, projected to the selected fields (design.md §4).
+/// Prints publications, projected to the selected fields.
 pub fn print_read(
     publications: &[Publication],
     selection: &[Field],
@@ -79,8 +79,8 @@ pub fn print_read(
 }
 
 /// Renders one publication as a single text line: selected fields in order,
-/// tab-separated. Every cell is collapsed (output.md) so newlines/tabs in any
-/// field — author names included — cannot break the one-record-per-line layout.
+/// tab-separated. Every cell is collapsed so newlines/tabs in any field —
+/// author names included — cannot break the one-record-per-line layout.
 fn text_line(publication: &Publication, selection: &[Field]) -> String {
     selection
         .iter()
@@ -90,7 +90,7 @@ fn text_line(publication: &Publication, selection: &[Field]) -> String {
 }
 
 /// Builds the JSON object for one publication, including only selected fields
-/// that are present (output.md: absent values are omitted).
+/// that are present (absent values are omitted).
 fn publication_to_json(
     publication: &Publication,
     selection: &[Field],
@@ -142,7 +142,7 @@ fn publication_to_json(
     Value::Object(object)
 }
 
-/// `content` as an array of `{ type?, value }` (design.md §4).
+/// `content` as an array of `{ type?, value }`.
 fn content_to_json(blocks: &[ContentBlock]) -> Value {
     let array = blocks
         .iter()
@@ -156,7 +156,7 @@ fn content_to_json(blocks: &[ContentBlock]) -> Value {
     Value::Array(array)
 }
 
-/// `authors` as an array of `{ name?, email?, uri? }` (design.md §4).
+/// `authors` as an array of `{ name?, email?, uri? }`.
 fn authors_to_json(authors: &[Author]) -> Value {
     let array = authors
         .iter()
@@ -172,8 +172,8 @@ fn authors_to_json(authors: &[Author]) -> Value {
 }
 
 /// Renders one field of a publication as a text cell. The caller collapses
-/// newlines/tabs to spaces uniformly (output.md), so this only shapes composite
-/// values: content blocks join with spaces, authors join with commas.
+/// newlines/tabs to spaces uniformly, so this only shapes composite values:
+/// content blocks join with spaces, authors join with commas.
 fn cell(publication: &Publication, field: Field) -> String {
     match field {
         Field::Uid => publication.uid.clone(),
@@ -212,7 +212,7 @@ fn author_display(author: &Author) -> String {
 // feed mark-read
 // ---------------------------------------------------------------------------
 
-/// Prints the mark-read summary (design.md §2; output.md single-object form).
+/// Prints the mark-read summary (single-object form).
 pub fn print_mark_read(summary: &MarkReadSummary, json: bool, pretty: bool) {
     if json {
         let value = json!({
@@ -230,10 +230,9 @@ pub fn print_mark_read(summary: &MarkReadSummary, json: bool, pretty: bool) {
 // skill show / install
 // ---------------------------------------------------------------------------
 
-/// Prints the generated skill guide (`skill show`, design.md §2). The guide is
-/// a prose document, so text mode prints the Markdown verbatim; `--json` (where
-/// a bare document would be uninformative) wraps it as `{ "content": "…" }`
-/// (output.md).
+/// Prints the generated skill guide (`skill show`). The guide is a prose
+/// document, so text mode prints the Markdown verbatim; `--json` (where a bare
+/// document would be uninformative) wraps it as `{ "content": "…" }`.
 pub fn print_skill_show(content: &str, json: bool, pretty: bool) {
     if json {
         print_json(&json!({ "content": content }), pretty);
@@ -242,11 +241,11 @@ pub fn print_skill_show(content: &str, json: bool, pretty: bool) {
     }
 }
 
-/// Prints the install result (`skill install`, design.md §2, §5). One
-/// destination per run, so the JSON form is a single object
+/// Prints the install result (`skill install`). One destination per run, so the
+/// JSON form is a single object
 /// `{ "path": "<path>", "status": "written" | "skipped" }`: `written` when the
 /// stub was created or overwritten, `skipped` when an existing file was left in
-/// place without `--force` (output.md).
+/// place without `--force`.
 pub fn print_skill_install(
     path: &Path,
     outcome: WriteOutcome,
@@ -276,7 +275,7 @@ pub fn print_skill_install(
 // errors
 // ---------------------------------------------------------------------------
 
-/// Emits an error to stderr (output.md). JSON form:
+/// Emits an error to stderr. JSON form:
 /// `{ "error": { "code", "message" } }`; text form: a plain message. The stable
 /// `code` is resolved by [`CliError::code`] at the bin boundary.
 pub fn emit_error(err: &CliError, json: bool, pretty: bool) {
@@ -295,7 +294,7 @@ pub fn emit_error(err: &CliError, json: bool, pretty: bool) {
 // helpers
 // ---------------------------------------------------------------------------
 
-/// Inserts `key => value` only when `value` is `Some` (output.md: omit absent).
+/// Inserts `key => value` only when `value` is `Some` (omit absent).
 fn insert_opt(object: &mut Map<String, Value>, key: &str, value: Option<&str>) {
     if let Some(value) = value {
         object.insert(key.to_string(), Value::String(value.to_string()));

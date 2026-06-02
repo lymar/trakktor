@@ -1,7 +1,6 @@
 //! Typed errors for the skill feature.
 //!
-//! Each variant maps to a stable error `code` at the CLI boundary (see
-//! `conventions/error-handling.md` and skill design.md §8); changing an
+//! Each variant maps to a stable error `code` at the CLI boundary; changing an
 //! `#[error]` message must never change the external `code`.
 
 use std::path::PathBuf;
@@ -16,7 +15,7 @@ pub enum SkillError {
 
     /// A global install was requested but the agent's directory does not exist
     /// (`agent_dir_missing`). A global install never creates the agent's home
-    /// directory itself (design.md §5); the user must create it first.
+    /// directory itself; the user must create it first.
     #[error(
         "the agent directory {} does not exist; a global install does not \
          create it",

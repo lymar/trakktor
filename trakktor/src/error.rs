@@ -2,9 +2,8 @@
 //!
 //! `trakktor_core` returns typed, feature-specific errors; here, at the CLI
 //! boundary, they are unified and mapped to the output contract — a stable
-//! string `code` plus exit code 1 (see `conventions/error-handling.md` and
-//! `conventions/output.md`). Changing a feature's `#[error]` message must never
-//! change its external `code`.
+//! string `code` plus exit code 1. Changing a feature's `#[error]` message must
+//! never change its external `code`.
 
 use trakktor_core::{feed::FeedError, http::HttpError, skill::SkillError};
 
@@ -18,8 +17,8 @@ pub enum CliError {
 }
 
 impl CliError {
-    /// The stable error `code` for the JSON error contract (output.md). The
-    /// variant → `code` mapping lives here, at the bin boundary.
+    /// The stable error `code` for the JSON error contract. The variant →
+    /// `code` mapping lives here, at the bin boundary.
     pub fn code(&self) -> &'static str {
         match self {
             CliError::Feed(err) => feed_code(err),
@@ -45,7 +44,7 @@ impl From<SkillError> for CliError {
     fn from(err: SkillError) -> Self { CliError::Skill(err) }
 }
 
-/// Maps a [`FeedError`] to its stable `code` (feed design.md §9).
+/// Maps a [`FeedError`] to its stable `code`.
 fn feed_code(err: &FeedError) -> &'static str {
     match err {
         FeedError::Http(http) => match http {
@@ -62,7 +61,7 @@ fn feed_code(err: &FeedError) -> &'static str {
     }
 }
 
-/// Maps a [`SkillError`] to its stable `code` (skill design.md §8).
+/// Maps a [`SkillError`] to its stable `code`.
 fn skill_code(err: &SkillError) -> &'static str {
     match err {
         SkillError::HomeDirUnknown => "no_home_dir",

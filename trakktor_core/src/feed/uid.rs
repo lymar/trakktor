@@ -1,6 +1,6 @@
 //! Stable publication identifiers (`uid`) and feed-key canonicalization.
 //!
-//! Implements design.md §5 and ADR-0001:
+//! Implements the uid construction and URL-normalization rules:
 //!
 //! ```text
 //! uid = hex( BLAKE3( feed_key ‖ 0x00 ‖ tag ‖ 0x00 ‖ item_key ) )
@@ -10,7 +10,7 @@
 //! uid, or read-state would be lost between runs.
 
 /// Discriminates the source of `item_key` so that, e.g., one entry's `link`
-/// accidentally equal to another's `id` cannot collide (design.md §5).
+/// accidentally equal to another's `id` cannot collide.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ItemKeyTag {
     /// `item_key` came from `Entry.id`.
@@ -31,10 +31,9 @@ impl ItemKeyTag {
     }
 }
 
-/// Canonicalizes a feed URL into the `feed_key` used for uid computation
-/// (design.md §5).
+/// Canonicalizes a feed URL into the `feed_key` used for uid computation.
 ///
-/// Normalization (determinism matters — see ADR-0001):
+/// Normalization (determinism matters):
 /// - scheme and host lowercased (the URL parser already does this);
 /// - default port removed (`:80` for http, `:443` for https — also handled by
 ///   the parser);
@@ -68,7 +67,7 @@ pub fn canonicalize_feed_key(url: &str) -> Option<String> {
     Some(key)
 }
 
-/// Computes a uid from its three parts (design.md §5).
+/// Computes a uid from its three parts.
 ///
 /// `tag` is rendered between the feed key and the item key, each separated by a
 /// `0x00` byte, then BLAKE3-hashed; the result is lowercase hex (64 chars).
@@ -145,9 +144,9 @@ mod tests {
 
     #[test]
     fn path_follows_url_standard_normalization() {
-        // Per §5, path/query come from the `url` parser (WHATWG/RFC 3986):
+        // Path and query come from the `url` parser (WHATWG/RFC 3986):
         // dot-segments resolve and disallowed characters are percent-encoded.
-        // This is deterministic, which is the property §5 requires.
+        // This is deterministic, which is the property uids require.
         assert_eq!(
             canonicalize_feed_key("https://example.com/a/../b").unwrap(),
             "https://example.com/b"
@@ -180,7 +179,7 @@ mod tests {
 
     #[test]
     fn uid_matches_documented_construction() {
-        // The hash must equal BLAKE3 over the exact byte layout from §5.
+        // The hash must equal BLAKE3 over the exact documented byte layout.
         let feed_key = "https://example.com/feed.xml";
         let item_key = "https://example.com/posts/42";
         let mut expected = blake3::Hasher::new();

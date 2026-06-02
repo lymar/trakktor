@@ -1,29 +1,28 @@
 //! HTTP client and policy shared across features.
 //!
-//! Implements the cross-cutting rules from
-//! `../trakktor_project/docs/conventions/http.md`: allowed schemes, fixed
-//! User-Agent, connect/request timeouts, redirect limit, transparent
-//! compression, and a hard cap on the response body size. The parameters are
-//! hard-coded for now; making them configurable is left for later.
+//! Implements the cross-cutting HTTP rules: allowed schemes, fixed User-Agent,
+//! connect/request timeouts, redirect limit, transparent compression, and a
+//! hard cap on the response body size. The parameters are hard-coded for now;
+//! making them configurable is left for later.
 
 use std::{io::Read, time::Duration};
 
-/// User-Agent sent with every request: `trakktor/<version>` (http.md).
+/// User-Agent sent with every request: `trakktor/<version>`.
 const USER_AGENT: &str = concat!("trakktor/", env!("CARGO_PKG_VERSION"));
-/// Connection timeout (http.md).
+/// Connection timeout.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-/// Overall request timeout (http.md).
+/// Overall request timeout.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-/// Maximum number of redirects to follow (http.md).
+/// Maximum number of redirects to follow.
 const MAX_REDIRECTS: usize = 10;
-/// Maximum accepted response body size: 20 MiB (http.md).
+/// Maximum accepted response body size: 20 MiB.
 const MAX_RESPONSE_BYTES: u64 = 20 * 1024 * 1024;
 
 /// Transport- and protocol-level HTTP errors.
 ///
-/// These map to the stable error codes documented in feed design.md §9
-/// (`invalid_url`, `fetch_failed`, `http_error`, `too_large`); the mapping
-/// itself lives at the CLI boundary.
+/// These map to the stable error codes `invalid_url`, `fetch_failed`,
+/// `http_error`, and `too_large`; the mapping itself lives at the CLI
+/// boundary.
 #[derive(Debug, thiserror::Error)]
 pub enum HttpError {
     /// The URL does not parse or uses a scheme other than `http`/`https`.
@@ -31,9 +30,8 @@ pub enum HttpError {
     InvalidUrl(String),
     /// A network/transport failure (DNS, connection, timeout, TLS).
     ///
-    /// The underlying cause is preserved as the error source
-    /// (error-handling.md); it may be a `reqwest::Error` or an
-    /// [`std::io::Error`] from reading the body.
+    /// The underlying cause is preserved as the error source; it may be a
+    /// `reqwest::Error` or an [`std::io::Error`] from reading the body.
     #[error("request failed: {0}")]
     Fetch(#[source] Box<dyn std::error::Error + Send + Sync>),
     /// The server returned a non-2xx status code.
@@ -47,13 +45,13 @@ pub enum HttpError {
     },
 }
 
-/// A blocking HTTP client configured per `conventions/http.md`.
+/// A blocking HTTP client configured with the shared HTTP policy.
 pub struct HttpClient {
     inner: reqwest::blocking::Client,
 }
 
 impl HttpClient {
-    /// Builds a client with the policy from http.md.
+    /// Builds a client with the shared HTTP policy.
     ///
     /// # Errors
     ///
@@ -72,7 +70,7 @@ impl HttpClient {
         Ok(Self { inner })
     }
 
-    /// Fetches `url` and returns the response body, enforcing the http.md
+    /// Fetches `url` and returns the response body, enforcing the shared HTTP
     /// policy.
     ///
     /// Redirects are followed up to the configured limit; the body is read
@@ -124,7 +122,7 @@ impl HttpClient {
     }
 }
 
-/// Validates that `url` parses and uses an allowed scheme (http.md).
+/// Validates that `url` parses and uses an allowed scheme.
 ///
 /// # Errors
 ///

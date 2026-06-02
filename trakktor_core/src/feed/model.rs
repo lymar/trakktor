@@ -1,12 +1,12 @@
-//! Output data model for the feed feature (design.md §3, §4).
+//! Output data model for the feed feature.
 //!
 //! These types are deliberately output-agnostic: the CLI crate turns them into
-//! text or JSON (see `conventions/output.md`). Optional/empty values mean "the
-//! source had no such value" and are omitted by the renderer.
+//! text or JSON. Optional/empty values mean "the source had no such value" and
+//! are omitted by the renderer.
 
 use crate::feed::error::FeedError;
 
-/// A feed discovered on a web page (`feed discover`, design.md §3).
+/// A feed discovered on a web page (`feed discover`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoveredFeed {
     /// Absolute URL of the feed.
@@ -18,7 +18,7 @@ pub struct DiscoveredFeed {
     pub title: Option<String>,
 }
 
-/// One author of a publication (design.md §4 — `{ name, email?, uri? }`).
+/// One author of a publication (`{ name, email?, uri? }`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Author {
     /// Display name.
@@ -29,7 +29,7 @@ pub struct Author {
     pub uri: Option<String>,
 }
 
-/// One content block of a publication (design.md §4 — `{ type?, value }`).
+/// One content block of a publication (`{ type?, value }`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContentBlock {
     /// MIME type of the block (e.g. `text/html`); omitted when unknown.
@@ -38,16 +38,16 @@ pub struct ContentBlock {
     pub value: String,
 }
 
-/// A publication returned by `feed read` (design.md §4).
+/// A publication returned by `feed read`.
 ///
-/// Every publication carries a stable [`Publication::uid`] (§5) and an
-/// [`Publication::is_read`] flag (§6). The remaining fields mirror the parsed
+/// Every publication carries a stable [`Publication::uid`] and an
+/// [`Publication::is_read`] flag. The remaining fields mirror the parsed
 /// entry; absent values are `None`/empty.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Publication {
-    /// Stable identifier of this feed + entry (design.md §5).
+    /// Stable identifier of this feed + entry.
     pub uid: String,
-    /// Whether the uid is present in the read-state store (design.md §6).
+    /// Whether the uid is present in the read-state store.
     pub is_read: bool,
     /// Entry title.
     pub title: Option<String>,
@@ -57,7 +57,7 @@ pub struct Publication {
     pub published: Option<String>,
     /// Last-update date, RFC 3339 normalized to UTC.
     pub updated: Option<String>,
-    /// Short description (may contain HTML; not sanitized — design.md §8).
+    /// Short description (may contain HTML; not sanitized).
     pub summary: Option<String>,
     /// Full content blocks.
     pub content: Vec<ContentBlock>,
@@ -65,7 +65,7 @@ pub struct Publication {
     pub authors: Vec<Author>,
 }
 
-/// Summary returned by `feed mark-read` (design.md §2, cli.md).
+/// Summary returned by `feed mark-read`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MarkReadSummary {
     /// Number of uids newly marked as read.
@@ -74,7 +74,7 @@ pub struct MarkReadSummary {
     pub already_read: usize,
 }
 
-/// A selectable output field of `feed read` (design.md §4, `--fields`).
+/// A selectable output field of `feed read` (`--fields`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Field {
     /// `uid`
@@ -114,7 +114,7 @@ impl Field {
         }
     }
 
-    /// All fields, in the canonical order of the design.md §4 table.
+    /// All fields, in their canonical order.
     ///
     /// This is the `all` special value of `--fields`.
     #[must_use]
@@ -132,7 +132,7 @@ impl Field {
         ]
     }
 
-    /// The default `minimal` field set: `uid,title,link` (design.md §4).
+    /// The default `minimal` field set: `uid,title,link`.
     #[must_use]
     pub fn minimal() -> &'static [Field] {
         &[Field::Uid, Field::Title, Field::Link]
@@ -143,7 +143,7 @@ impl Field {
     }
 }
 
-/// Parses the `--fields` value into an ordered field list (design.md §4).
+/// Parses the `--fields` value into an ordered field list.
 ///
 /// Accepts the special values `minimal` (the default, `uid,title,link`) and
 /// `all`, or a comma-separated list of field names. Order is preserved for an

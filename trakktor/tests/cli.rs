@@ -226,7 +226,7 @@ fn page_url_autodiscovers_feed_with_stable_uid() {
         "--json",
     ]));
 
-    // §2 feed_key rule: reading the feed directly and via its page must yield
+    // feed_key rule: reading the feed directly and via its page must yield
     // identical uids.
     assert_eq!(via_feed, via_page);
     assert_eq!(via_page.as_array().unwrap().len(), 2);
@@ -311,13 +311,13 @@ fn invalid_url_is_reported() {
 
 #[test]
 fn missing_required_argument_exits_two() {
-    // Structural argument error → clap → exit code 2 (cli.md).
+    // Structural argument error → clap → exit code 2.
     let out = run(&["feed", "mark-read"]);
     assert_eq!(out.status.code(), Some(2));
 }
 
 // ---------------------------------------------------------------------------
-// skill (design.md §2, §5)
+// skill
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -339,7 +339,7 @@ fn skill_show_full_includes_generated_reference() {
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("## Reference"));
     assert!(text.contains("### trakktor feed read"));
-    // Flags, fixed values, and defaults are generated from clap (ADR-0003).
+    // Flags, fixed values, and defaults are generated from clap.
     assert!(text.contains("`--fields <list>`"));
     assert!(text.contains("default: minimal"));
     assert!(text.contains("values: claude, agents"));
@@ -428,7 +428,7 @@ fn skill_install_global_errors_when_claude_dir_missing() {
         &[("HOME", home_str)],
         &["skill", "install", "claude", "--global", "--json"],
     );
-    // We refuse to create the agent's home directory (design.md §5).
+    // We refuse to create the agent's home directory.
     assert_eq!(stderr_error_code(&out), "agent_dir_missing");
     // Nothing was written anywhere.
     assert!(!home.path().join(".claude").exists());

@@ -1,4 +1,4 @@
-//! File-based read-state store (design.md §6, ADR-0001).
+//! File-based read-state store.
 //!
 //! Layout under the trakktor working directory:
 //!
@@ -32,7 +32,7 @@ impl ReadStore {
     /// Creates a handle to the store under the given working directory.
     ///
     /// The directory is not touched until [`ReadStore::mark_read`] writes to
-    /// it; `read` never creates the store (design.md §6).
+    /// it; `read` never creates the store.
     #[must_use]
     pub fn new(work_dir: &Path) -> Self {
         Self {
@@ -45,7 +45,7 @@ impl ReadStore {
         self.root.join(&uid[0..2]).join(&uid[2..3])
     }
 
-    /// Returns whether `uid` is recorded as read (design.md §6).
+    /// Returns whether `uid` is recorded as read.
     ///
     /// A missing shard file means "not read"; the store is not created.
     ///
@@ -60,7 +60,7 @@ impl ReadStore {
         }
     }
 
-    /// Marks each uid as read; idempotent (design.md §2, §6).
+    /// Marks each uid as read; idempotent.
     ///
     /// All uids are validated up front, so a malformed argument fails the whole
     /// call without writing anything. Counts are best-effort under concurrency.
@@ -108,7 +108,7 @@ impl ReadStore {
     }
 }
 
-/// Validates a uid: exactly 64 lowercase hex characters (design.md §8/§9).
+/// Validates a uid: exactly 64 lowercase hex characters.
 ///
 /// # Errors
 ///

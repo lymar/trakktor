@@ -1,10 +1,9 @@
 //! `trakktor skill`: print the generated guide and install the on-disk stub.
 //!
-//! Thin orchestration over `trakktor_core::skill` (architecture.md): the core
-//! renders content from the live `clap::Command` and writes files; this layer
-//! decides *where* to install — the agent layout and the project-vs-global
-//! scope, both stated explicitly on the command line — and formats the result.
-//! See `../trakktor_project/docs/features/skill/design.md` §5.
+//! Thin orchestration over `trakktor_core::skill`: the core renders content
+//! from the live `clap::Command` and writes files; this layer decides *where*
+//! to install — the agent layout and the project-vs-global scope, both stated
+//! explicitly on the command line — and formats the result.
 
 use std::path::{Path, PathBuf};
 
@@ -14,11 +13,11 @@ use trakktor_core::skill::{self, SkillError, Target};
 use crate::{cli::Cli, error::CliError, output};
 
 /// The project (CWD-relative) base for project-scope installs. Reported paths
-/// then read as `./.claude/skills/trakktor/SKILL.md` (design.md §5).
+/// then read as `./.claude/skills/trakktor/SKILL.md`.
 const PROJECT_BASE: &str = ".";
 
-/// `trakktor skill show [--full]` (design.md §2). Content is generated from the
-/// live command, so it always matches this binary version.
+/// `trakktor skill show [--full]`. Content is generated from the live command,
+/// so it always matches this binary version.
 pub fn show(full: bool, json: bool, pretty: bool) -> Result<(), CliError> {
     let command = Cli::command();
     let content = skill::render_guide(&command, full);
@@ -36,7 +35,7 @@ pub struct InstallOptions {
     pub force: bool,
 }
 
-/// `trakktor skill install <target> [--global] [--force]` (design.md §2, §5).
+/// `trakktor skill install <target> [--global] [--force]`.
 ///
 /// Resolves the single destination, writes the stub there (creating the path
 /// for a project install), and prints the outcome.
@@ -52,7 +51,7 @@ pub fn install(
     Ok(())
 }
 
-/// The `SKILL.md` path for the requested destination (design.md §5).
+/// The `SKILL.md` path for the requested destination.
 ///
 /// A project install (the default) creates the whole path when the stub is
 /// written. A global install (`--global`) targets `~/<agent-dir>` and requires

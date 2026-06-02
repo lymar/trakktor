@@ -1,4 +1,4 @@
-//! Installing the skill stub into an agent's skills directory (design.md §5).
+//! Installing the skill stub into an agent's skills directory.
 //!
 //! This layer computes the canonical paths and writes the stub. *Where* to
 //! install — the agent layout (`claude`/`agents`) and whether it is a project
@@ -13,13 +13,13 @@ use std::{
 
 use crate::skill::error::SkillError;
 
-/// An install target: which agent directory family to write into (design.md
-/// §5). `.claude` is the confirmed layout; `.agents` is preliminary.
+/// An install target: which agent directory family to write into. `.claude`
+/// is the confirmed layout; `.agents` is preliminary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Target {
-    /// `.claude` (confirmed layout, research.md).
+    /// `.claude` (confirmed layout).
     Claude,
-    /// `.agents` (preliminary — format not yet verified, design.md §5).
+    /// `.agents` (preliminary — format not yet verified).
     Agents,
 }
 
@@ -56,10 +56,10 @@ pub fn agent_dir(base: &Path, target: Target) -> PathBuf {
 }
 
 /// The `SKILL.md` path for `target` under `base`
-/// (`<base>/.claude/skills/trakktor/SKILL.md`, design.md §5).
+/// (`<base>/.claude/skills/trakktor/SKILL.md`).
 ///
 /// The `trakktor` directory leaf is the skill name and must match the stub's
-/// frontmatter `name` (design.md §6) — both are the binary's own name.
+/// frontmatter `name` — both are the binary's own name.
 #[must_use]
 pub fn skill_path(base: &Path, target: Target) -> PathBuf {
     agent_dir(base, target)
@@ -71,8 +71,8 @@ pub fn skill_path(base: &Path, target: Target) -> PathBuf {
 /// The `SKILL.md` path for a *global* install of `target` under `home`,
 /// requiring the agent directory (e.g. `~/.claude`) to already exist.
 ///
-/// A global install must never create an agent's home directory itself
-/// (design.md §5): if [`agent_dir`] does not exist, this returns
+/// A global install must never create an agent's home directory itself: if
+/// [`agent_dir`] does not exist, this returns
 /// [`SkillError::AgentDirMissing`]. The intermediate `skills/trakktor/`
 /// directories are created later, when the stub is written ([`write_stub`]).
 ///
@@ -99,11 +99,11 @@ pub enum WriteOutcome {
     Skipped,
 }
 
-/// Writes the stub to `path`, creating parent directories (design.md §5.3).
+/// Writes the stub to `path`, creating parent directories.
 ///
 /// If `path` already exists and `force` is false the file is left untouched and
 /// [`WriteOutcome::Skipped`] is returned — the caller decides whether to prompt
-/// for overwrite (design.md §5.4).
+/// for overwrite.
 ///
 /// # Errors
 ///

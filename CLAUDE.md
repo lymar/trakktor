@@ -18,14 +18,13 @@ the session with `--add-dir` if it is not already available).
 - Before implementing or changing behavior, read the relevant design doc.
 - If the implementation must diverge from the docs, update the docs **first**
   (or within the same logical change) — never let code and docs drift apart.
-- Reference decisions by their identifier in commit messages and doc-comments,
-  e.g. `see ADR-0002`, `design.md §5 (uid)`. **Exception — `clap` items:**
-  doc-comments on the CLI grammar (the `Cli` struct, each subcommand/variant,
-  and every arg) are **user-facing**, not internal. clap renders them into
-  `--help`, and `trakktor skill show` reproduces them **verbatim** for agents
-  (ADR-0003). Never put internal references (`ADR-xxxx`, `design.md`, `§…`,
-  convention filenames) in that prose — cite decisions in adjacent `//`
-  comments or module (`//!`) docs instead.
+- **This `CLAUDE.md` is the only file in this repository that may reference the
+  design docs.** Do not mention the docs repo, ADR identifiers, `design.md`,
+  convention filenames, or `§`-sections anywhere else — not in code or
+  doc-comments, not in the `README`, not in commit messages. This repository is
+  (potentially) public and must read cleanly on its own; the docs repo is
+  private. Doc-comments are especially sensitive: clap renders them into
+  `--help`, and `trakktor skill show` reproduces them **verbatim** for agents.
 
 Key documents (in `../trakktor_project/docs/`):
 

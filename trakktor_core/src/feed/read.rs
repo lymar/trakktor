@@ -1,4 +1,4 @@
-//! The `feed read` pipeline (design.md §2, §4, §5).
+//! The `feed read` pipeline.
 //!
 //! Fetch the URL, decide whether it is a feed or a page, parse the feed, then
 //! turn each identifiable entry into a [`Publication`] carrying its stable uid
@@ -19,15 +19,14 @@ use crate::{
     http::{HttpClient, HttpError},
 };
 
-/// Reads the feed at `url`, returning its publications (design.md §2).
+/// Reads the feed at `url`, returning its publications.
 ///
 /// If `url` is a feed it is used directly; otherwise the body is treated as
-/// HTML and the first autodiscovered feed is read (design.md §2 step 3). The
-/// `feed_key` for uid computation follows the single rule of design.md §2: the
-/// URL trakktor actually fetches, canonicalized per §5, before the feed's own
-/// redirects.
+/// HTML and the first autodiscovered feed is read. The `feed_key` for uid
+/// computation is the URL trakktor actually fetches, canonicalized, before the
+/// feed's own redirects.
 ///
-/// When `all` is false, only unread publications are returned (design.md §2).
+/// When `all` is false, only unread publications are returned.
 ///
 /// # Errors
 ///
@@ -42,9 +41,9 @@ pub fn read_feed(
     let body = client.get_bytes(url)?;
 
     // feedparser detects the format from the first significant byte; an
-    // unrecognized format (`Unknown`) means "this is not a feed" (design.md §2
-    // step 2). `parse` rarely errors thanks to the bozo pattern — when it does,
-    // the content was feed-shaped but unparseable (`parse_failed`).
+    // unrecognized format (`Unknown`) means "this is not a feed". `parse`
+    // rarely errors thanks to the bozo pattern — when it does, the content was
+    // feed-shaped but unparseable (`parse_failed`).
     let parsed_input =
         feedparser_rs::parse(&body).map_err(FeedError::ParseFailed)?;
 
@@ -56,7 +55,7 @@ pub fn read_feed(
         (feed_key, parsed_input)
     } else {
         // Not a feed: autodiscover on the already-downloaded body and read the
-        // first feed found (design.md §2 step 3, §3).
+        // first feed found.
         let base = Url::parse(url).map_err(|_| {
             FeedError::Http(HttpError::InvalidUrl(url.to_string()))
         })?;
@@ -77,10 +76,10 @@ pub fn read_feed(
 }
 
 /// Maps a parsed feed to publications, computing uids and read flags and
-/// applying the unread filter (design.md §4, §5, §6).
+/// applying the unread filter.
 ///
 /// Entries without a usable identity (no `id`, `link`, or `title`+date) are
-/// skipped (design.md §5/§8). Publication order follows the feed.
+/// skipped. Publication order follows the feed.
 ///
 /// # Errors
 ///
@@ -94,7 +93,7 @@ pub fn build_publications(
     let mut publications = Vec::new();
     for entry in &parsed.entries {
         let Some((tag, item_key)) = entry_item_key(entry) else {
-            continue; // Unidentifiable → never emitted (design.md §5/§8).
+            continue; // Unidentifiable → never emitted.
         };
         let uid = compute_uid(feed_key, tag, &item_key);
         let is_read = store.is_read(&uid)?;
@@ -106,9 +105,9 @@ pub fn build_publications(
     Ok(publications)
 }
 
-/// Selects the `(tag, item_key)` for an entry's uid via the fallback chain of
-/// design.md §5: `id` → `link` → derived (`title` + date). Returns `None` when
-/// the entry is unidentifiable.
+/// Selects the `(tag, item_key)` for an entry's uid via the fallback chain
+/// `id` → `link` → derived (`title` + date). Returns `None` when the entry is
+/// unidentifiable.
 fn entry_item_key(entry: &Entry) -> Option<(ItemKeyTag, String)> {
     if let Some(id) = present(entry.id.as_deref()) {
         return Some((ItemKeyTag::Id, id.to_string()));
@@ -125,8 +124,8 @@ fn entry_item_key(entry: &Entry) -> Option<(ItemKeyTag, String)> {
     ))
 }
 
-/// Builds a [`Publication`] from an entry (design.md §4). Absent/empty source
-/// values become `None`/empty.
+/// Builds a [`Publication`] from an entry. Absent/empty source values become
+/// `None`/empty.
 fn build_publication(uid: String, is_read: bool, entry: &Entry) -> Publication {
     Publication {
         uid,
@@ -141,7 +140,7 @@ fn build_publication(uid: String, is_read: bool, entry: &Entry) -> Publication {
     }
 }
 
-/// Maps a content block, dropping blocks with an empty body (design.md §4).
+/// Maps a content block, dropping blocks with an empty body.
 fn content_block(content: &Content) -> Option<ContentBlock> {
     if content.value.is_empty() {
         return None;
@@ -152,8 +151,8 @@ fn content_block(content: &Content) -> Option<ContentBlock> {
     })
 }
 
-/// Maps an entry's authors (design.md §4): the structured `authors` list, or a
-/// single entry from the flat `author` string as a fallback.
+/// Maps an entry's authors: the structured `authors` list, or a single entry
+/// from the flat `author` string as a fallback.
 fn map_authors(entry: &Entry) -> Vec<Author> {
     let mut authors: Vec<Author> =
         entry.authors.iter().filter_map(person_to_author).collect();
@@ -188,7 +187,7 @@ fn present(value: Option<&str>) -> Option<&str> {
 }
 
 /// Formats a timestamp as RFC 3339, normalized to UTC with a `Z` suffix and
-/// second precision (design.md §4).
+/// second precision.
 fn format_rfc3339(dt: DateTime<Utc>) -> String {
     dt.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
