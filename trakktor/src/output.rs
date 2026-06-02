@@ -1,4 +1,4 @@
-//! Output formatting: text (default) and JSON (`--json`).
+//! Output formatting: JSON (default) and human-readable text (`--text`).
 //!
 //! Data goes to stdout; errors go to stderr. In JSON, lists are arrays and a
 //! single result is an object; absent values are omitted (never `null`). In
@@ -76,33 +76,44 @@ pub fn print_read(
     for publication in publications {
         println!("{}", text_line(publication, selection));
     }
+    if !publications.is_empty() {
+        // The `uid` (first column) is each record's primary key; show how to
+        // act on it. Printed to stderr so stdout stays a clean data
+        // stream.
+        eprintln!(
+            "hint: each publication's \"uid\" (the first column) is its \
+             primary key; mark an item read with: trakktor feed mark-read \
+             <uid>"
+        );
+    }
 }
 
-/// Renders one publication as a single text line: selected fields in order,
-/// tab-separated. Every cell is collapsed so newlines/tabs in any field —
-/// author names included — cannot break the one-record-per-line layout.
+/// Renders one publication as a single text line: the primary-key `uid` first,
+/// then the selected fields in order, tab-separated. Every cell is collapsed so
+/// newlines/tabs in any field — author names included — cannot break the
+/// one-record-per-line layout.
 fn text_line(publication: &Publication, selection: &[Field]) -> String {
-    selection
-        .iter()
-        .map(|field| collapse(&cell(publication, *field)))
-        .collect::<Vec<_>>()
-        .join("\t")
+    let mut cells = vec![publication.uid.clone()];
+    cells.extend(
+        selection
+            .iter()
+            .map(|field| collapse(&cell(publication, *field))),
+    );
+    cells.join("\t")
 }
 
-/// Builds the JSON object for one publication, including only selected fields
-/// that are present (absent values are omitted).
+/// Builds the JSON object for one publication: the primary-key `uid` is always
+/// present, followed by the selected fields that are present (absent values are
+/// omitted).
 fn publication_to_json(
     publication: &Publication,
     selection: &[Field],
 ) -> Value {
     let mut object = Map::new();
+    object.insert("uid".into(), Value::String(publication.uid.clone()));
     for field in selection {
         let key = field.key();
         match field {
-            Field::Uid => {
-                object
-                    .insert(key.into(), Value::String(publication.uid.clone()));
-            },
             Field::IsRead => {
                 object.insert(key.into(), Value::Bool(publication.is_read));
             },
@@ -176,7 +187,6 @@ fn authors_to_json(authors: &[Author]) -> Value {
 /// content blocks join with spaces, authors join with commas.
 fn cell(publication: &Publication, field: Field) -> String {
     match field {
-        Field::Uid => publication.uid.clone(),
         Field::IsRead => bool_text(publication.is_read).to_string(),
         Field::Title => publication.title.clone().unwrap_or_default(),
         Field::Link => publication.link.clone().unwrap_or_default(),
@@ -231,8 +241,8 @@ pub fn print_mark_read(summary: &MarkReadSummary, json: bool, pretty: bool) {
 // ---------------------------------------------------------------------------
 
 /// Prints the generated skill guide (`skill show`). The guide is a prose
-/// document, so text mode prints the Markdown verbatim; `--json` (where a bare
-/// document would be uninformative) wraps it as `{ "content": "…" }`.
+/// document; by default it is wrapped as `{ "content": "…" }`, and `--text`
+/// prints the Markdown verbatim.
 pub fn print_skill_show(content: &str, json: bool, pretty: bool) {
     if json {
         print_json(&json!({ "content": content }), pretty);
@@ -357,9 +367,10 @@ mod tests {
                 uri: None,
             }],
         };
+        // `uid` is auto-prepended; the selection holds only display fields.
         let line = text_line(
             &publication,
-            &[Field::Uid, Field::Title, Field::Link, Field::Authors],
+            &[Field::Title, Field::Link, Field::Authors],
         );
 
         // Exactly one record, with one tab per field boundary (3 separators).
@@ -384,7 +395,8 @@ mod tests {
             content: Vec::new(),
             authors: Vec::new(),
         };
-        // minimal = uid,title,link → link absent omitted, is_read not selected.
+        // uid is always present; minimal = title,link → link absent omitted,
+        // is_read not selected.
         let value = publication_to_json(&publication, Field::minimal());
         let object = value.as_object().unwrap();
         assert_eq!(object.get("uid").unwrap(), "u");

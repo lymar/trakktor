@@ -67,17 +67,18 @@ cargo +nightly fmt --all
 
 ## Output and exit codes
 
-The default output is human-readable text; `--json` switches to machine-readable
-JSON (`--json --pretty` indents it). Data is written to stdout, errors to stderr.
+The default output is machine-readable JSON (`--pretty` indents it); `--text`
+switches to human-readable text. Data is written to stdout, errors to stderr.
 
 - `0` — success.
-- `1` — runtime/validation error (network, parsing, I/O, bad value). Respects
-  `--json`: `{ "error": { "code": "…", "message": "…" } }`.
+- `1` — runtime/validation error (network, parsing, I/O, bad value). Formatted
+  like normal output: JSON `{ "error": { "code": "…", "message": "…" } }` by
+  default, plain text with `--text`.
 - `2` — usage error (unknown flag, missing argument); always text, from the
   argument parser.
 
 Global options (usable before or after the command): `--work-dir <path>` (also
-`TRAKKTOR_DIR`; default `./.trakktor`), `--json`, `--pretty`.
+`TRAKKTOR_DIR`; default `./.trakktor`), `--text`, `--pretty`.
 
 ## `feed` — RSS / Atom / JSON Feed
 
@@ -93,8 +94,8 @@ is success.
 ### Read a feed
 
 ```sh
-trakktor feed read https://example.com/feed.xml
-trakktor feed read https://example.com/feed.xml --all --fields all --json
+trakktor feed read https://example.com/feed.xml             # JSON (default)
+trakktor feed read https://example.com/feed.xml --all --fields all --text
 ```
 
 Accepts a feed URL or a regular page (autodiscovery applies, reading the first
@@ -102,9 +103,13 @@ feed found). Each publication carries a stable `uid` and an `is_read` flag.
 
 - By default only **unread** publications are returned; `--all` includes read
   ones.
-- `--fields <list>` selects output fields: a comma-separated list of
-  `uid,is_read,title,link,published,updated,summary,content,authors`, or the
-  special values `minimal` (default, `uid,title,link`) and `all`.
+- `uid` is each publication's **primary key** — the id you pass to `mark-read` —
+  so it is **always** included, independent of `--fields`.
+- `--fields <list>` selects the *additional* fields: a comma-separated list of
+  `is_read,title,link,published,updated,summary,content,authors`, or the special
+  values `minimal` (default, `title,link`) and `all`.
+- With `--text`, `uid` is the first column and a `mark-read` hint is printed to
+  stderr.
 
 The `uid` is `hex(BLAKE3(feed_key ‖ 0x00 ‖ tag ‖ 0x00 ‖ item_key))` and is
 stable across runs for the same feed + entry.
@@ -121,9 +126,9 @@ by uid; nothing else is needed (no database).
 ## Typical agent workflow
 
 ```sh
-trakktor feed discover https://example.com            # find a feed
-trakktor feed read https://example.com/feed.xml --json # read unread items
-# … process the items …
+trakktor feed discover https://example.com             # find a feed
+trakktor feed read https://example.com/feed.xml        # read unread items (JSON)
+# … take each item's uid …
 trakktor feed mark-read <uid1> <uid2>                  # mark them handled
 ```
 
@@ -138,11 +143,13 @@ binary — there is no hand-written reference to drift out of date.
 ### Show the skill
 
 ```sh
-trakktor skill show          # narrative guide: what trakktor is, when, workflows
+trakktor skill show          # narrative guide (JSON { "content": … } by default)
 trakktor skill show --full   # plus the full command/flag/value reference
+trakktor skill show --text   # the raw Markdown
 ```
 
-Markdown is printed to stdout; `--json` wraps it as `{ "content": "…" }`.
+By default the Markdown is wrapped as `{ "content": "…" }`; `--text` prints the
+raw Markdown.
 
 ### Install the stub
 
@@ -160,5 +167,6 @@ in your home directory. A project install creates the whole path; a global
 install requires `~/.claude` to already exist — it is never created, and the
 command fails if it is missing. The stub only points back at `trakktor skill
 show`, so it never goes stale between releases. An existing `SKILL.md` is left
-untouched unless `--force` is given; with `--json` the result is a single object
-`{ "path": "…", "status": "written" | "skipped" }`.
+untouched unless `--force` is given. By default the result is a single JSON
+object `{ "path": "…", "status": "written" | "skipped" }`; `--text` prints it as
+lines.

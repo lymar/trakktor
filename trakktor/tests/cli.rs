@@ -119,21 +119,14 @@ fn read_feed_returns_publications_in_order() {
     let url = format!("http://127.0.0.1:{port}/feed.xml");
     let dir = tempfile::tempdir().unwrap();
 
-    let out = run(&[
-        "--work-dir",
-        &work_dir(dir.path()),
-        "feed",
-        "read",
-        &url,
-        "--json",
-    ]);
+    let out = run(&["--work-dir", &work_dir(dir.path()), "feed", "read", &url]);
     let value = stdout_json(&out);
     let items = value.as_array().expect("array");
 
     assert_eq!(items.len(), 2);
     assert_eq!(items[0]["title"], "Post A");
     assert_eq!(items[1]["title"], "Post B");
-    // minimal fields = uid,title,link → uid present, is_read absent.
+    // uid is always present; minimal display = title,link, so is_read absent.
     assert!(items[0]["uid"].is_string());
     assert!(items[0].get("is_read").is_none());
     assert_eq!(items[0]["link"], "http://example.com/a");
@@ -148,37 +141,23 @@ fn mark_read_hides_publication_until_all() {
     let wd = work_dir(dir.path());
 
     // Discover the uid of the first publication.
-    let first =
-        stdout_json(&run(&["--work-dir", &wd, "feed", "read", &url, "--json"]));
+    let first = stdout_json(&run(&["--work-dir", &wd, "feed", "read", &url]));
     let uid = first[0]["uid"].as_str().unwrap().to_string();
 
     // Mark it read.
-    let marked = stdout_json(&run(&[
-        "--work-dir",
-        &wd,
-        "feed",
-        "mark-read",
-        &uid,
-        "--json",
-    ]));
+    let marked =
+        stdout_json(&run(&["--work-dir", &wd, "feed", "mark-read", &uid]));
     assert_eq!(marked["marked"], 1);
     assert_eq!(marked["already_read"], 0);
 
     // Re-marking is idempotent.
-    let again = stdout_json(&run(&[
-        "--work-dir",
-        &wd,
-        "feed",
-        "mark-read",
-        &uid,
-        "--json",
-    ]));
+    let again =
+        stdout_json(&run(&["--work-dir", &wd, "feed", "mark-read", &uid]));
     assert_eq!(again["marked"], 0);
     assert_eq!(again["already_read"], 1);
 
     // Default read now hides the marked publication.
-    let unread =
-        stdout_json(&run(&["--work-dir", &wd, "feed", "read", &url, "--json"]));
+    let unread = stdout_json(&run(&["--work-dir", &wd, "feed", "read", &url]));
     let unread = unread.as_array().unwrap();
     assert_eq!(unread.len(), 1);
     assert_eq!(unread[0]["title"], "Post B");
@@ -193,7 +172,6 @@ fn mark_read_hides_publication_until_all() {
         "--all",
         "--fields",
         "all",
-        "--json",
     ]));
     let all = all.as_array().unwrap();
     assert_eq!(all.len(), 2);
@@ -209,22 +187,10 @@ fn page_url_autodiscovers_feed_with_stable_uid() {
     let dir = tempfile::tempdir().unwrap();
     let wd = work_dir(dir.path());
 
-    let via_feed = stdout_json(&run(&[
-        "--work-dir",
-        &wd,
-        "feed",
-        "read",
-        &feed_url,
-        "--json",
-    ]));
-    let via_page = stdout_json(&run(&[
-        "--work-dir",
-        &wd,
-        "feed",
-        "read",
-        &page_url,
-        "--json",
-    ]));
+    let via_feed =
+        stdout_json(&run(&["--work-dir", &wd, "feed", "read", &feed_url]));
+    let via_page =
+        stdout_json(&run(&["--work-dir", &wd, "feed", "read", &page_url]));
 
     // feed_key rule: reading the feed directly and via its page must yield
     // identical uids.
@@ -237,7 +203,7 @@ fn discover_lists_declared_feed() {
     let port = server();
     let page_url = format!("http://127.0.0.1:{port}/");
 
-    let out = run(&["feed", "discover", &page_url, "--json"]);
+    let out = run(&["feed", "discover", &page_url]);
     let value = stdout_json(&out);
     let feeds = value.as_array().unwrap();
 
@@ -257,6 +223,7 @@ fn mark_read_text_output() {
         "feed",
         "mark-read",
         uid,
+        "--text",
     ]);
     assert!(out.status.success());
     let text = String::from_utf8_lossy(&out.stdout);
@@ -273,7 +240,6 @@ fn invalid_uid_is_reported() {
         "feed",
         "mark-read",
         "not-a-valid-uid",
-        "--json",
     ]);
     assert_eq!(stderr_error_code(&out), "invalid_uid");
 }
@@ -290,7 +256,6 @@ fn invalid_field_is_reported() {
         "http://127.0.0.1:1/feed.xml",
         "--fields",
         "bogus",
-        "--json",
     ]);
     assert_eq!(stderr_error_code(&out), "invalid_field");
 }
@@ -304,7 +269,6 @@ fn invalid_url_is_reported() {
         "feed",
         "read",
         "ftp://example.com",
-        "--json",
     ]);
     assert_eq!(stderr_error_code(&out), "invalid_url");
 }
@@ -316,13 +280,53 @@ fn missing_required_argument_exits_two() {
     assert_eq!(out.status.code(), Some(2));
 }
 
+#[test]
+fn feed_read_keeps_uid_when_fields_narrowed() {
+    let port = server();
+    let url = format!("http://127.0.0.1:{port}/feed.xml");
+    let dir = tempfile::tempdir().unwrap();
+    // Narrowing the display fields must not drop the primary key.
+    let value = stdout_json(&run(&[
+        "--work-dir",
+        &work_dir(dir.path()),
+        "feed",
+        "read",
+        &url,
+        "--fields",
+        "title",
+    ]));
+    for item in value.as_array().unwrap() {
+        assert!(item["uid"].is_string(), "uid dropped: {item}");
+        assert!(item["title"].is_string());
+    }
+}
+
+#[test]
+fn feed_read_text_mode_hints_at_mark_read() {
+    let port = server();
+    let url = format!("http://127.0.0.1:{port}/feed.xml");
+    let dir = tempfile::tempdir().unwrap();
+    let wd = work_dir(dir.path());
+
+    // Text mode: a mark-read hint naming uid as the key goes to stderr.
+    let text = run(&["--work-dir", &wd, "feed", "read", &url, "--text"]);
+    let stderr = String::from_utf8_lossy(&text.stderr);
+    assert!(stderr.contains("mark-read"), "stderr: {stderr}");
+    assert!(stderr.contains("uid"), "stderr: {stderr}");
+
+    // Default (JSON) mode: stdout is a clean array and stderr has no hint.
+    let json = run(&["--work-dir", &wd, "feed", "read", &url]);
+    assert!(serde_json::from_slice::<Value>(&json.stdout).is_ok());
+    assert!(String::from_utf8_lossy(&json.stderr).is_empty());
+}
+
 // ---------------------------------------------------------------------------
 // skill
 // ---------------------------------------------------------------------------
 
 #[test]
 fn skill_show_prints_narrative_guide() {
-    let out = run(&["skill", "show"]);
+    let out = run(&["skill", "show", "--text"]);
     assert!(out.status.success());
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.starts_with("# trakktor"), "got: {text}");
@@ -334,7 +338,7 @@ fn skill_show_prints_narrative_guide() {
 
 #[test]
 fn skill_show_full_includes_generated_reference() {
-    let out = run(&["skill", "show", "--full"]);
+    let out = run(&["skill", "show", "--full", "--text"]);
     assert!(out.status.success());
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("## Reference"));
@@ -347,7 +351,7 @@ fn skill_show_full_includes_generated_reference() {
 
 #[test]
 fn skill_show_json_wraps_markdown() {
-    let out = run(&["skill", "show", "--json"]);
+    let out = run(&["skill", "show"]);
     let value = stdout_json(&out);
     let content = value["content"].as_str().expect("content string");
     assert!(content.starts_with("# trakktor"));
@@ -358,8 +362,7 @@ fn skill_show_json_wraps_markdown() {
 #[test]
 fn skill_install_writes_stub_to_project() {
     let dir = tempfile::tempdir().unwrap();
-    let out =
-        run_in(dir.path(), &[], &["skill", "install", "claude", "--json"]);
+    let out = run_in(dir.path(), &[], &["skill", "install", "claude"]);
     let value = stdout_json(&out);
     assert_eq!(value["path"], "./.claude/skills/trakktor/SKILL.md");
     assert_eq!(value["status"], "written");
@@ -376,7 +379,7 @@ fn skill_install_writes_stub_to_project() {
 #[test]
 fn skill_install_skips_existing_until_forced() {
     let dir = tempfile::tempdir().unwrap();
-    let args = ["skill", "install", "agents", "--json"];
+    let args = ["skill", "install", "agents"];
 
     let first = stdout_json(&run_in(dir.path(), &[], &args));
     assert_eq!(first["path"], "./.agents/skills/trakktor/SKILL.md");
@@ -388,7 +391,7 @@ fn skill_install_skips_existing_until_forced() {
     assert_eq!(second["status"], "skipped");
 
     // --force overwrites.
-    let forced_args = ["skill", "install", "agents", "--force", "--json"];
+    let forced_args = ["skill", "install", "agents", "--force"];
     let forced = stdout_json(&run_in(dir.path(), &[], &forced_args));
     assert_eq!(forced["status"], "written");
 }
@@ -404,7 +407,7 @@ fn skill_install_global_writes_when_claude_dir_exists() {
     let out = run_in(
         project.path(),
         &[("HOME", home_str)],
-        &["skill", "install", "claude", "--global", "--json"],
+        &["skill", "install", "claude", "--global"],
     );
     let value = stdout_json(&out);
     let installed = value["path"].as_str().unwrap();
@@ -426,7 +429,7 @@ fn skill_install_global_errors_when_claude_dir_missing() {
     let out = run_in(
         project.path(),
         &[("HOME", home_str)],
-        &["skill", "install", "claude", "--global", "--json"],
+        &["skill", "install", "claude", "--global"],
     );
     // We refuse to create the agent's home directory.
     assert_eq!(stderr_error_code(&out), "agent_dir_missing");

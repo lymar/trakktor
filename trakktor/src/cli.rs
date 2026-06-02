@@ -2,8 +2,8 @@
 //!
 //! Global options are declared `global = true` so they may appear before or
 //! after the subcommand. Structural argument errors are reported by clap with
-//! exit code 2; value-validation and runtime errors return exit code 1 and
-//! respect `--json`.
+//! exit code 2; value-validation and runtime errors return exit code 1 and are
+//! formatted like normal output (JSON by default, text under `--text`).
 
 use std::path::PathBuf;
 
@@ -23,9 +23,9 @@ const DEFAULT_WORK_DIR: &str = ".trakktor";
 /// tool. Use trakktor when a task needs one of these helpers — for example,
 /// fetching and tracking the unread items of a feed.
 ///
-/// Output is human-readable text by default and structured JSON with `--json`
-/// (`--pretty` indents it); results go to stdout, errors to stderr. Exit codes
-/// are stable: 0 success, 1 a runtime/validation error, 2 a usage error.
+/// Output is JSON by default (`--pretty` indents it); pass `--text` for
+/// human-readable text. Results go to stdout, errors to stderr. Exit codes are
+/// stable: 0 success, 1 a runtime/validation error, 2 a usage error.
 ///
 /// trakktor is self-documenting: run `trakktor skill show` for a guide to what
 /// it does and when, and `trakktor skill show --full` for the complete,
@@ -48,11 +48,11 @@ struct GlobalOpts {
     #[arg(long, global = true, env = "TRAKKTOR_DIR", value_name = "path")]
     work_dir: Option<PathBuf>,
 
-    /// Emit machine-readable JSON instead of text.
+    /// Print human-readable text instead of the default JSON.
     #[arg(long, global = true)]
-    json: bool,
+    text: bool,
 
-    /// Pretty-print JSON (only with --json).
+    /// Pretty-print (indent) the JSON output; ignored with --text.
     #[arg(long, global = true)]
     pretty: bool,
 }
@@ -65,6 +65,9 @@ impl GlobalOpts {
             .clone()
             .unwrap_or_else(|| PathBuf::from(DEFAULT_WORK_DIR))
     }
+
+    /// Whether to emit JSON. JSON is the default; `--text` opts out.
+    fn json(&self) -> bool { !self.text }
 }
 
 #[derive(Subcommand)]
@@ -118,11 +121,14 @@ enum FeedCommand {
         #[arg(long)]
         all: bool,
 
-        /// Fields to show (comma-separated), or `minimal`/`all`.
+        /// Display fields to show (comma-separated), or `minimal`/`all`.
         ///
-        /// Available fields: uid, is_read, title, link, published, updated,
-        /// summary, content, authors. Special values: `minimal` (the default,
-        /// = uid,title,link) and `all` (every field).
+        /// `uid` is always included — it is each publication's primary key,
+        /// the id you pass to `feed mark-read`, so it is never
+        /// dropped. `--fields` selects only the additional fields:
+        /// is_read, title, link, published, updated, summary, content,
+        /// authors. Special values: `minimal` (the default, =
+        /// title,link) and `all` (every field).
         #[arg(long, default_value = "minimal", value_name = "list")]
         fields: String,
     },
@@ -143,8 +149,8 @@ enum SkillCommand {
     /// use it, and the typical workflows. With `--full`, also prints the
     /// complete reference of every command, flag, allowed value, and default.
     /// The content is generated from this binary, so it always matches the
-    /// installed version. Under `--json` the Markdown is wrapped as an object
-    /// `{ "content": "…" }`.
+    /// installed version. By default the Markdown is wrapped as an object
+    /// `{ "content": "…" }`; pass `--text` to print the raw Markdown.
     Show {
         /// Also print the full command/flag/value reference.
         #[arg(long)]
@@ -206,7 +212,7 @@ pub fn run() -> i32 {
     match dispatch(&cli) {
         Ok(()) => 0,
         Err(err) => {
-            output::emit_error(&err, cli.global.json, cli.global.pretty);
+            output::emit_error(&err, cli.global.json(), cli.global.pretty);
             1
         },
     }
@@ -220,7 +226,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
         Command::Feed { command } => match command {
             FeedCommand::Discover { page_url } => {
                 let feeds = feed::discover(page_url)?;
-                output::print_discover(&feeds, global.json, global.pretty);
+                output::print_discover(&feeds, global.json(), global.pretty);
                 Ok(())
             },
             FeedCommand::Read { url, all, fields } => {
@@ -230,20 +236,20 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                 output::print_read(
                     &publications,
                     &selection,
-                    global.json,
+                    global.json(),
                     global.pretty,
                 );
                 Ok(())
             },
             FeedCommand::MarkRead { uids } => {
                 let summary = feed::mark_read(uids, &global.work_dir())?;
-                output::print_mark_read(&summary, global.json, global.pretty);
+                output::print_mark_read(&summary, global.json(), global.pretty);
                 Ok(())
             },
         },
         Command::Skill { command } => match command {
             SkillCommand::Show { full } => {
-                crate::skill::show(*full, global.json, global.pretty)
+                crate::skill::show(*full, global.json(), global.pretty)
             },
             SkillCommand::Install {
                 target,
@@ -266,7 +272,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                     global: *to_home,
                     force: *force,
                 };
-                crate::skill::install(&opts, global.json, global.pretty)
+                crate::skill::install(&opts, global.json(), global.pretty)
             },
         },
     }

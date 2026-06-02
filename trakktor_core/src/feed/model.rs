@@ -74,11 +74,11 @@ pub struct MarkReadSummary {
     pub already_read: usize,
 }
 
-/// A selectable output field of `feed read` (`--fields`).
+/// A selectable display field of `feed read` (`--fields`). `uid` is not among
+/// these — it is the record's primary key and is always emitted, independent of
+/// `--fields`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Field {
-    /// `uid`
-    Uid,
     /// `is_read`
     IsRead,
     /// `title`
@@ -102,7 +102,6 @@ impl Field {
     #[must_use]
     pub fn key(self) -> &'static str {
         match self {
-            Field::Uid => "uid",
             Field::IsRead => "is_read",
             Field::Title => "title",
             Field::Link => "link",
@@ -120,7 +119,6 @@ impl Field {
     #[must_use]
     pub fn all() -> &'static [Field] {
         &[
-            Field::Uid,
             Field::IsRead,
             Field::Title,
             Field::Link,
@@ -132,22 +130,22 @@ impl Field {
         ]
     }
 
-    /// The default `minimal` field set: `uid,title,link`.
+    /// The default `minimal` display set: `title,link`. `uid` is always emitted
+    /// separately, so it is not part of the selectable fields.
     #[must_use]
-    pub fn minimal() -> &'static [Field] {
-        &[Field::Uid, Field::Title, Field::Link]
-    }
+    pub fn minimal() -> &'static [Field] { &[Field::Title, Field::Link] }
 
     fn from_name(name: &str) -> Option<Field> {
         Field::all().iter().copied().find(|f| f.key() == name)
     }
 }
 
-/// Parses the `--fields` value into an ordered field list.
+/// Parses the `--fields` value into an ordered list of display fields.
 ///
-/// Accepts the special values `minimal` (the default, `uid,title,link`) and
-/// `all`, or a comma-separated list of field names. Order is preserved for an
-/// explicit list.
+/// Accepts the special values `minimal` (the default, `title,link`) and `all`,
+/// or a comma-separated list of field names; order is preserved for an explicit
+/// list. `uid` is always emitted separately, so it is not a selectable field —
+/// a literal `uid` token is accepted but ignored.
 ///
 /// # Errors
 ///
@@ -158,8 +156,9 @@ pub fn parse_fields(spec: &str) -> Result<Vec<Field>, FeedError> {
         "all" => Ok(Field::all().to_vec()),
         list => list
             .split(',')
+            .map(str::trim)
+            .filter(|name| *name != "uid")
             .map(|name| {
-                let name = name.trim();
                 Field::from_name(name)
                     .ok_or_else(|| FeedError::InvalidField(name.to_string()))
             })
@@ -173,9 +172,10 @@ mod tests {
 
     #[test]
     fn minimal_is_default_set() {
+        // `uid` is always emitted separately, so it is not in the set.
         assert_eq!(
             parse_fields("minimal").unwrap(),
-            vec![Field::Uid, Field::Title, Field::Link]
+            vec![Field::Title, Field::Link]
         );
     }
 
@@ -187,21 +187,29 @@ mod tests {
     #[test]
     fn explicit_list_preserves_order() {
         assert_eq!(
-            parse_fields("link,uid,title").unwrap(),
-            vec![Field::Link, Field::Uid, Field::Title]
+            parse_fields("link,title,summary").unwrap(),
+            vec![Field::Link, Field::Title, Field::Summary]
         );
     }
 
     #[test]
     fn list_tolerates_surrounding_spaces() {
         assert_eq!(
-            parse_fields("uid, summary").unwrap(),
-            vec![Field::Uid, Field::Summary]
+            parse_fields("title, summary").unwrap(),
+            vec![Field::Title, Field::Summary]
         );
     }
 
     #[test]
+    fn uid_token_is_ignored() {
+        // `uid` is not a selectable field; listing it is accepted but dropped.
+        assert_eq!(parse_fields("uid,title").unwrap(), vec![Field::Title]);
+        assert!(parse_fields("uid").unwrap().is_empty());
+    }
+
+    #[test]
     fn unknown_field_is_rejected() {
+        // `uid` is tolerated; the genuinely unknown name still errors.
         let err = parse_fields("uid,bogus").unwrap_err();
         assert!(
             matches!(err, FeedError::InvalidField(name) if name == "bogus")
