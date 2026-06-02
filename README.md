@@ -5,13 +5,48 @@ coding agents (Claude Code, OpenCode, etc.). It is built to be **predictable and
 automation-friendly**: stable commands and flags, machine-readable output, and
 meaningful exit codes.
 
-The project's design and specifications live in a separate documentation
-repository (`../trakktor_project`); that is the source of truth. This repository
-holds the implementation.
+## Install
+
+Requires a stable Rust toolchain **≥ 1.88** (edition 2024; nightly is only
+needed for `cargo fmt`, not to build). The binary installs into `~/.cargo/bin`,
+which must be on your `PATH`.
+
+From git:
+
+```sh
+cargo install --locked --git https://github.com/lymar/trakktor.git \
+  --branch agent-cli trakktor
+```
+
+- `trakktor` (the trailing word) is the package to install — the workspace root
+  is virtual, so it must be named.
+- `--branch agent-cli` is required for now: the code is not yet on the default
+  `trunk` branch. Drop the flag once it lands there.
+- `--locked` builds with the exact dependency versions pinned in `Cargo.lock`
+  (reproducible); omit it to pull the latest semver-compatible versions.
+
+From a local clone (installs whatever is checked out):
+
+```sh
+git clone -b agent-cli https://github.com/lymar/trakktor.git
+cd trakktor
+cargo install --locked --path trakktor
+```
+
+Verify, then remove if needed:
+
+```sh
+trakktor --version
+cargo uninstall trakktor
+```
+
+On Linux, the build pulls in `reqwest`'s default TLS, which needs OpenSSL
+(`pkg-config` plus `libssl-dev`/`openssl-devel`); macOS uses the system TLS and
+needs nothing extra.
 
 ## Layout
 
-A Cargo workspace with a flat crate layout (see ADR-0002):
+A Cargo workspace with a flat crate layout:
 
 - `trakktor` — the CLI binary: argument parsing, configuration, output
   formatting. A thin layer over the library.
@@ -46,8 +81,6 @@ Global options (usable before or after the command): `--work-dir <path>` (also
 
 ## `feed` — RSS / Atom / JSON Feed
 
-Full specification: `../trakktor_project/docs/features/feed/design.md`.
-
 ### Discover feeds on a page
 
 ```sh
@@ -74,7 +107,7 @@ feed found). Each publication carries a stable `uid` and an `is_read` flag.
   special values `minimal` (default, `uid,title,link`) and `all`.
 
 The `uid` is `hex(BLAKE3(feed_key ‖ 0x00 ‖ tag ‖ 0x00 ‖ item_key))` and is
-stable across runs for the same feed + entry (see design.md §5, ADR-0001).
+stable across runs for the same feed + entry.
 
 ### Mark publications read
 
@@ -98,11 +131,9 @@ On the next `read`, marked publications are no longer returned.
 
 ## `skill` — generate the agent skill
 
-Full specification: `../trakktor_project/docs/features/skill/design.md`.
-
 trakktor can describe itself to a coding agent as an Agent Skill. The content is
-generated from the live `clap` definition (ADR-0003), so it always matches the
-installed binary — there is no hand-written reference to drift out of date.
+generated from the live `clap` definition, so it always matches the installed
+binary — there is no hand-written reference to drift out of date.
 
 ### Show the skill
 
