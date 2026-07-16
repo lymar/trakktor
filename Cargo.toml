@@ -1,5 +1,5 @@
-# Cargo workspace for trakktor. See ../trakktor_project/docs/architecture.md
-# and ADR-0002 (cargo workspace, thin bin over reusable lib).
+# Cargo workspace for trakktor: a thin CLI binary (`trakktor`) over a
+# reusable library (`trakktor_core`).
 [workspace]
 resolver = "3"
 members = ["trakktor", "trakktor_core"]
@@ -13,8 +13,7 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 trakktor_core = { path = "trakktor_core" }
 
-# Shared third-party dependencies (see features/feed/design.md §7 and
-# conventions/http.md).
+# Shared third-party dependencies, declared once for every workspace member.
 base64 = "0.22"
 blake3 = "1"
 chrono = { version = "0.4", default-features = false, features = ["std"] }

@@ -1,5 +1,5 @@
 # trakktor_core: reusable implementation of all trakktor features,
-# independent of the CLI. See architecture.md and ADR-0002.
+# independent of the CLI.
 [package]
 name = "trakktor_core"
 version.workspace = true
@@ -12,7 +12,7 @@ base64.workspace = true
 blake3.workspace = true
 chrono.workspace = true
 # clap is used only to introspect the CLI definition (`Command`) when rendering
-# the skill — the single source of truth for commands/flags (ADR-0003).
+# the skill — the single source of truth for commands/flags.
 clap.workspace = true
 feedparser-rs.workspace = true
 realfft.workspace = true

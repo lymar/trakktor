@@ -1,5 +1,5 @@
 # trakktor: the CLI binary. A thin layer over trakktor_core that parses
-# arguments, resolves configuration, and formats output. See architecture.md.
+# arguments, resolves configuration, and formats output.
 [package]
 name = "trakktor"
 version.workspace = true
