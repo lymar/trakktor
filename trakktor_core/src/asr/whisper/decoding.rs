@@ -466,7 +466,7 @@ fn build_initial_tokens(
 /// `values[-count:]` with Python semantics: a positive `count` keeps that
 /// many trailing elements, zero keeps everything, and a negative `count`
 /// drops that many leading elements.
-fn python_tail(values: Vec<TokenId>, count: i64) -> Vec<TokenId> {
+pub(crate) fn python_tail(values: Vec<TokenId>, count: i64) -> Vec<TokenId> {
     use std::cmp::Ordering;
     match count.cmp(&0) {
         Ordering::Greater => {

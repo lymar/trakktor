@@ -18,7 +18,10 @@ pub mod feature;
 pub mod model;
 #[cfg(feature = "whisper-runtime")]
 pub mod runtime;
+#[cfg(test)]
+mod testing;
 pub mod tokenizer;
+pub mod transcribe;
 
 pub use audio::{AudioDecoder, FfmpegDecoder, pad_or_trim};
 pub use decoding::{
@@ -30,3 +33,4 @@ pub use model::{CrossQk, ForwardProvider, Logits, ModelDims};
 #[cfg(feature = "whisper-runtime")]
 pub use runtime::CandleRuntime;
 pub use tokenizer::{Task, TokenId, Tokenizer};
+pub use transcribe::{Segment, TranscribeOptions, Transcription, transcribe};

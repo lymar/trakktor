@@ -32,7 +32,12 @@ reqwest = { version = "0.13", features = [
 ] }
 rustc-hash = "2"
 scraper = "0.27"
-serde_json = { version = "1", features = ["preserve_order"] }
+serde_json = { version = "1", features = [
+    "preserve_order",
+    # Correctly rounded float parsing: differential tests compare f64 values
+    # against reference dumps bit for bit.
+    "float_roundtrip",
+] }
 thiserror = "2"
 tiktoken-rs = { version = "0.12", default-features = false }
 url = "2"
