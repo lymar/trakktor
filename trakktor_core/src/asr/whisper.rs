@@ -14,9 +14,11 @@ pub mod audio;
 pub mod constants;
 pub mod error;
 pub mod feature;
+pub mod model;
 pub mod tokenizer;
 
 pub use audio::{AudioDecoder, FfmpegDecoder, pad_or_trim};
 pub use error::WhisperError;
-pub use feature::{Mel, MelBands, log_mel_spectrogram};
+pub use feature::{Mel, MelBands, MelWindow, log_mel_spectrogram};
+pub use model::{CrossQk, ForwardProvider, Logits, ModelDims};
 pub use tokenizer::{Task, TokenId, Tokenizer};

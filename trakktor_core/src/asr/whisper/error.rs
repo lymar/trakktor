@@ -20,4 +20,11 @@ pub enum WhisperError {
     /// known but lies outside the language set of the selected model.
     #[error("unsupported language: {0}")]
     UnsupportedLanguage(String),
+
+    /// The model checkpoint is malformed or unsupported (`model_unavailable`).
+    ///
+    /// Covers geometry the pipeline cannot serve (e.g. an unexpected mel-band
+    /// count) and backend failures while loading or running the network.
+    #[error("invalid model: {0}")]
+    InvalidModel(String),
 }

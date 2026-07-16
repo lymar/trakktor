@@ -1,5 +1,5 @@
 use super::{
-    super::constants::{N_FRAMES, N_SAMPLES},
+    super::constants::{N_FRAMES, N_SAMPLES, SAMPLE_RATE},
     *,
 };
 
@@ -64,4 +64,31 @@ fn reflect_pad_matches_numpy_semantics() {
         reflect_pad(&x, 2),
         vec![3.0, 2.0, 1.0, 2.0, 3.0, 4.0, 3.0, 2.0]
     );
+}
+
+#[test]
+fn window_slices_and_zero_pads_to_encoder_width() {
+    let mel = log_mel_spectrogram(&le_f32(PCM), MelBands::Mel80, 0);
+    // 150 real columns remain from frame 50 of 200; the rest is padding.
+    let window = mel.window(50, N_FRAMES);
+    assert_eq!(window.n_mels(), 80);
+    assert_eq!(window.data().len(), 80 * N_FRAMES);
+    for m in 0..mel.n_mels() {
+        for f in 0..150 {
+            assert_eq!(window.data()[m * N_FRAMES + f], mel.get(m, 50 + f));
+        }
+        for f in 150..N_FRAMES {
+            assert_eq!(window.data()[m * N_FRAMES + f], 0.0);
+        }
+    }
+}
+
+#[test]
+fn window_trims_to_encoder_width() {
+    // 31 s of silence: more mel frames than one encoder window holds.
+    let audio = vec![0.0f32; N_SAMPLES + SAMPLE_RATE];
+    let mel = log_mel_spectrogram(&audio, MelBands::Mel80, 0);
+    assert!(mel.n_frames() > N_FRAMES);
+    let window = mel.window(0, mel.n_frames());
+    assert_eq!(window.data().len(), 80 * N_FRAMES);
 }

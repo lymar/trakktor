@@ -10,7 +10,7 @@ use realfft::RealFftPlanner;
 
 use super::{
     assets,
-    constants::{HOP_LENGTH, N_FFT, N_FREQS},
+    constants::{HOP_LENGTH, N_FFT, N_FRAMES, N_FREQS},
 };
 
 /// The mel-band count: the two filterbanks Whisper ships.
@@ -54,6 +54,43 @@ impl Mel {
     pub fn get(&self, mel: usize, frame: usize) -> f32 {
         self.data[mel * self.n_frames + frame]
     }
+
+    /// Cuts one encoder window: `len` frames starting at `start`, zero-padded
+    /// or trimmed on the right to exactly [`N_FRAMES`] columns.
+    ///
+    /// Ranges reaching past the end are clamped (Python slice semantics), so
+    /// callers can slice right up to the trailing silence padding.
+    pub fn window(&self, start: usize, len: usize) -> MelWindow {
+        let start = start.min(self.n_frames);
+        let take = len.min(self.n_frames - start).min(N_FRAMES);
+
+        let mut data = vec![0.0f32; self.n_mels * N_FRAMES];
+        for m in 0..self.n_mels {
+            let src_offset = m * self.n_frames + start;
+            data[m * N_FRAMES..m * N_FRAMES + take]
+                .copy_from_slice(&self.data[src_offset..src_offset + take]);
+        }
+        MelWindow {
+            n_mels: self.n_mels,
+            data,
+        }
+    }
+}
+
+/// One 30 s encoder window of a log-mel spectrogram: `n_mels` rows by
+/// [`N_FRAMES`] columns, row-major. This is exactly the encoder's input.
+#[derive(Debug, Clone)]
+pub struct MelWindow {
+    n_mels: usize,
+    data: Vec<f32>,
+}
+
+impl MelWindow {
+    /// Number of mel bands (rows).
+    pub fn n_mels(&self) -> usize { self.n_mels }
+
+    /// The window as a flat row-major slice of `n_mels * N_FRAMES` values.
+    pub fn data(&self) -> &[f32] { &self.data }
 }
 
 /// Computes the log-mel spectrogram of `audio`.
