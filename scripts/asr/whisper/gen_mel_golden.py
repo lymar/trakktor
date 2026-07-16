@@ -124,7 +124,7 @@ def build_golden(pcm: np.ndarray, n_mels: int, mel_bank: np.ndarray) -> np.ndarr
 
 
 def main() -> int:
-    repo_root = Path(__file__).resolve().parents[2]
+    repo_root = Path(__file__).resolve().parents[3]
     whisper_dir = repo_root / "trakktor_core" / "src" / "asr" / "whisper"
 
     ap = argparse.ArgumentParser(description=__doc__)
