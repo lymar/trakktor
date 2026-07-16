@@ -99,6 +99,19 @@ impl CandleRuntime {
     pub fn load_cpu(model_dir: &Path) -> Result<Self, WhisperError> {
         Self::load(model_dir, Device::Cpu)
     }
+
+    /// [`load`](Self::load) on the first Metal device.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WhisperError::InvalidModel`] when no Metal device is
+    /// available; otherwise see [`load`](Self::load).
+    #[cfg(feature = "whisper-metal")]
+    pub fn load_metal(model_dir: &Path) -> Result<Self, WhisperError> {
+        let device = Device::new_metal(0)
+            .map_err(|e| model_err("creating the metal device", e))?;
+        Self::load(model_dir, device)
+    }
 }
 
 /// Reads the model geometry from the checkpoint's `config.json`.

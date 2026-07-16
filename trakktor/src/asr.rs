@@ -31,7 +31,12 @@ pub(crate) fn run_whisper(
         &args.model,
         &mut download_progress(),
     )?;
-    let mut runtime = whisper::CandleRuntime::load_cpu(&resolved.dir)?;
+    let mut runtime = match args.device {
+        crate::cli::DeviceArg::Cpu => {
+            whisper::CandleRuntime::load_cpu(&resolved.dir)?
+        },
+        crate::cli::DeviceArg::Metal => load_metal(&resolved.dir)?,
+    };
     let audio = whisper::FfmpegDecoder::default().decode(&args.audio)?;
 
     let options = TranscribeOptions {
@@ -75,6 +80,23 @@ pub(crate) fn run_whisper(
         pretty,
     );
     Ok(())
+}
+
+/// Loads the model on Metal (builds with the `metal` feature).
+#[cfg(feature = "metal")]
+fn load_metal(model_dir: &Path) -> Result<whisper::CandleRuntime, CliError> {
+    Ok(whisper::CandleRuntime::load_metal(model_dir)?)
+}
+
+/// Without the `metal` feature, `--device metal` is a validation error.
+#[cfg(not(feature = "metal"))]
+fn load_metal(_model_dir: &Path) -> Result<whisper::CandleRuntime, CliError> {
+    Err(WhisperError::InvalidOptions(
+        "this build has no Metal support; install or build trakktor with the \
+         `metal` feature"
+            .into(),
+    )
+    .into())
 }
 
 /// The reference schedule: from the starting temperature up to 1.0 in

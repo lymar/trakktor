@@ -403,8 +403,6 @@ fn silent_windows_are_skipped() {
 
 #[cfg(feature = "whisper-runtime")]
 mod reference_parity {
-    use candle_core::Device;
-
     use super::{
         super::super::{
             audio::{AudioDecoder, FfmpegDecoder},
@@ -413,6 +411,26 @@ mod reference_parity {
         },
         *,
     };
+
+    /// The runtime under test: the CPU by default, or Metal when
+    /// `TRAKKTOR_TEST_DEVICE=metal` (needs the `whisper-metal` feature) —
+    /// the same differential tests then verify the GPU path.
+    fn test_runtime() -> CandleRuntime {
+        let dir = repo_path("tmp/models/whisper-tiny");
+        if std::env::var("TRAKKTOR_TEST_DEVICE").as_deref() == Ok("metal") {
+            #[cfg(feature = "whisper-metal")]
+            {
+                return CandleRuntime::load_metal(&dir)
+                    .expect("loading the checkpoint on metal");
+            }
+            #[cfg(not(feature = "whisper-metal"))]
+            panic!(
+                "TRAKKTOR_TEST_DEVICE=metal needs the whisper-metal feature"
+            );
+        }
+        CandleRuntime::load_cpu(&dir)
+            .expect("loading the local whisper-tiny checkpoint")
+    }
 
     /// The words golden, produced with
     /// `gen_transcribe_golden.py --word-timestamps`.
@@ -442,11 +460,7 @@ mod reference_parity {
         let end = ((offset + duration) * SAMPLE_RATE).min(pcm.len());
         let audio = &pcm[start..end];
 
-        let mut runtime = CandleRuntime::load(
-            &repo_path("tmp/models/whisper-tiny"),
-            Device::Cpu,
-        )
-        .expect("loading the local whisper-tiny checkpoint");
+        let mut runtime = test_runtime();
 
         let options = TranscribeOptions {
             language: None,
@@ -551,11 +565,7 @@ mod reference_parity {
         let end = ((offset + duration) * SAMPLE_RATE).min(pcm.len());
         let audio = &pcm[start..end];
 
-        let mut runtime = CandleRuntime::load(
-            &repo_path("tmp/models/whisper-tiny"),
-            Device::Cpu,
-        )
-        .expect("loading the local whisper-tiny checkpoint");
+        let mut runtime = test_runtime();
 
         let options = TranscribeOptions {
             language: None, // detected, as in the reference run

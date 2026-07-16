@@ -149,6 +149,16 @@ pub(crate) struct WhisperArgs {
     #[arg(long, default_value = "tiny", value_name = "name|dir")]
     pub(crate) model: String,
 
+    /// Compute device. `metal` needs a build with the `metal` feature
+    /// enabled and is only available on macOS.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = DeviceArg::Cpu,
+        value_name = "device"
+    )]
+    pub(crate) device: DeviceArg,
+
     /// Transcribe in the source language, or translate into English.
     #[arg(
         long,
@@ -271,6 +281,15 @@ pub(crate) enum TimestampsArg {
     Segment,
     /// Segment times plus per-word timings.
     Word,
+}
+
+/// The `--device` value of `asr whisper`.
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum DeviceArg {
+    /// The CPU (the default).
+    Cpu,
+    /// The GPU via Metal, on macOS.
+    Metal,
 }
 
 /// The `--task` value of `asr whisper`.
