@@ -81,6 +81,19 @@ published separately). Rationale: `../trakktor_project/docs/adr/0002-cargo-works
   `no_internal_doc_references_leak_into_user_facing_text` enforces this; see
   `conventions/cli.md`.
 
+## Rust module and test layout
+
+- **No `mod.rs`, ever.** Every module is a single file named after the module
+  (`some_module.rs`). If it has submodules, they live in a sibling directory of
+  the same name (`some_module/`). For example, a `whisper` module with children
+  is `whisper.rs` plus a `whisper/` directory — never `whisper/mod.rs`.
+- **Extract non-trivial tests into their own file.** If a file's `#[cfg(test)]`
+  code is more than 30 lines, move it into a dedicated child module in its own
+  file: declare `#[cfg(test)] mod tests;` in the parent and put the tests in
+  `some_module/tests.rs`. Only short test blocks may stay inline. (Combined with
+  the no-`mod.rs` rule, adding a `tests` submodule to `foo.rs` means creating
+  `foo/tests.rs`.)
+
 ## Branches
 
 - `agent-cli` — current direction (this pivot); the active line of work.
