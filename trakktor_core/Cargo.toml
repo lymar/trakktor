@@ -7,9 +7,20 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+default = ["whisper-runtime"]
+# The candle-backed Whisper runtime. Off the default set this crate builds
+# without the ML stack (feeds/skill only).
+whisper-runtime = ["dep:candle-core", "dep:candle-nn", "dep:serde_json"]
+# GPU acceleration for the Whisper runtime.
+whisper-metal = ["whisper-runtime", "candle-core/metal", "candle-nn/metal"]
+whisper-cuda = ["whisper-runtime", "candle-core/cuda", "candle-nn/cuda"]
+
 [dependencies]
 base64.workspace = true
 blake3.workspace = true
+candle-core = { workspace = true, optional = true }
+candle-nn = { workspace = true, optional = true }
 chrono.workspace = true
 # clap is used only to introspect the CLI definition (`Command`) when rendering
 # the skill — the single source of truth for commands/flags.
@@ -19,6 +30,7 @@ realfft.workspace = true
 reqwest.workspace = true
 rustc-hash.workspace = true
 scraper.workspace = true
+serde_json = { workspace = true, optional = true }
 thiserror.workspace = true
 tiktoken-rs.workspace = true
 url.workspace = true

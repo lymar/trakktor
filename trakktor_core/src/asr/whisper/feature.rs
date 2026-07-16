@@ -91,6 +91,14 @@ impl MelWindow {
 
     /// The window as a flat row-major slice of `n_mels * N_FRAMES` values.
     pub fn data(&self) -> &[f32] { &self.data }
+
+    /// Builds a window from raw row-major data — parity tests feed
+    /// externally produced mel input through the runtime with this.
+    #[cfg(test)]
+    pub(crate) fn from_raw(n_mels: usize, data: Vec<f32>) -> Self {
+        assert_eq!(data.len(), n_mels * N_FRAMES);
+        Self { n_mels, data }
+    }
 }
 
 /// Computes the log-mel spectrogram of `audio`.

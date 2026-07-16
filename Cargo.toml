@@ -16,6 +16,8 @@ trakktor_core = { path = "trakktor_core" }
 # Shared third-party dependencies, declared once for every workspace member.
 base64 = "0.22"
 blake3 = "1"
+candle-core = "0.11"
+candle-nn = "0.11"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 clap = { version = "4", features = ["derive", "env"] }
 feedparser-rs = { version = "0.5", default-features = false }

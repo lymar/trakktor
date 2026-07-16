@@ -15,10 +15,14 @@ pub mod constants;
 pub mod error;
 pub mod feature;
 pub mod model;
+#[cfg(feature = "whisper-runtime")]
+pub mod runtime;
 pub mod tokenizer;
 
 pub use audio::{AudioDecoder, FfmpegDecoder, pad_or_trim};
 pub use error::WhisperError;
 pub use feature::{Mel, MelBands, MelWindow, log_mel_spectrogram};
 pub use model::{CrossQk, ForwardProvider, Logits, ModelDims};
+#[cfg(feature = "whisper-runtime")]
+pub use runtime::CandleRuntime;
 pub use tokenizer::{Task, TokenId, Tokenizer};
