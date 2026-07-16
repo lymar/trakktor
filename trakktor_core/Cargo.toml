@@ -26,6 +26,8 @@ chrono.workspace = true
 # the skill — the single source of truth for commands/flags.
 clap.workspace = true
 feedparser-rs.workspace = true
+flate2.workspace = true
+rand.workspace = true
 realfft.workspace = true
 reqwest.workspace = true
 rustc-hash.workspace = true

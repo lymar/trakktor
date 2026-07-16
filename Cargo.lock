@@ -3706,6 +3706,8 @@ dependencies = [
  "chrono",
  "clap",
  "feedparser-rs",
+ "flate2",
+ "rand 0.9.4",
  "realfft",
  "reqwest",
  "rustc-hash",

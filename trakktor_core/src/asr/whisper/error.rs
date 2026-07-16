@@ -27,4 +27,11 @@ pub enum WhisperError {
     /// count) and backend failures while loading or running the network.
     #[error("invalid model: {0}")]
     InvalidModel(String),
+
+    /// Decoding options are inconsistent (`invalid_options`).
+    ///
+    /// For example, a beam size combined with best-of sampling, patience
+    /// without a beam, or a length penalty outside `[0, 1]`.
+    #[error("invalid decoding options: {0}")]
+    InvalidOptions(String),
 }

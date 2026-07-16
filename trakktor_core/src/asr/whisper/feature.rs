@@ -94,7 +94,7 @@ impl MelWindow {
 
     /// Builds a window from raw row-major data — parity tests feed
     /// externally produced mel input through the runtime with this.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "whisper-runtime"))]
     pub(crate) fn from_raw(n_mels: usize, data: Vec<f32>) -> Self {
         assert_eq!(data.len(), n_mels * N_FRAMES);
         Self { n_mels, data }
