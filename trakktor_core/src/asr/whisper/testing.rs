@@ -15,6 +15,10 @@ pub(crate) struct FakeProvider {
     pub(crate) calls: usize,
     pub(crate) rearranges: Vec<Vec<usize>>,
     pub(crate) sessions: usize,
+    /// When set to `(n_frames, offset)`, `forward_with_cross_qk` succeeds:
+    /// uniform logits, and one head whose attention row `t` peaks at frame
+    /// `offset + 2 * t` — a synthetic diagonal alignment.
+    pub(crate) cross_qk_diagonal: Option<(usize, usize)>,
 }
 
 impl FakeProvider {
@@ -36,6 +40,7 @@ impl FakeProvider {
             calls: 0,
             rearranges: Vec::new(),
             sessions: 0,
+            cross_qk_diagonal: None,
         }
     }
 }
@@ -88,10 +93,30 @@ impl ForwardProvider for FakeProvider {
 
     fn forward_with_cross_qk(
         &mut self,
-        _tokens: &[TokenId],
+        tokens: &[TokenId],
         _features: &(),
     ) -> Result<(Logits, CrossQk), WhisperError> {
-        Err(WhisperError::InvalidModel("not scripted".into()))
+        let Some((n_frames, offset)) = self.cross_qk_diagonal else {
+            return Err(WhisperError::InvalidModel("not scripted".into()));
+        };
+        let n_tokens = tokens.len();
+        let logits = Logits::new(
+            1,
+            n_tokens,
+            self.dims.n_vocab,
+            vec![0.0; n_tokens * self.dims.n_vocab],
+        );
+        // Smooth rows peaking on the diagonal: every column carries distinct
+        // values across tokens, so the standardization never divides by a
+        // zero deviation.
+        let mut qk = vec![0.0f32; n_tokens * n_frames];
+        for t in 0..n_tokens {
+            let peak = (offset + 2 * t).min(n_frames - 1) as f32;
+            for f in 0..n_frames {
+                qk[t * n_frames + f] = -0.01 * (f as f32 - peak).abs();
+            }
+        }
+        Ok((logits, CrossQk::new(1, 1, n_tokens, n_frames, qk)))
     }
 }
 

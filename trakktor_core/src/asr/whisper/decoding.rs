@@ -9,7 +9,7 @@
 
 mod decoder;
 mod filters;
-mod math;
+pub(crate) mod math;
 #[cfg(test)]
 mod tests;
 

@@ -46,6 +46,21 @@ fn mel_bands_map_from_dims() {
 }
 
 #[test]
+fn alignment_heads_come_from_the_table_or_the_default() {
+    let tiny = alignment_heads("tiny").unwrap();
+    assert_eq!(tiny, &[(2, 2), (3, 0), (3, 2), (3, 3), (3, 4), (3, 5)]);
+    assert_eq!(alignment_heads("turbo"), alignment_heads("large-v3-turbo"));
+    assert!(alignment_heads("unknown-model").is_none());
+
+    // The fallback: every head of the last half of the decoder layers.
+    let dims = dims_with_vocab(51865, 80);
+    let default = dims.default_alignment_heads();
+    assert_eq!(default.len(), 2 * 6);
+    assert_eq!(default.first(), Some(&(2, 0)));
+    assert_eq!(default.last(), Some(&(3, 5)));
+}
+
+#[test]
 fn logits_index_row_major() {
     // 2 sequences x 3 positions x 4 vocabulary entries.
     let data: Vec<f32> = (0..24).map(|v| v as f32).collect();

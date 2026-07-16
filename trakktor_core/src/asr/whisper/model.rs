@@ -69,6 +69,26 @@ impl ModelDims {
             ))),
         }
     }
+
+    /// The fallback word-alignment heads when a model has no published mask:
+    /// every head of the last half of the decoder layers.
+    pub fn default_alignment_heads(&self) -> Vec<(usize, usize)> {
+        (self.n_text_layer / 2..self.n_text_layer)
+            .flat_map(|layer| {
+                (0..self.n_text_head).map(move |head| (layer, head))
+            })
+            .collect()
+    }
+}
+
+/// The published word-alignment heads of `model` (`tiny`, `base.en`,
+/// `large-v3`, `turbo`, ...), or `None` for an unknown name — fall back to
+/// [`ModelDims::default_alignment_heads`] then.
+pub fn alignment_heads(model: &str) -> Option<&'static [(usize, usize)]> {
+    super::assets::ALIGNMENT_HEADS
+        .iter()
+        .find(|(name, _)| *name == model)
+        .map(|&(_, heads)| heads)
 }
 
 /// Decoder logits for the token positions fed in one forward call, in full

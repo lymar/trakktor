@@ -13,6 +13,7 @@ mod assets;
 pub mod audio;
 pub mod constants;
 pub mod decoding;
+pub mod download;
 pub mod error;
 pub mod feature;
 pub mod model;
@@ -20,6 +21,7 @@ pub mod model;
 pub mod runtime;
 #[cfg(test)]
 mod testing;
+pub mod timing;
 pub mod tokenizer;
 pub mod transcribe;
 
@@ -27,10 +29,12 @@ pub use audio::{AudioDecoder, FfmpegDecoder, pad_or_trim};
 pub use decoding::{
     DecodeResult, DecodingOptions, PromptInput, decode, detect_language,
 };
+pub use download::{KNOWN_MODELS, ResolvedModel, resolve_model};
 pub use error::WhisperError;
 pub use feature::{Mel, MelBands, MelWindow, log_mel_spectrogram};
-pub use model::{CrossQk, ForwardProvider, Logits, ModelDims};
+pub use model::{CrossQk, ForwardProvider, Logits, ModelDims, alignment_heads};
 #[cfg(feature = "whisper-runtime")]
 pub use runtime::CandleRuntime;
+pub use timing::Word;
 pub use tokenizer::{Task, TokenId, Tokenizer};
 pub use transcribe::{Segment, TranscribeOptions, Transcription, transcribe};

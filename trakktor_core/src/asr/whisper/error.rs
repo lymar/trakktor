@@ -34,4 +34,8 @@ pub enum WhisperError {
     /// without a beam, or a length penalty outside `[0, 1]`.
     #[error("invalid decoding options: {0}")]
     InvalidOptions(String),
+
+    /// Fetching a model checkpoint failed (`model_unavailable`).
+    #[error("model download failed: {0}")]
+    ModelDownload(String),
 }

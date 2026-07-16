@@ -34,6 +34,11 @@ def main() -> int:
     )
     ap.add_argument("--offset", type=int, default=0, help="slice start, s")
     ap.add_argument("--duration", type=int, default=120, help="slice length, s")
+    ap.add_argument(
+        "--word-timestamps",
+        action="store_true",
+        help="align words too; writes the *_words variant of the dump",
+    )
     ap.add_argument("--out", default=str(repo_root / "tmp/whisper_golden"))
     args = ap.parse_args()
 
@@ -72,6 +77,7 @@ def main() -> int:
             best_of=5,
             fp16=False,
             verbose=None,
+            word_timestamps=args.word_timestamps,
         )
     finally:
         whisper.model.Whisper.decode = original_decode
@@ -88,6 +94,15 @@ def main() -> int:
             "avg_logprob": s["avg_logprob"],
             "compression_ratio": s["compression_ratio"],
             "no_speech_prob": s["no_speech_prob"],
+            "words": [
+                {
+                    "word": w["word"],
+                    "start": w["start"],
+                    "end": w["end"],
+                    "probability": w["probability"],
+                }
+                for w in s.get("words", [])
+            ],
         }
         for s in result["segments"]
     ]
@@ -106,7 +121,8 @@ def main() -> int:
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    path = out / f"{args.model}_transcribe.json"
+    suffix = "_words" if args.word_timestamps else ""
+    path = out / f"{args.model}_transcribe{suffix}.json"
     path.write_text(
         json.dumps(golden, ensure_ascii=False, indent=1) + "\n",
         encoding="utf-8",

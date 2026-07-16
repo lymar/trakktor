@@ -23,6 +23,7 @@ use super::{
     decoding::{self, DecodeResult, DecodingOptions, PromptInput, python_tail},
     error::WhisperError,
     model::ForwardProvider,
+    timing::{self, Word},
     tokenizer::{Task, TokenId, Tokenizer},
 };
 
@@ -68,6 +69,21 @@ pub struct TranscribeOptions {
     pub length_penalty: Option<f64>,
     /// Token ids to suppress; `-1` expands to the non-speech set.
     pub suppress_tokens: Option<Vec<i64>>,
+    /// Align each word to time via cross-attention and fill
+    /// [`Segment::words`].
+    pub word_timestamps: bool,
+    /// Punctuation marks merged with the following word (word timestamps).
+    pub prepend_punctuations: String,
+    /// Punctuation marks merged with the previous word (word timestamps).
+    pub append_punctuations: String,
+    /// With word timestamps: skip silent periods longer than this many
+    /// seconds when a probable hallucination is detected. Off when unset.
+    pub hallucination_silence_threshold: Option<f64>,
+    /// Word-alignment heads of the model as `(decoder layer, head)` pairs;
+    /// unset falls back to every head of the last half of the layers. See
+    /// [`alignment_heads`](super::model::alignment_heads) for the published
+    /// per-model sets.
+    pub alignment_heads: Option<Vec<(usize, usize)>>,
 }
 
 impl Default for TranscribeOptions {
@@ -88,6 +104,11 @@ impl Default for TranscribeOptions {
             patience: None,
             length_penalty: None,
             suppress_tokens: Some(vec![-1]),
+            word_timestamps: false,
+            prepend_punctuations: "\"'“¿([{-".to_string(),
+            append_punctuations: "\"'.。,，!！?？:：”)]}、".to_string(),
+            hallucination_silence_threshold: None,
+            alignment_heads: None,
         }
     }
 }
@@ -108,6 +129,8 @@ pub struct Segment {
     pub text: String,
     /// The segment's tokens, timestamps included.
     pub tokens: Vec<TokenId>,
+    /// Word-level timings, when word timestamps were requested.
+    pub words: Vec<Word>,
     /// Diagnostics of the window this segment came from.
     pub temperature: f32,
     /// Average log-probability of the window.
@@ -290,6 +313,11 @@ pub fn transcribe_with_trace<P: ForwardProvider>(
     let mut all_segments: Vec<Segment> = Vec::new();
     let mut prompt_reset_since = 0usize;
     let mut traces: Vec<WindowTrace> = Vec::new();
+    let mut last_speech_timestamp = 0.0f64;
+    let alignment_heads: Vec<(usize, usize)> = options
+        .alignment_heads
+        .clone()
+        .unwrap_or_else(|| provider.dims().default_alignment_heads());
 
     let mut remaining_prompt_length = n_text_ctx as i64 / 2 - 1;
     let initial_prompt_tokens: Vec<TokenId> = match &options.initial_prompt {
@@ -325,6 +353,8 @@ pub fn transcribe_with_trace<P: ForwardProvider>(
             .min(seek_clip_end - seek);
         let segment_duration =
             segment_size as f64 * HOP_LENGTH as f64 / SAMPLE_RATE as f64;
+        let window_end_time =
+            (seek + N_FRAMES) as f64 * HOP_LENGTH as f64 / SAMPLE_RATE as f64;
         let window = mel.window(seek, segment_size);
 
         let prompt: Vec<TokenId> = if options.carry_initial_prompt {
@@ -447,11 +477,134 @@ pub fn transcribe_with_trace<P: ForwardProvider>(
             seek += segment_size;
         }
 
+        // Word-level timing, the word-informed seek refinement, and the
+        // hallucination heuristics.
+        if options.word_timestamps {
+            timing::add_word_timestamps(
+                &mut current_segments,
+                provider,
+                &tokenizer,
+                &features,
+                segment_size,
+                &options.prepend_punctuations,
+                &options.append_punctuations,
+                last_speech_timestamp,
+                &alignment_heads,
+            )?;
+
+            if !single_timestamp_ending {
+                if let Some(last_word_end) = timing::get_end(&current_segments)
+                {
+                    if last_word_end > time_offset {
+                        seek = (last_word_end * FRAMES_PER_SECOND as f64)
+                            .round() as usize;
+                    }
+                }
+            }
+
+            // Skip silence before possible hallucinations.
+            if let Some(threshold) = options.hallucination_silence_threshold {
+                if !single_timestamp_ending {
+                    if let Some(last_word_end) =
+                        timing::get_end(&current_segments)
+                    {
+                        if last_word_end > time_offset {
+                            let remaining_duration =
+                                window_end_time - last_word_end;
+                            seek = if remaining_duration > threshold {
+                                (last_word_end * FRAMES_PER_SECOND as f64)
+                                    .round()
+                                    as usize
+                            } else {
+                                seek_before + segment_size
+                            };
+                        }
+                    }
+                }
+
+                // If the first segment might be a hallucination, skip the
+                // leading silence, dropping this window's output entirely.
+                let first_segment = next_words_segment(&current_segments);
+                if is_segment_anomaly(first_segment) {
+                    let first_start = first_segment
+                        .expect("an anomaly implies a segment")
+                        .start;
+                    let gap = first_start - time_offset;
+                    if gap > threshold {
+                        seek = seek_before +
+                            (gap * FRAMES_PER_SECOND as f64).round() as usize;
+                        traces.push(WindowTrace {
+                            seek: seek_before,
+                            time_offset,
+                            prompt_len,
+                            attempts,
+                            should_skip: false,
+                            seek_after: seek,
+                            single_timestamp_ending,
+                            consecutive_count,
+                            context_reset: false,
+                            segments: Vec::new(),
+                        });
+                        continue;
+                    }
+                }
+
+                // Cut a hallucination surrounded by silence (or by more
+                // hallucinations) and jump past it.
+                let mut hal_last_end = last_speech_timestamp;
+                let mut cut: Option<(usize, usize)> = None;
+                for si in 0..current_segments.len() {
+                    let segment = &current_segments[si];
+                    if segment.words.is_empty() {
+                        continue;
+                    }
+                    if is_segment_anomaly(Some(segment)) {
+                        let next_segment =
+                            next_words_segment(&current_segments[si + 1..]);
+                        let hal_next_start = match next_segment {
+                            Some(next) => next.words[0].start,
+                            None => time_offset + segment_duration,
+                        };
+                        let silence_before = segment.start - hal_last_end >
+                            threshold ||
+                            segment.start < threshold ||
+                            segment.start - time_offset < 2.0;
+                        let silence_after = hal_next_start - segment.end >
+                            threshold ||
+                            is_segment_anomaly(next_segment) ||
+                            window_end_time - segment.end < 2.0;
+                        if silence_before && silence_after {
+                            let mut new_seek = ((time_offset + 1.0)
+                                .max(segment.start) *
+                                FRAMES_PER_SECOND as f64)
+                                .round()
+                                as usize;
+                            if content_duration - segment.end < threshold {
+                                new_seek = content_frames;
+                            }
+                            cut = Some((si, new_seek));
+                            break;
+                        }
+                    }
+                    hal_last_end = segment.end;
+                }
+                if let Some((si, new_seek)) = cut {
+                    seek = new_seek;
+                    current_segments.truncate(si);
+                }
+            }
+
+            if let Some(last_word_end) = timing::get_end(&current_segments) {
+                last_speech_timestamp = last_word_end;
+            }
+        }
+
         // Instantaneous or text-free segments are kept but emptied.
         for segment in &mut current_segments {
             if segment.start == segment.end || segment.text.trim().is_empty() {
                 segment.text = String::new();
                 segment.tokens = Vec::new();
+                segment.words = Vec::new();
             }
         }
 
@@ -624,9 +777,55 @@ fn new_segment(
         end,
         text: tokenizer.decode(&text_tokens),
         tokens,
+        words: Vec::new(),
         temperature: result.temperature,
         avg_logprob: result.avg_logprob,
         compression_ratio: result.compression_ratio,
         no_speech_prob: result.no_speech_prob,
     }
+}
+
+/// The default punctuation set of the anomaly heuristics (a fixed constant,
+/// independent of the user-configurable merge sets).
+const ANOMALY_PUNCTUATION: &str = "\"'“¿([{-\"'.。,，!！?？:：”)]}、";
+
+/// How anomalous one word looks: very improbable, very short, or very long.
+fn word_anomaly_score(word: &Word) -> f64 {
+    let probability = f64::from(word.probability);
+    let duration = word.end - word.start;
+    let mut score = 0.0;
+    if probability < 0.15 {
+        score += 1.0;
+    }
+    if duration < 0.133 {
+        score += (0.133 - duration) * 15.0;
+    }
+    if duration > 2.0 {
+        score += duration - 2.0;
+    }
+    score
+}
+
+/// Whether a segment looks like a hallucination, judged by its first eight
+/// non-punctuation words.
+fn is_segment_anomaly(segment: Option<&Segment>) -> bool {
+    let Some(segment) = segment else {
+        return false;
+    };
+    if segment.words.is_empty() {
+        return false;
+    }
+    let words: Vec<&Word> = segment
+        .words
+        .iter()
+        .filter(|word| !ANOMALY_PUNCTUATION.contains(word.word.as_str()))
+        .take(8)
+        .collect();
+    let score: f64 = words.iter().map(|word| word_anomaly_score(word)).sum();
+    score >= 3.0 || score + 0.01 >= words.len() as f64
+}
+
+/// The first segment that carries words.
+fn next_words_segment(segments: &[Segment]) -> Option<&Segment> {
+    segments.iter().find(|segment| !segment.words.is_empty())
 }

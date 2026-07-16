@@ -408,10 +408,128 @@ mod reference_parity {
     use super::{
         super::super::{
             audio::{AudioDecoder, FfmpegDecoder},
+            model::alignment_heads,
             runtime::CandleRuntime,
         },
         *,
     };
+
+    /// The words golden, produced with
+    /// `gen_transcribe_golden.py --word-timestamps`.
+    fn words_golden() -> Value {
+        let path = repo_path("tmp/whisper_golden/tiny_transcribe_words.json");
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+        serde_json::from_str(&raw).unwrap()
+    }
+
+    /// Word-level parity: windows are compared strictly while the seek
+    /// trajectories agree (attention-level jitter may legitimately shift a
+    /// word boundary by a frame or two, letting the tails diverge); the
+    /// first window must match fully.
+    #[test]
+    #[ignore = "requires the local checkpoint, sample audio, and trace golden"]
+    fn word_timestamps_match_reference() {
+        let golden = words_golden();
+        assert!(golden["deterministic"].as_bool().unwrap());
+
+        let offset = golden["offset"].as_u64().unwrap() as usize;
+        let duration = golden["duration"].as_u64().unwrap() as usize;
+        let pcm = FfmpegDecoder::default()
+            .decode(&repo_path("tmp/sample.mp3"))
+            .expect("decoding the local sample");
+        let start = (offset * SAMPLE_RATE).min(pcm.len());
+        let end = ((offset + duration) * SAMPLE_RATE).min(pcm.len());
+        let audio = &pcm[start..end];
+
+        let mut runtime = CandleRuntime::load(
+            &repo_path("tmp/models/whisper-tiny"),
+            Device::Cpu,
+        )
+        .expect("loading the local whisper-tiny checkpoint");
+
+        let options = TranscribeOptions {
+            language: None,
+            beam_size: Some(5),
+            best_of: Some(5),
+            word_timestamps: true,
+            alignment_heads: Some(alignment_heads("tiny").unwrap().to_vec()),
+            ..Default::default()
+        };
+        let (transcription, _) =
+            transcribe_with_trace(&mut runtime, audio, &options).unwrap();
+
+        assert_eq!(
+            transcription.language,
+            golden["language"].as_str().unwrap()
+        );
+
+        let want_segments = golden["segments"].as_array().unwrap();
+        let mut compared_segments = 0usize;
+        let mut compared_words = 0usize;
+        for (segment, want) in transcription.segments.iter().zip(want_segments)
+        {
+            // Strict comparison holds only while the trajectories agree.
+            if segment.seek != want["seek"].as_u64().unwrap() as usize ||
+                segment.tokens != ids(&want["tokens"])
+            {
+                break;
+            }
+            let want_words = want["words"].as_array().unwrap();
+            assert_eq!(
+                segment.words.len(),
+                want_words.len(),
+                "segment {}: word count",
+                segment.id
+            );
+            for (word, want_word) in segment.words.iter().zip(want_words) {
+                assert_eq!(
+                    word.word,
+                    want_word["word"].as_str().unwrap(),
+                    "segment {}: word text",
+                    segment.id
+                );
+                let want_start = want_word["start"].as_f64().unwrap();
+                let want_end = want_word["end"].as_f64().unwrap();
+                assert!(
+                    (word.start - want_start).abs() <= 0.1,
+                    "segment {}: {:?} start {} vs {want_start}",
+                    segment.id,
+                    word.word,
+                    word.start
+                );
+                assert!(
+                    (word.end - want_end).abs() <= 0.1,
+                    "segment {}: {:?} end {} vs {want_end}",
+                    segment.id,
+                    word.word,
+                    word.end
+                );
+                let want_probability =
+                    want_word["probability"].as_f64().unwrap() as f32;
+                assert!(
+                    (word.probability - want_probability).abs() < 0.05,
+                    "segment {}: {:?} probability {} vs {want_probability}",
+                    segment.id,
+                    word.word,
+                    word.probability
+                );
+                compared_words += 1;
+            }
+            compared_segments += 1;
+        }
+
+        eprintln!(
+            "word parity: {compared_segments}/{} segments strictly \
+             comparable, {compared_words} words checked",
+            want_segments.len()
+        );
+        assert!(
+            compared_segments >= 5,
+            "expected at least the first window's segments to match (got \
+             {compared_segments})"
+        );
+    }
 
     #[test]
     #[ignore = "requires the local checkpoint, sample audio, and trace golden"]
@@ -499,6 +617,105 @@ mod reference_parity {
 
         assert_eq!(transcription.text, golden["text"].as_str().unwrap());
     }
+}
+
+#[test]
+fn word_timestamps_fill_words_and_refine_the_seek() {
+    let tok = tokenizer();
+    let n_vocab = tok.n_vocab();
+    let ts = tok.timestamp_begin();
+    let eot = tok.eot();
+    let hello = tok.encode(" hello")[0];
+    let again = tok.encode(" again")[0];
+
+    let one = |token: TokenId| vec![peak(n_vocab, token, 50.0)];
+    let script = vec![
+        // Window 1 ends in a closed pair: the word-informed refinement may
+        // move the seek below the timestamp-derived 200 frames.
+        one(ts),
+        one(hello),
+        one(ts + 100),
+        one(ts + 100),
+        one(eot),
+        // Window 2 finishes the audio with a lone trailing timestamp.
+        one(ts),
+        one(again),
+        one(ts + 50),
+        one(eot),
+    ];
+    let mut provider = FakeProvider::new(n_vocab, script);
+    provider.cross_qk_diagonal = Some((1500, 0));
+
+    let mut options = options();
+    options.word_timestamps = true;
+    options.alignment_heads = Some(vec![(0, 0)]);
+    let (transcription, traces) =
+        transcribe_with_trace(&mut provider, &audio(30), &options).unwrap();
+
+    let first = &transcription.segments[0];
+    assert!(!first.words.is_empty());
+    assert_eq!(first.words[0].word, " hello");
+    assert!(first.words.iter().all(|w| w.start <= w.end));
+    assert!(traces[0].seek_after >= 1);
+    assert!(traces[0].seek_after <= 200);
+    // Two windows ran and the audio was consumed.
+    assert_eq!(traces.last().unwrap().seek_after, 3000);
+}
+
+#[test]
+fn anomaly_heuristics_match_the_reference_thresholds() {
+    let word = |probability: f32, duration: f64| Word {
+        word: " x".to_string(),
+        start: 1.0,
+        end: 1.0 + duration,
+        probability,
+    };
+
+    // Confident, normally paced: no anomaly contribution.
+    assert_eq!(word_anomaly_score(&word(0.5, 0.3)), 0.0);
+    // Improbable: +1; too short: +(0.133 - d) * 15; too long: +(d - 2).
+    assert_eq!(word_anomaly_score(&word(0.1, 0.3)), 1.0);
+    let score = word_anomaly_score(&word(0.5, 0.033));
+    assert!((score - (0.133 - 0.033) * 15.0).abs() < 1e-9);
+    let score = word_anomaly_score(&word(0.5, 2.5));
+    assert!((score - 0.5).abs() < 1e-9);
+
+    let segment = |words: Vec<Word>| Segment {
+        id: 0,
+        seek: 0,
+        start: 0.0,
+        end: 30.0,
+        text: "x".to_string(),
+        tokens: vec![1],
+        words,
+        temperature: 0.0,
+        avg_logprob: 0.0,
+        compression_ratio: 0.0,
+        no_speech_prob: 0.0,
+    };
+
+    assert!(!is_segment_anomaly(None));
+    assert!(!is_segment_anomaly(Some(&segment(vec![]))));
+    // A single dismal word: score + 0.01 >= len triggers.
+    assert!(is_segment_anomaly(Some(&segment(vec![word(0.05, 0.05)]))));
+    // Eight confident words: no anomaly.
+    assert!(!is_segment_anomaly(Some(&segment(vec![
+        word(0.9, 0.3),
+        word(0.9, 0.3),
+        word(0.9, 0.3),
+        word(0.9, 0.3),
+        word(0.9, 0.3),
+        word(0.9, 0.3),
+        word(0.9, 0.3),
+        word(0.9, 0.3),
+    ]))));
+    // Punctuation-only "words" do not count.
+    let mut punct = word(0.01, 0.0);
+    punct.word = ".".to_string();
+    assert!(!is_segment_anomaly(Some(&segment(vec![
+        punct,
+        word(0.9, 0.3)
+    ]))));
 }
 
 #[test]

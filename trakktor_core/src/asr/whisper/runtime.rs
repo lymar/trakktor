@@ -90,6 +90,15 @@ impl CandleRuntime {
 
     /// The device this runtime computes on.
     pub fn device(&self) -> &Device { &self.device }
+
+    /// [`load`](Self::load) on the CPU.
+    ///
+    /// # Errors
+    ///
+    /// See [`load`](Self::load).
+    pub fn load_cpu(model_dir: &Path) -> Result<Self, WhisperError> {
+        Self::load(model_dir, Device::Cpu)
+    }
 }
 
 /// Reads the model geometry from the checkpoint's `config.json`.
