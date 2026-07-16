@@ -5,11 +5,16 @@
 //! string `code` plus exit code 1. Changing a feature's `#[error]` message must
 //! never change its external `code`.
 
-use trakktor_core::{feed::FeedError, http::HttpError, skill::SkillError};
+use trakktor_core::{
+    asr::whisper::WhisperError, feed::FeedError, http::HttpError,
+    skill::SkillError,
+};
 
 /// Any runtime/validation error surfaced by a command (exit code 1).
 #[derive(Debug)]
 pub enum CliError {
+    /// An error from the `asr` feature.
+    Asr(WhisperError),
     /// An error from the `feed` feature.
     Feed(FeedError),
     /// An error from the `skill` feature.
@@ -21,6 +26,7 @@ impl CliError {
     /// `code` mapping lives here, at the bin boundary.
     pub fn code(&self) -> &'static str {
         match self {
+            CliError::Asr(err) => asr_code(err),
             CliError::Feed(err) => feed_code(err),
             CliError::Skill(err) => skill_code(err),
         }
@@ -30,10 +36,15 @@ impl CliError {
 impl std::fmt::Display for CliError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            CliError::Asr(err) => write!(f, "{err}"),
             CliError::Feed(err) => write!(f, "{err}"),
             CliError::Skill(err) => write!(f, "{err}"),
         }
     }
+}
+
+impl From<WhisperError> for CliError {
+    fn from(err: WhisperError) -> Self { CliError::Asr(err) }
 }
 
 impl From<FeedError> for CliError {
@@ -42,6 +53,18 @@ impl From<FeedError> for CliError {
 
 impl From<SkillError> for CliError {
     fn from(err: SkillError) -> Self { CliError::Skill(err) }
+}
+
+/// Maps a [`WhisperError`] to its stable `code`.
+fn asr_code(err: &WhisperError) -> &'static str {
+    match err {
+        WhisperError::AudioDecode(_) => "audio_decode_failed",
+        WhisperError::UnsupportedLanguage(_) => "unsupported_language",
+        WhisperError::InvalidModel(_) | WhisperError::ModelDownload(_) => {
+            "model_unavailable"
+        },
+        WhisperError::InvalidOptions(_) => "invalid_options",
+    }
 }
 
 /// Maps a [`FeedError`] to its stable `code`.

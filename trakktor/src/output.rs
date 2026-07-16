@@ -9,6 +9,7 @@ use std::path::Path;
 
 use serde_json::{Map, Value, json};
 use trakktor_core::{
+    asr::whisper::{Segment, Transcription, Word},
     feed::{
         Author, ContentBlock, DiscoveredFeed, Field, MarkReadSummary,
         Publication,
@@ -16,7 +17,107 @@ use trakktor_core::{
     skill::WriteOutcome,
 };
 
-use crate::error::CliError;
+use crate::{cli::TimestampsArg, error::CliError};
+
+// ---------------------------------------------------------------------------
+// asr whisper
+// ---------------------------------------------------------------------------
+
+/// Prints a transcription. JSON: the common ASR envelope — `text`,
+/// `language`, `duration`, `engine`, and (unless `--timestamps none`)
+/// `segments` with engine diagnostics under a `whisper` key and, with
+/// `--timestamps word`, per-word timings. Text: one `[start --> end] text`
+/// line per segment, or just the text with `--timestamps none`.
+pub fn print_transcription(
+    transcription: &Transcription,
+    model: &str,
+    timestamps: TimestampsArg,
+    json: bool,
+    pretty: bool,
+) {
+    if json {
+        let mut object = Map::new();
+        object.insert("text".into(), Value::String(transcription.text.clone()));
+        object.insert(
+            "language".into(),
+            Value::String(transcription.language.clone()),
+        );
+        insert_f64(&mut object, "duration", transcription.duration);
+        object.insert(
+            "engine".into(),
+            json!({ "name": "whisper", "model": model }),
+        );
+        if timestamps != TimestampsArg::None {
+            let segments = transcription
+                .segments
+                .iter()
+                .map(|segment| {
+                    segment_to_json(segment, timestamps == TimestampsArg::Word)
+                })
+                .collect();
+            object.insert("segments".into(), Value::Array(segments));
+        }
+        print_json(&Value::Object(object), pretty);
+        return;
+    }
+
+    if timestamps == TimestampsArg::None {
+        println!("{}", transcription.text.trim());
+        return;
+    }
+    for segment in &transcription.segments {
+        println!(
+            "[{:8.2} --> {:8.2}] {}",
+            segment.start,
+            segment.end,
+            collapse(segment.text.trim())
+        );
+    }
+}
+
+/// One segment of the envelope: common fields, then the engine-specific
+/// diagnostics under `whisper`.
+fn segment_to_json(segment: &Segment, with_words: bool) -> Value {
+    let mut object = Map::new();
+    object.insert("id".into(), Value::from(segment.id));
+    insert_f64(&mut object, "start", segment.start);
+    insert_f64(&mut object, "end", segment.end);
+    object.insert("text".into(), Value::String(segment.text.clone()));
+    if with_words {
+        let words = segment.words.iter().map(word_to_json).collect();
+        object.insert("words".into(), Value::Array(words));
+    }
+    object.insert(
+        "whisper".into(),
+        json!({
+            "avg_logprob": f64::from(segment.avg_logprob),
+            "compression_ratio": f64::from(segment.compression_ratio),
+            "no_speech_prob": f64::from(segment.no_speech_prob),
+            "temperature": f64::from(segment.temperature),
+        }),
+    );
+    Value::Object(object)
+}
+
+fn word_to_json(word: &Word) -> Value {
+    let mut object = Map::new();
+    insert_f64(&mut object, "start", word.start);
+    insert_f64(&mut object, "end", word.end);
+    object.insert("word".into(), Value::String(word.word.clone()));
+    object.insert(
+        "probability".into(),
+        Value::from(f64::from(word.probability)),
+    );
+    Value::Object(object)
+}
+
+/// Inserts a float, tolerating non-finite values by omission (JSON has no
+/// NaN).
+fn insert_f64(object: &mut Map<String, Value>, key: &str, value: f64) {
+    if let Some(number) = serde_json::Number::from_f64(value) {
+        object.insert(key.to_string(), Value::Number(number));
+    }
+}
 
 // ---------------------------------------------------------------------------
 // feed discover

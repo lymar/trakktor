@@ -72,6 +72,17 @@ impl GlobalOpts {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Transcribe speech from audio (ASR).
+    ///
+    /// Speech recognition is organized as a set of engines, each with its own
+    /// capabilities and flags; pick one as the subcommand. The result is JSON
+    /// with the full text, the detected or given language, and timestamped
+    /// segments (`--text` prints readable `[start --> end] text` lines).
+    Asr {
+        #[command(subcommand)]
+        command: AsrCommand,
+    },
+
     /// Work with RSS/Atom/JSON feeds: discover, read, and track read state.
     ///
     /// Typical workflow: `trakktor feed discover <page-url>` finds the feeds a
@@ -97,6 +108,210 @@ enum Command {
         #[command(subcommand)]
         command: SkillCommand,
     },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum AsrCommand {
+    /// Transcribe audio with a Whisper model.
+    ///
+    /// The audio file is decoded with the system `ffmpeg` (any common format
+    /// works) and transcribed window by window with a fallback policy that
+    /// guards against repetition loops. The first use of a model downloads
+    /// its checkpoint into the working directory; later runs reuse it.
+    Whisper(WhisperArgs),
+}
+
+/// Flags of `asr whisper`.
+#[derive(Args)]
+pub(crate) struct WhisperArgs {
+    /// Path to the audio file to transcribe.
+    #[arg(value_name = "audio")]
+    pub(crate) audio: PathBuf,
+
+    /// Language of the audio: a code like `en` or `ru`, or an English name
+    /// like `russian`. Detected from the first 30 seconds when omitted.
+    #[arg(long, value_name = "lang")]
+    pub(crate) language: Option<String>,
+
+    /// Timestamp granularity of the output.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = TimestampsArg::Segment,
+        value_name = "granularity"
+    )]
+    pub(crate) timestamps: TimestampsArg,
+
+    /// Model: a published name, downloaded on first use, or a path to a
+    /// checkpoint directory. Names: tiny, tiny.en, base, base.en, small,
+    /// small.en, medium, medium.en, large-v1, large-v2, large-v3, large,
+    /// turbo, large-v3-turbo. Larger models are slower and more accurate.
+    #[arg(long, default_value = "tiny", value_name = "name|dir")]
+    pub(crate) model: String,
+
+    /// Transcribe in the source language, or translate into English.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = TaskArg::Transcribe,
+        value_name = "task"
+    )]
+    pub(crate) task: TaskArg,
+
+    /// Sampling temperature the fallback schedule starts at.
+    #[arg(long, default_value_t = 0.0, value_name = "float")]
+    pub(crate) temperature: f32,
+
+    /// Step between fallback temperatures up to 1.0, or `none` to always use
+    /// the single starting temperature.
+    #[arg(long, default_value = "0.2", value_name = "float|none")]
+    pub(crate) temperature_increment_on_fallback: OrNone<f64>,
+
+    /// Independent sampling trajectories at non-zero temperatures, or
+    /// `none`.
+    #[arg(long, default_value = "5", value_name = "int|none")]
+    pub(crate) best_of: OrNone<usize>,
+
+    /// Beam width at zero temperature, or `none` for greedy decoding.
+    #[arg(long, default_value = "5", value_name = "int|none")]
+    pub(crate) beam_size: OrNone<usize>,
+
+    /// Beam-search patience (how many finished candidates to collect,
+    /// relative to the beam width), or `none` (equivalent to 1.0).
+    #[arg(long, default_value = "none", value_name = "float|none")]
+    pub(crate) patience: OrNone<f64>,
+
+    /// Length-penalty alpha in 0..=1, or `none` for plain length
+    /// normalization when ranking candidates.
+    #[arg(long, default_value = "none", value_name = "float|none")]
+    pub(crate) length_penalty: OrNone<f64>,
+
+    /// Comma-separated token ids to suppress during sampling; `-1` expands
+    /// to a built-in set of non-speech tokens. An empty value disables
+    /// suppression.
+    #[arg(
+        long,
+        default_value = "-1",
+        allow_hyphen_values = true,
+        value_name = "csv"
+    )]
+    pub(crate) suppress_tokens: String,
+
+    /// Text prompt for the first window — for example domain vocabulary or
+    /// proper nouns the audio is likely to contain.
+    #[arg(long, value_name = "text")]
+    pub(crate) initial_prompt: Option<String>,
+
+    /// Prepend the initial prompt to every window, not just the first.
+    #[arg(long)]
+    pub(crate) carry_initial_prompt: bool,
+
+    /// Feed the previous output as context for the next window; `false`
+    /// reduces the chance of failure loops at some cost to consistency.
+    #[arg(
+        long,
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        value_name = "bool"
+    )]
+    pub(crate) condition_on_previous_text: bool,
+
+    /// Treat a window as failed (and retry hotter) when its text compresses
+    /// better than this ratio — the repetition detector. `none` disables it.
+    #[arg(long, default_value = "2.4", value_name = "float|none")]
+    pub(crate) compression_ratio_threshold: OrNone<f64>,
+
+    /// Treat a window as failed when its average log-probability falls below
+    /// this. `none` disables it.
+    #[arg(
+        long,
+        default_value = "-1.0",
+        allow_hyphen_values = true,
+        value_name = "float|none"
+    )]
+    pub(crate) logprob_threshold: OrNone<f64>,
+
+    /// Consider a window silent (and skip it) when the no-speech probability
+    /// exceeds this while the confidence stays below the log-probability
+    /// threshold. `none` disables it.
+    #[arg(long, default_value = "0.6", value_name = "float|none")]
+    pub(crate) no_speech_threshold: OrNone<f64>,
+
+    /// Punctuation marks merged with the following word (with
+    /// `--timestamps word`).
+    #[arg(long, default_value = "\"'“¿([{-", value_name = "chars")]
+    pub(crate) prepend_punctuations: String,
+
+    /// Punctuation marks merged with the previous word (with
+    /// `--timestamps word`).
+    #[arg(
+        long,
+        default_value = "\"'.。,，!！?？:：”)]}、",
+        value_name = "chars"
+    )]
+    pub(crate) append_punctuations: String,
+
+    /// Comma-separated `start,end,start,end,...` offsets in seconds of the
+    /// clips to transcribe; the last end defaults to the end of the audio.
+    #[arg(long, default_value = "0", value_name = "csv")]
+    pub(crate) clip_timestamps: String,
+
+    /// With `--timestamps word`: skip silent stretches longer than this many
+    /// seconds when a probable hallucination is detected, or `none`.
+    #[arg(long, default_value = "none", value_name = "float|none")]
+    pub(crate) hallucination_silence_threshold: OrNone<f64>,
+}
+
+/// The `--timestamps` granularity of `asr` output.
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum TimestampsArg {
+    /// Text only, without the segment list.
+    None,
+    /// Segment start/end times (the default).
+    Segment,
+    /// Segment times plus per-word timings.
+    Word,
+}
+
+/// The `--task` value of `asr whisper`.
+#[derive(Clone, Copy, ValueEnum)]
+pub(crate) enum TaskArg {
+    /// Transcribe in the source language.
+    Transcribe,
+    /// Translate into English.
+    Translate,
+}
+
+impl TaskArg {
+    pub(crate) fn to_core(self) -> trakktor_core::asr::whisper::Task {
+        match self {
+            TaskArg::Transcribe => {
+                trakktor_core::asr::whisper::Task::Transcribe
+            },
+            TaskArg::Translate => trakktor_core::asr::whisper::Task::Translate,
+        }
+    }
+}
+
+/// A flag value that is either a number or the literal `none`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct OrNone<T>(pub(crate) Option<T>);
+
+impl<T: std::str::FromStr> std::str::FromStr for OrNone<T>
+where
+    T::Err: std::fmt::Display,
+{
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, String> {
+        if value.eq_ignore_ascii_case("none") {
+            return Ok(OrNone(None));
+        }
+        value
+            .parse::<T>()
+            .map(|parsed| OrNone(Some(parsed)))
+            .map_err(|e| format!("expected a value or `none`: {e}"))
+    }
 }
 
 #[derive(Subcommand)]
@@ -223,6 +438,14 @@ pub fn run() -> i32 {
 fn dispatch(cli: &Cli) -> Result<(), CliError> {
     let global = &cli.global;
     match &cli.command {
+        Command::Asr { command } => match command {
+            AsrCommand::Whisper(args) => crate::asr::run_whisper(
+                args,
+                &global.work_dir(),
+                global.json(),
+                global.pretty,
+            ),
+        },
         Command::Feed { command } => match command {
             FeedCommand::Discover { page_url } => {
                 let feeds = feed::discover(page_url)?;
