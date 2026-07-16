@@ -1,13 +1,22 @@
-//! Embedded mel filterbanks.
+//! Embedded assets: mel filterbanks and BPE vocabularies.
 //!
 //! Whisper projects the STFT power spectrum onto a mel scale using fixed
 //! filterbanks (the librosa/Slaney matrices). The exact matrices the model
 //! ships are embedded here as raw little-endian f32 in row-major order: one row
-//! per mel band, [`N_FREQS`] columns per row.
+//! per mel band, [`N_FREQS`] columns per row. The two byte-pair-encoding
+//! vocabularies are embedded verbatim in their original text form (one
+//! `base64(token) rank` pair per line).
 
 use std::sync::OnceLock;
 
 use super::feature::MelBands;
+
+/// BPE vocabulary of the English-only models.
+pub const GPT2_TIKTOKEN: &str = include_str!("assets/gpt2.tiktoken");
+
+/// BPE vocabulary of the multilingual models.
+pub const MULTILINGUAL_TIKTOKEN: &str =
+    include_str!("assets/multilingual.tiktoken");
 
 const MEL_80_BYTES: &[u8] = include_bytes!("assets/mel_80.bin");
 const MEL_128_BYTES: &[u8] = include_bytes!("assets/mel_128.bin");

@@ -8,6 +8,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+base64.workspace = true
 blake3.workspace = true
 chrono.workspace = true
 # clap is used only to introspect the CLI definition (`Command`) when rendering
@@ -16,9 +17,12 @@ clap.workspace = true
 feedparser-rs.workspace = true
 realfft.workspace = true
 reqwest.workspace = true
+rustc-hash.workspace = true
 scraper.workspace = true
 thiserror.workspace = true
+tiktoken-rs.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+serde_json.workspace = true
 tempfile = "3"

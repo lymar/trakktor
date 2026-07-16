@@ -13,4 +13,11 @@ pub enum WhisperError {
     /// truncated PCM stream.
     #[error("failed to decode audio: {0}")]
     AudioDecode(String),
+
+    /// The requested language is not supported (`unsupported_language`).
+    ///
+    /// Raised for a language that is unknown altogether, and for one that is
+    /// known but lies outside the language set of the selected model.
+    #[error("unsupported language: {0}")]
+    UnsupportedLanguage(String),
 }
