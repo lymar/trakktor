@@ -419,7 +419,22 @@ fn run_transcription<P: ForwardProvider>(
         };
         let prompt_len = prompt.len();
 
+        if super::trace::on() {
+            super::trace::emit(format_args!(
+                "window @ {time_offset:6.1}s  seek={seek_before} \
+                 seg={segment_size} prompt_len={prompt_len}",
+            ));
+        }
+        let window_t = super::trace::on().then(std::time::Instant::now);
+
+        let enc_t = super::trace::on().then(std::time::Instant::now);
         let features = provider.encode(&window)?;
+        if let Some(enc_t) = enc_t {
+            super::trace::emit(format_args!(
+                "    encode {:.0}ms",
+                enc_t.elapsed().as_secs_f64() * 1000.0,
+            ));
+        }
         // Report progress on every sampled token, not just once per window —
         // a single window of a large model can take a long time. `within` is
         // how far into this window the decode has reached (from the model's
@@ -440,6 +455,15 @@ fn run_transcription<P: ForwardProvider>(
             prompt,
             &mut on_step,
         )?;
+
+        if let Some(window_t) = window_t {
+            super::trace::emit(format_args!(
+                "  window done: {:.0}ms  accepted t={:.1}  attempts={}",
+                window_t.elapsed().as_secs_f64() * 1000.0,
+                result.temperature,
+                attempts.len(),
+            ));
+        }
 
         // Silence check: skip the whole window unless the text is confident
         // enough to keep despite the no-speech probability.
@@ -796,6 +820,7 @@ fn decode_with_fallback<P: ForwardProvider>(
             max_initial_timestamp: Some(1.0),
         };
 
+        let attempt_t = super::trace::on().then(std::time::Instant::now);
         let result = decoding::decode(
             provider,
             tokenizer,
@@ -825,6 +850,22 @@ fn decode_with_fallback<P: ForwardProvider>(
             }
         }
 
+        if let Some(attempt_t) = attempt_t {
+            super::trace::emit(format_args!(
+                "    attempt t={temperature:.1}: {ms:.0}ms tokens={} cr={:.2} \
+                 alp={:.2} nsp={:.2} {}",
+                result.tokens.len(),
+                result.compression_ratio,
+                result.avg_logprob,
+                result.no_speech_prob,
+                if needs_fallback {
+                    "-> fallback"
+                } else {
+                    "-> accept"
+                },
+                ms = attempt_t.elapsed().as_secs_f64() * 1000.0,
+            ));
+        }
         attempts.push(FallbackAttempt {
             temperature,
             tokens: result.tokens.clone(),

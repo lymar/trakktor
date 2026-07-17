@@ -23,6 +23,7 @@ pub mod runtime;
 mod testing;
 pub mod timing;
 pub mod tokenizer;
+mod trace;
 pub mod transcribe;
 
 #[cfg(feature = "audio")]

@@ -364,7 +364,14 @@ fn main_loop<P: ForwardProvider>(
     let mut no_speech_prob = f32::NAN;
     let timestamp_begin = tokenizer.timestamp_begin();
 
+    // Diagnostics: per-step wall time against the growing sequence length.
+    let trace_on = super::trace::on();
+    let mut first_ms = 0.0f64;
+    let mut last_ms = 0.0f64;
+    let mut steps_done = 0usize;
+
     for step in 0..sample_len {
+        let step_t = trace_on.then(std::time::Instant::now);
         let logits: Logits = if step == 0 {
             let flat: Vec<TokenId> = tokens.concat();
             provider.decode_step(&flat, n_group)?
@@ -404,9 +411,30 @@ fn main_loop<P: ForwardProvider>(
             .find(|&&t| t >= timestamp_begin)
             .map_or(0.0, |&t| f64::from(t - timestamp_begin) * time_precision);
         on_step(reached);
+        if let Some(step_t) = step_t {
+            let ms = step_t.elapsed().as_secs_f64() * 1000.0;
+            if step == 0 {
+                first_ms = ms;
+            }
+            last_ms = ms;
+            steps_done = step + 1;
+            if step < 3 || step % 32 == 0 {
+                super::trace::emit(format_args!(
+                    "      step {step:>3} len={:>4} {ms:>7.1}ms",
+                    tokens[0].len(),
+                ));
+            }
+        }
         if completed || tokens[0].len() > n_ctx {
             break;
         }
+    }
+
+    if trace_on {
+        super::trace::emit(format_args!(
+            "      loop end: {steps_done} steps, first {first_ms:.1}ms, last \
+             {last_ms:.1}ms",
+        ));
     }
 
     Ok((tokens, sum_logprobs, no_speech_prob))

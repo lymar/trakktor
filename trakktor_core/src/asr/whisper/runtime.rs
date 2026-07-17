@@ -244,14 +244,29 @@ impl ForwardProvider for CandleRuntime {
         let tokens =
             Tensor::from_slice(step_tokens, (n_batch, n_step), &self.device)
                 .map_err(|e| model_err("building token tensor", e))?;
+
+        // Diagnostics: attribute the step's wall time across the decoder
+        // forward, the vocabulary projection, and the read-back. A device
+        // sync between phases is needed so an async backend does not roll one
+        // phase's time into the next; only taken when tracing.
+        let trace_on = super::trace::on();
+        let t0 = trace_on.then(std::time::Instant::now);
         let hidden = self
             .decoder
             .forward_session(&tokens, &session.features, session.offset)
             .map_err(|e| model_err("decoder forward", e))?;
+        let t1 = t0.map(|_| {
+            let _ = self.device.synchronize();
+            std::time::Instant::now()
+        });
         let logits = self
             .decoder
             .final_linear(&hidden)
             .map_err(|e| model_err("logits projection", e))?;
+        let t2 = t1.map(|_| {
+            let _ = self.device.synchronize();
+            std::time::Instant::now()
+        });
         session.offset += n_step;
 
         let data = logits
@@ -259,6 +274,16 @@ impl ForwardProvider for CandleRuntime {
             .and_then(|t| t.flatten_all())
             .and_then(|t| t.to_vec1::<f32>())
             .map_err(|e| model_err("reading logits", e))?;
+
+        if let (Some(t0), Some(t1), Some(t2)) = (t0, t1, t2) {
+            let read_end = std::time::Instant::now();
+            super::trace::emit(format_args!(
+                "        step[n={n_step}]: fwd={:.1} lin={:.1} read={:.1}ms",
+                (t1 - t0).as_secs_f64() * 1000.0,
+                (t2 - t1).as_secs_f64() * 1000.0,
+                (read_end - t2).as_secs_f64() * 1000.0,
+            ));
+        }
         Ok(Logits::new(n_batch, n_step, self.dims.n_vocab, data))
     }
 
