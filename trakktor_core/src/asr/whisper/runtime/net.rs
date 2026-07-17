@@ -147,23 +147,39 @@ impl MultiHeadAttention {
 
     /// Incremental self-attention: appends the fed positions' K/V to the
     /// session cache and attends over the whole cached prefix.
+    ///
+    /// The cache holds K/V already in attention layout — K as
+    /// `(batch, head, d_head, positions)` (transposed and pre-scaled), V as
+    /// `(batch, head, positions, d_head)` — so a new step only reshapes its own
+    /// token(s) and appends them, instead of re-reshaping and transpose-copying
+    /// the whole growing prefix every step (that transpose-copy dominated long
+    /// windows). The arithmetic matches [`attention`](Self::attention).
     fn forward_self_cached(
         &mut self,
         x: &Tensor,
         mask: &Tensor,
     ) -> Result<Tensor> {
-        let q = self.query.forward(x)?;
-        let k_new = self.key.forward(x)?;
-        let v_new = self.value.forward(x)?;
+        let n_state = self.query.weight().dim(0)?;
+        let scale = ((n_state / self.n_head) as f64).powf(-0.25);
+        let k_new =
+            (self.reshape_head(&self.key.forward(x)?)?.transpose(2, 3)? *
+                scale)?
+                .contiguous()?;
+        let v_new = self.reshape_head(&self.value.forward(x)?)?.contiguous()?;
         let (k, v) = match self.kv_cache.take() {
             Some((k_prev, v_prev)) => (
-                Tensor::cat(&[&k_prev, &k_new], 1)?,
-                Tensor::cat(&[&v_prev, &v_new], 1)?,
+                Tensor::cat(&[&k_prev, &k_new], 3)?,
+                Tensor::cat(&[&v_prev, &v_new], 2)?,
             ),
             None => (k_new, v_new),
         };
         self.kv_cache = Some((k.clone(), v.clone()));
-        Ok(self.attention(&q, &k, &v, Some(mask), false)?.0)
+        let q = (self.reshape_head(&self.query.forward(x)?)? * scale)?
+            .contiguous()?;
+        let qk = q.matmul(&k)?.broadcast_add(mask)?;
+        let w = candle_nn::ops::softmax_last_dim(&qk)?;
+        let wv = w.matmul(&v)?.transpose(1, 2)?.flatten_from(2)?;
+        self.out.forward(&wv)
     }
 
     /// Cross-attention over encoded audio: K/V computed once per session,
@@ -173,17 +189,35 @@ impl MultiHeadAttention {
         x: &Tensor,
         xa: &Tensor,
     ) -> Result<Tensor> {
-        let q = self.query.forward(x)?;
+        let n_state = self.query.weight().dim(0)?;
+        let scale = ((n_state / self.n_head) as f64).powf(-0.25);
+        // The audio K/V are constant for the whole decode, so project and
+        // reshape them into attention layout once (K transposed and pre-scaled
+        // to `(batch, head, d_head, frames)`, V as `(batch, head, frames,
+        // d_head)`) and reuse across steps. Reshaping the 1500-frame K/V on
+        // every single-token step was the dominant decode cost; the arithmetic
+        // is otherwise identical to [`attention`](Self::attention).
         let (k, v) = match &self.kv_cache {
             Some((k, v)) => (k.clone(), v.clone()),
             None => {
-                let k = self.key.forward(xa)?;
-                let v = self.value.forward(xa)?;
+                let k = (self
+                    .reshape_head(&self.key.forward(xa)?)?
+                    .transpose(2, 3)? *
+                    scale)?
+                    .contiguous()?;
+                let v = self
+                    .reshape_head(&self.value.forward(xa)?)?
+                    .contiguous()?;
                 self.kv_cache = Some((k.clone(), v.clone()));
                 (k, v)
             },
         };
-        Ok(self.attention(&q, &k, &v, None, false)?.0)
+        let q = (self.reshape_head(&self.query.forward(x)?)? * scale)?
+            .contiguous()?;
+        let qk = q.matmul(&k)?;
+        let w = candle_nn::ops::softmax_last_dim(&qk)?;
+        let wv = w.matmul(&v)?.transpose(1, 2)?.flatten_from(2)?;
+        self.out.forward(&wv)
     }
 
     fn reset_cache(&mut self) { self.kv_cache = None; }
