@@ -33,6 +33,9 @@ cd trakktor
 cargo install --locked --path trakktor
 ```
 
+For GPU-accelerated speech recognition on macOS, add `--features metal` to
+either install command; see the `asr` section below.
+
 Verify, then remove if needed:
 
 ```sh
@@ -79,6 +82,180 @@ switches to human-readable text. Data is written to stdout, errors to stderr.
 
 Global options (usable before or after the command): `--work-dir <path>` (also
 `TRAKKTOR_DIR`; default `./.trakktor`), `--text`, `--pretty`.
+
+## `asr` — speech recognition
+
+Transcribe (or translate) speech from an audio file. Speech recognition is
+organized as **engines**, each selected as a subcommand with its own model and
+flags; one engine ships today, `whisper`:
+
+```sh
+trakktor asr whisper talk.mp3            # JSON (default): text + timestamped segments
+trakktor asr whisper talk.mp3 --text     # readable [start --> end] lines
+trakktor asr whisper talk.mp3 --pretty   # indented JSON
+```
+
+The one required argument is the path to an audio file. It is decoded by a
+**built-in decoder** — no ffmpeg or other external tool is needed — then
+internally downmixed to mono and resampled to 16 kHz. Supported inputs: mp3,
+aac (LC), vorbis, flac, alac, and raw PCM, held in wav, aiff, caf, ogg, mp4, or
+mkv containers.
+
+Transcription runs window by window (30 seconds each) with a temperature-fallback
+policy that guards against repetition loops, closely following Whisper's own
+decoding behavior.
+
+### Models
+
+```
+--model <name|dir>      # default: tiny
+```
+
+Pass a **published name** — downloaded on first use into
+`<work-dir>/asr/whisper/<name>/` and reused on later runs — or a **path** to a
+local checkpoint directory (one containing `config.json`). First-run download
+progress is printed to stderr.
+
+Names, smallest to largest (larger is slower but more accurate):
+
+- **Multilingual:** `tiny`, `base`, `small`, `medium`, `large-v1`, `large-v2`,
+  `large-v3` (alias `large`), `large-v3-turbo` (alias `turbo`).
+- **English-only:** `tiny.en`, `base.en`, `small.en`, `medium.en` — slightly
+  better on English audio.
+
+### Device and precision
+
+```
+--device cpu|metal      # default: cpu
+--precision f16|f32     # default: f16
+```
+
+- **`--device metal`** runs on the macOS GPU and is several times faster than
+  the CPU on a typical clip. It needs a build with the `metal` feature:
+
+  ```sh
+  cargo install --locked --git https://github.com/lymar/trakktor.git \
+    --branch agent-cli --features metal trakktor
+  ```
+
+  Without that feature, `--device metal` is rejected.
+
+- **`--precision f16`** (the default) uses about half the memory and is faster;
+  **`--precision f32`** computes in full precision for reproducible results, at
+  twice the weight memory. f16 is what keeps the large models within reach on a
+  16 GB machine.
+
+### Language and task
+
+```
+--language <code|name>        # e.g. en, ru, or russian; autodetected if omitted
+--task transcribe|translate   # default: transcribe
+```
+
+With no `--language`, the language is detected from the first 30 seconds.
+`--task translate` renders the speech as English instead of transcribing it in
+the source language.
+
+### Timestamps and output shape
+
+```
+--timestamps none|segment|word   # default: segment
+```
+
+- `segment` — per-segment start/end times (the default).
+- `word` — segment times plus per-word timings, from an extra alignment pass
+  (slower).
+- `none` — text only, no segment list.
+
+The default output is a single JSON object: the transcript `text`, the detected
+or given `language`, the audio `duration` (seconds), the `engine`, and — unless
+`--timestamps none` — a `segments` array. Each segment carries its `id`,
+`start`, `end`, `text`, engine-specific quality signals under `whisper`, and
+(with `--timestamps word`) a `words` array:
+
+```json
+{
+  "text": "Ask not what your country can do for you.",
+  "language": "en",
+  "duration": 11.0,
+  "engine": { "name": "whisper", "model": "tiny" },
+  "segments": [
+    {
+      "id": 0,
+      "start": 0.0,
+      "end": 3.6,
+      "text": "Ask not what your country can do for you.",
+      "whisper": {
+        "avg_logprob": -0.29,
+        "compression_ratio": 1.15,
+        "no_speech_prob": 0.01,
+        "temperature": 0.0
+      }
+    }
+  ]
+}
+```
+
+With `--timestamps word`, each segment also gets a `words` array of
+`{ start, end, word, probability }`:
+
+```json
+"words": [
+  { "start": 0.0, "end": 0.42, "word": "Ask", "probability": 0.98 }
+]
+```
+
+The `whisper` block is diagnostic: `avg_logprob` (average token
+log-probability — confidence), `compression_ratio` (zlib ratio; high means
+repetitive), `no_speech_prob`, and the `temperature` the accepted result was
+decoded at. `--text` instead prints one right-aligned `[start --> end] text`
+line per segment (or just the transcript with `--timestamps none`), and errors
+follow the usual `{ "error": { "code", "message" } }` contract.
+
+While a long file decodes, a live progress line — audio position, percent,
+elapsed, and a rough estimate of the time remaining — is written to **stderr**,
+so stdout stays a clean JSON (or text) stream.
+
+### Decoding controls
+
+The decoding defaults mirror the reference behavior and rarely need touching;
+every flag below has a sensible default. Run `trakktor asr whisper --help` for
+the complete list with defaults and exact value formats. In brief:
+
+- **Temperature fallback** — `--temperature`,
+  `--temperature-increment-on-fallback`: the schedule the decoder climbs when a
+  window looks like a failure.
+- **Sampling and search** — `--best-of` (trajectories at non-zero temperature),
+  `--beam-size` (beam width at temperature 0), `--patience`, `--length-penalty`.
+- **Failure gates** (each triggers a hotter retry) —
+  `--compression-ratio-threshold` (repetition), `--logprob-threshold`
+  (confidence), `--no-speech-threshold` (silence).
+- **Prompting** — `--initial-prompt` (bias the first window toward domain
+  vocabulary or proper nouns), `--carry-initial-prompt`,
+  `--condition-on-previous-text`.
+- **Token suppression** — `--suppress-tokens` (`-1` expands to a built-in
+  non-speech set).
+- **Word-timestamp tuning** (with `--timestamps word`) —
+  `--prepend-punctuations`, `--append-punctuations`,
+  `--hallucination-silence-threshold`.
+- **Partial audio** — `--clip-timestamps` to transcribe only selected
+  `start,end` second ranges.
+
+### Examples
+
+```sh
+# Russian interview, best model on the GPU, word-level timings, indented JSON
+trakktor asr whisper interview.m4a \
+  --model large-v3 --device metal --language ru \
+  --timestamps word --pretty
+
+# Translate a lecture to English, readable text output
+trakktor asr whisper lecture.mp3 --model medium --task translate --text
+
+# Bias the first window with domain terms
+trakktor asr whisper standup.wav \
+  --initial-prompt "Kubernetes, Grafana, Prometheus, sharding"
+```
 
 ## `feed` — RSS / Atom / JSON Feed
 
