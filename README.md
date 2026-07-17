@@ -14,21 +14,18 @@ which must be on your `PATH`.
 From git:
 
 ```sh
-cargo install --locked --git https://github.com/lymar/trakktor.git \
-  --branch agent-cli trakktor
+cargo install --locked --git https://github.com/lymar/trakktor.git trakktor
 ```
 
 - `trakktor` (the trailing word) is the package to install — the workspace root
   is virtual, so it must be named.
-- `--branch agent-cli` is required for now: the code is not yet on the default
-  `trunk` branch. Drop the flag once it lands there.
 - `--locked` builds with the exact dependency versions pinned in `Cargo.lock`
   (reproducible); omit it to pull the latest semver-compatible versions.
 
 From a local clone (installs whatever is checked out):
 
 ```sh
-git clone -b agent-cli https://github.com/lymar/trakktor.git
+git clone https://github.com/lymar/trakktor.git
 cd trakktor
 cargo install --locked --path trakktor
 ```
@@ -146,7 +143,7 @@ Names, smallest to largest (larger is slower but more accurate):
 
   ```sh
   cargo install --locked --git https://github.com/lymar/trakktor.git \
-    --branch agent-cli --features metal trakktor
+    --features metal trakktor
   ```
 
   Without that feature, `--device metal` is rejected.

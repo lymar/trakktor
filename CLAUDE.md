@@ -122,6 +122,6 @@ published separately). Rationale: `../trakktor_project/docs/adr/0002-cargo-works
 
 ## Branches
 
-- `agent-cli` — current direction (this pivot); the active line of work.
-- `trunk` — default/integration branch.
+- `trunk` — default/integration branch; the active line of work.
+- `boa` — the previous default branch, kept for reference.
 - `legacy` — previous incarnation, kept for reference.
