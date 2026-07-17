@@ -28,7 +28,7 @@ pub mod transcribe;
 
 #[cfg(feature = "audio")]
 pub use audio::BuiltinDecoder;
-pub use audio::{AudioDecoder, pad_or_trim};
+pub use audio::{AudioDecoder, FfmpegDecoder, pad_or_trim};
 pub use decoding::{
     DecodeResult, DecodingOptions, PromptInput, decode, detect_language,
 };

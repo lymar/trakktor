@@ -38,4 +38,8 @@ pub enum WhisperError {
     /// Fetching a model checkpoint failed (`model_unavailable`).
     #[error("model download failed: {0}")]
     ModelDownload(String),
+
+    /// Writing a requested output file failed (`io_error`).
+    #[error("failed to write output file: {0}")]
+    Io(String),
 }

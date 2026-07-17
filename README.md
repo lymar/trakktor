@@ -99,7 +99,8 @@ The one required argument is the path to an audio file. It is decoded by a
 **built-in decoder** — no ffmpeg or other external tool is needed — then
 internally downmixed to mono and resampled to 16 kHz. Supported inputs: mp3,
 aac (LC), vorbis, flac, alac, and raw PCM, held in wav, aiff, caf, ogg, mp4, or
-mkv containers.
+mkv containers. Formats beyond that set are reachable with `--audio-decoder
+ffmpeg` (see [Input decoder](#input-decoder)).
 
 Transcription runs window by window (30 seconds each) with a temperature-fallback
 policy that guards against repetition loops, closely following Whisper's own
@@ -145,6 +146,24 @@ Names, smallest to largest (larger is slower but more accurate):
   twice the weight memory. f16 is what keeps the large models within reach on a
   16 GB machine.
 
+### Input decoder
+
+```
+--audio-decoder builtin|ffmpeg   # default: builtin
+```
+
+`builtin` (the default) is the pure-Rust decoder described above and needs no
+external tools. `ffmpeg` instead shells out to an installed `ffmpeg`, which
+decodes many more input formats — opus, HE-AAC, wma, amr, and others the
+built-in decoder does not cover:
+
+```sh
+trakktor asr whisper voice.opus --audio-decoder ffmpeg
+```
+
+It requires `ffmpeg` on your `PATH`; without it the command fails with a clear
+error. The default build never needs ffmpeg.
+
 ### Language and task
 
 ```
@@ -155,6 +174,26 @@ Names, smallest to largest (larger is slower but more accurate):
 With no `--language`, the language is detected from the first 30 seconds.
 `--task translate` renders the speech as English instead of transcribing it in
 the source language.
+
+### Clipping: transcribe only part of the audio
+
+```
+--start <time>      # begin at this offset (default: the beginning)
+--end <time>        # stop at this offset (default: the end)
+```
+
+`--start`/`--end` limit transcription to a time range. Each accepts a plain
+number of seconds or a `[[HH:]MM:]SS[.mmm]` clock, to millisecond precision, and
+either flag works on its own:
+
+```sh
+trakktor asr whisper talk.mp3 --start 0:15 --end 5:30   # from 0:15 to 5:30
+trakktor asr whisper talk.mp3 --start 90                # from 1:30 to the end
+trakktor asr whisper talk.mp3 --end 1:02:03.250         # from the start to 1:02:03.250
+```
+
+They are a convenience over `--clip-timestamps` and cannot be combined with it;
+use `--clip-timestamps` directly to transcribe several ranges at once.
 
 ### Timestamps and output shape
 
@@ -216,6 +255,38 @@ While a long file decodes, a live progress line — audio position, percent,
 elapsed, and a rough estimate of the time remaining — is written to **stderr**,
 so stdout stays a clean JSON (or text) stream.
 
+### Output files
+
+By default the result goes to stdout as JSON (or text with `--text`).
+`--output-format` **additionally** writes the transcript to files, without
+changing what stdout prints:
+
+```
+--output-format txt|vtt|srt|tsv|json|all   # which file(s) to write
+--output-dir <dir>                         # where (default: the current dir)
+```
+
+| Format | File | Contents |
+|---|---|---|
+| `txt` | `<audio>.txt` | one line per segment |
+| `vtt` | `<audio>.vtt` | WebVTT subtitles |
+| `srt` | `<audio>.srt` | SubRip (SRT) subtitles |
+| `tsv` | `<audio>.tsv` | `start`⇥`end`⇥`text`, times in integer milliseconds |
+| `json` | `<audio>.json` | the full JSON result (same as stdout) |
+| `all` | — | every format above |
+
+Each file is named after the audio (`talk.mp3` → `talk.srt`) and written into
+`--output-dir` (created if it does not exist); the paths written are reported on
+stderr. Subtitle cues are one per segment.
+
+```sh
+# Write SubRip subtitles (stdout still prints the JSON result)
+trakktor asr whisper talk.mp3 --output-format srt
+
+# Write every format into subs/
+trakktor asr whisper talk.mp3 --output-format all --output-dir subs
+```
+
 ### Decoding controls
 
 The decoding defaults mirror the reference behavior and rarely need touching;
@@ -239,7 +310,8 @@ the complete list with defaults and exact value formats. In brief:
   `--prepend-punctuations`, `--append-punctuations`,
   `--hallucination-silence-threshold`.
 - **Partial audio** — `--clip-timestamps` to transcribe only selected
-  `start,end` second ranges.
+  `start,end` second ranges. For a single range, the `--start`/`--end` flags
+  above are usually easier.
 
 ### Examples
 
@@ -255,6 +327,13 @@ trakktor asr whisper lecture.mp3 --model medium --task translate --text
 # Bias the first window with domain terms
 trakktor asr whisper standup.wav \
   --initial-prompt "Kubernetes, Grafana, Prometheus, sharding"
+
+# Subtitle one section: transcribe 0:15–5:30 and write every format into subs/
+trakktor asr whisper talk.mp3 --start 0:15 --end 5:30 \
+  --output-format all --output-dir subs
+
+# Decode a format the built-in decoder does not cover
+trakktor asr whisper voice.opus --audio-decoder ffmpeg --model small
 ```
 
 ## `feed` — RSS / Atom / JSON Feed

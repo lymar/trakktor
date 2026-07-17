@@ -497,3 +497,26 @@ fn no_internal_doc_references_leak_into_user_facing_text() {
         }
     }
 }
+
+#[test]
+fn asr_start_conflicts_with_clip_timestamps() {
+    // `--start`/`--end` and `--clip-timestamps` set the same clips; clap
+    // reports the conflict as a usage error (exit 2) before any work.
+    let out = run(&[
+        "asr",
+        "whisper",
+        "audio.mp3",
+        "--start",
+        "1",
+        "--clip-timestamps",
+        "5",
+    ]);
+    assert_eq!(out.status.code(), Some(2));
+}
+
+#[test]
+fn asr_rejects_malformed_timecode() {
+    // A `--start` that is neither seconds nor a clock is a usage error.
+    let out = run(&["asr", "whisper", "audio.mp3", "--start", "1:2:3:4"]);
+    assert_eq!(out.status.code(), Some(2));
+}

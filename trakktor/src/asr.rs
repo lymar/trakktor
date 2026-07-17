@@ -11,6 +11,8 @@ use trakktor_core::asr::whisper::{
 
 use crate::{cli::WhisperArgs, error::CliError, output};
 
+mod writers;
+
 /// Runs one transcription end to end: resolve (and if needed download) the
 /// model, load it, decode the audio, transcribe, and print the result.
 pub(crate) fn run_whisper(
@@ -20,7 +22,7 @@ pub(crate) fn run_whisper(
     pretty: bool,
 ) -> Result<(), CliError> {
     let suppress_tokens = parse_suppress_tokens(&args.suppress_tokens)?;
-    let clip_timestamps = parse_clip_timestamps(&args.clip_timestamps)?;
+    let clip_timestamps = resolve_clip_timestamps(args)?;
     let temperature = temperature_schedule(
         args.temperature,
         args.temperature_increment_on_fallback.0,
@@ -39,7 +41,7 @@ pub(crate) fn run_whisper(
         crate::cli::DeviceArg::Metal => load_metal(&resolved.dir, precision)?,
     };
     eprintln!("decoding audio...");
-    let audio = whisper::BuiltinDecoder.decode(&args.audio)?;
+    let audio = decode_audio(args)?;
 
     let options = TranscribeOptions {
         temperature,
@@ -98,7 +100,38 @@ pub(crate) fn run_whisper(
         json,
         pretty,
     );
+
+    // Optionally persist the transcript to files; stdout above already carried
+    // the result, so the written paths are reported on stderr as diagnostics.
+    if let Some(format) = args.output_format {
+        let with_words =
+            matches!(args.timestamps, crate::cli::TimestampsArg::Word);
+        let paths = writers::write_outputs(
+            &transcription,
+            &args.model,
+            &args.audio,
+            format,
+            &args.output_dir,
+            with_words,
+        )?;
+        for path in &paths {
+            eprintln!("wrote {}", path.display());
+        }
+    }
     Ok(())
+}
+
+/// Decodes the input audio with the decoder selected by `--audio-decoder`.
+fn decode_audio(args: &WhisperArgs) -> Result<Vec<f32>, CliError> {
+    let audio = match args.audio_decoder {
+        crate::cli::AudioDecoderArg::Builtin => {
+            whisper::BuiltinDecoder.decode(&args.audio)?
+        },
+        crate::cli::AudioDecoderArg::Ffmpeg => {
+            whisper::FfmpegDecoder.decode(&args.audio)?
+        },
+    };
+    Ok(audio)
 }
 
 /// Loads the model on Metal (builds with the `metal` feature).
@@ -179,6 +212,29 @@ fn parse_clip_timestamps(csv: &str) -> Result<Vec<f32>, CliError> {
             ))
         })?;
         clips.push(seconds);
+    }
+    Ok(clips)
+}
+
+/// Resolves the clips to transcribe. `--start`/`--end` (mutually exclusive with
+/// `--clip-timestamps`) form a single clip; otherwise the raw
+/// `--clip-timestamps` list is used. A lone `--start` runs to the end of the
+/// audio; a lone `--end` runs from the beginning.
+fn resolve_clip_timestamps(args: &WhisperArgs) -> Result<Vec<f32>, CliError> {
+    if args.start.is_none() && args.end.is_none() {
+        return parse_clip_timestamps(&args.clip_timestamps);
+    }
+    let start = args.start.map_or(0.0, |t| t.0);
+    let mut clips = vec![start as f32];
+    if let Some(end) = args.end {
+        if end.0 <= start {
+            return Err(WhisperError::InvalidOptions(format!(
+                "--end ({}) must be greater than --start ({start})",
+                end.0
+            ))
+            .into());
+        }
+        clips.push(end.0 as f32);
     }
     Ok(clips)
 }

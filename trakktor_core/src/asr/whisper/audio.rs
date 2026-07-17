@@ -41,6 +41,64 @@ impl AudioDecoder for BuiltinDecoder {
     }
 }
 
+/// An [`AudioDecoder`] backed by an external `ffmpeg` process.
+///
+/// Runs the classic Whisper loading chain
+/// (`ffmpeg -nostdin -threads 0 -i <file> -f s16le -ac 1 -acodec pcm_s16le -ar
+/// 16000 -`) and reads the 16 kHz mono PCM it writes to stdout. It is opt-in:
+/// it requires `ffmpeg` on `PATH`, and in return decodes input formats the
+/// [`BuiltinDecoder`] does not (opus, wma, amr, and others). The built-in
+/// decoder remains the default and needs no external tools.
+#[derive(Debug, Clone, Default)]
+pub struct FfmpegDecoder;
+
+impl AudioDecoder for FfmpegDecoder {
+    fn decode(&self, path: &Path) -> Result<Vec<f32>, WhisperError> {
+        use std::process::{Command, Stdio};
+
+        let output = Command::new("ffmpeg")
+            .args(["-nostdin", "-threads", "0", "-i"])
+            .arg(path)
+            .args(["-f", "s16le", "-ac", "1", "-acodec", "pcm_s16le", "-ar"])
+            .arg(SAMPLE_RATE.to_string())
+            .arg("-")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|e| {
+                WhisperError::AudioDecode(format!(
+                    "could not run ffmpeg ({e}); is it installed and on PATH?"
+                ))
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let detail = stderr
+                .lines()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("")
+                .trim();
+            return Err(WhisperError::AudioDecode(format!(
+                "ffmpeg could not decode {}: {detail}",
+                path.display()
+            )));
+        }
+
+        // s16le little-endian PCM → f32 in `[-1, 1)`, matching the built-in
+        // decoder and the reference `load_audio`.
+        let bytes = output.stdout;
+        let samples = bytes
+            .chunks_exact(2)
+            .map(|pair| {
+                f32::from(i16::from_le_bytes([pair[0], pair[1]])) / 32768.0
+            })
+            .collect();
+        Ok(samples)
+    }
+}
+
 /// Right-pads with zeros or truncates `samples` to exactly `length`.
 ///
 /// Whisper works on fixed 30 s windows; shorter tails are zero-filled and

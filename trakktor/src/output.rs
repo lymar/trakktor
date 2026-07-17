@@ -36,28 +36,13 @@ pub fn print_transcription(
     pretty: bool,
 ) {
     if json {
-        let mut object = Map::new();
-        object.insert("text".into(), Value::String(transcription.text.clone()));
-        object.insert(
-            "language".into(),
-            Value::String(transcription.language.clone()),
+        let value = transcription_to_json(
+            transcription,
+            model,
+            timestamps != TimestampsArg::None,
+            timestamps == TimestampsArg::Word,
         );
-        insert_f64(&mut object, "duration", transcription.duration);
-        object.insert(
-            "engine".into(),
-            json!({ "name": "whisper", "model": model }),
-        );
-        if timestamps != TimestampsArg::None {
-            let segments = transcription
-                .segments
-                .iter()
-                .map(|segment| {
-                    segment_to_json(segment, timestamps == TimestampsArg::Word)
-                })
-                .collect();
-            object.insert("segments".into(), Value::Array(segments));
-        }
-        print_json(&Value::Object(object), pretty);
+        print_json(&value, pretty);
         return;
     }
 
@@ -73,6 +58,38 @@ pub fn print_transcription(
             collapse(segment.text.trim())
         );
     }
+}
+
+/// Builds the common ASR envelope as a JSON value: `text`, `language`,
+/// `duration`, `engine`, and — when `include_segments` — the `segments` array
+/// (each with the `whisper` diagnostics, and per-word timings when
+/// `with_words`). Shared by stdout printing and the `json` output file.
+pub fn transcription_to_json(
+    transcription: &Transcription,
+    model: &str,
+    include_segments: bool,
+    with_words: bool,
+) -> Value {
+    let mut object = Map::new();
+    object.insert("text".into(), Value::String(transcription.text.clone()));
+    object.insert(
+        "language".into(),
+        Value::String(transcription.language.clone()),
+    );
+    insert_f64(&mut object, "duration", transcription.duration);
+    object.insert(
+        "engine".into(),
+        json!({ "name": "whisper", "model": model }),
+    );
+    if include_segments {
+        let segments = transcription
+            .segments
+            .iter()
+            .map(|segment| segment_to_json(segment, with_words))
+            .collect();
+        object.insert("segments".into(), Value::Array(segments));
+    }
+    Value::Object(object)
 }
 
 /// One segment of the envelope: common fields, then the engine-specific

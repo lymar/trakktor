@@ -145,6 +145,19 @@ pub(crate) struct WhisperArgs {
     )]
     pub(crate) timestamps: TimestampsArg,
 
+    /// Also write the transcript to files in this format: txt (one line per
+    /// segment), vtt or srt (subtitles), tsv (start/end in milliseconds plus
+    /// text), json (the full result), or `all` for every format. Files are
+    /// named after the audio and written into `--output-dir`; stdout still
+    /// prints the result as usual.
+    #[arg(long, value_enum, value_name = "format")]
+    pub(crate) output_format: Option<OutputFormatArg>,
+
+    /// Directory for files written by `--output-format`, created if missing
+    /// (default: the current directory).
+    #[arg(long, default_value = ".", value_name = "dir")]
+    pub(crate) output_dir: PathBuf,
+
     /// Model: a published name, downloaded on first use, or a path to a
     /// checkpoint directory. Names: tiny, tiny.en, base, base.en, small,
     /// small.en, medium, medium.en, large-v1, large-v2, large-v3, large,
@@ -172,6 +185,18 @@ pub(crate) struct WhisperArgs {
         value_name = "precision"
     )]
     pub(crate) precision: PrecisionArg,
+
+    /// Audio decoder. `builtin` (the default) is pure Rust and needs no
+    /// external tools; `ffmpeg` shells out to an installed `ffmpeg` and adds
+    /// input formats the built-in decoder does not cover, such as opus, wma,
+    /// and amr.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = AudioDecoderArg::Builtin,
+        value_name = "decoder"
+    )]
+    pub(crate) audio_decoder: AudioDecoderArg,
 
     /// Transcribe in the source language, or translate into English.
     #[arg(
@@ -280,6 +305,19 @@ pub(crate) struct WhisperArgs {
     #[arg(long, default_value = "0", value_name = "csv")]
     pub(crate) clip_timestamps: String,
 
+    /// Start transcribing at this offset: seconds or a `[[HH:]MM:]SS[.mmm]`
+    /// clock (for example `90`, `1:30`, or `1:02:03.250`), to millisecond
+    /// precision. Used alone, it runs to the end of the audio. Cannot be
+    /// combined with `--clip-timestamps`.
+    #[arg(long, value_name = "time", conflicts_with = "clip_timestamps")]
+    pub(crate) start: Option<Timecode>,
+
+    /// Stop transcribing at this offset, in the same format as `--start`. Used
+    /// alone, it runs from the beginning. Cannot be combined with
+    /// `--clip-timestamps`.
+    #[arg(long, value_name = "time", conflicts_with = "clip_timestamps")]
+    pub(crate) end: Option<Timecode>,
+
     /// With `--timestamps word`: skip silent stretches longer than this many
     /// seconds when a probable hallucination is detected, or `none`.
     #[arg(long, default_value = "none", value_name = "float|none")]
@@ -341,6 +379,74 @@ impl TaskArg {
             },
             TaskArg::Translate => trakktor_core::asr::whisper::Task::Translate,
         }
+    }
+}
+
+/// The `--output-format` value of `asr whisper`: which transcript files to
+/// write.
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum OutputFormatArg {
+    /// Plain text: one line per segment.
+    Txt,
+    /// WebVTT subtitles.
+    Vtt,
+    /// SubRip (SRT) subtitles.
+    Srt,
+    /// Tab-separated values: start and end in milliseconds, then text.
+    Tsv,
+    /// The full JSON result (the same object printed to stdout).
+    Json,
+    /// Every format above, in one run.
+    All,
+}
+
+/// The `--audio-decoder` value of `asr whisper`.
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum AudioDecoderArg {
+    /// Built-in pure-Rust decoder (the default); no external tools.
+    Builtin,
+    /// An external `ffmpeg` process; supports more input formats.
+    Ffmpeg,
+}
+
+/// A clip boundary for `--start`/`--end`: a plain number of seconds (`90`,
+/// `92.5`) or a `[[HH:]MM:]SS[.mmm]` clock (`5:30`, `1:02:03.250`). Held as
+/// seconds; millisecond precision is preserved.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Timecode(pub(crate) f64);
+
+impl std::str::FromStr for Timecode {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, String> {
+        let value = value.trim();
+        let fields: Vec<&str> = value.split(':').collect();
+        if fields.len() > 3 {
+            return Err(format!(
+                "`{value}`: expected seconds or [[HH:]MM:]SS[.mmm]"
+            ));
+        }
+        let mut seconds = 0.0f64;
+        for (i, field) in fields.iter().enumerate() {
+            let parsed: f64 = field
+                .trim()
+                .parse()
+                .map_err(|_| format!("`{value}`: `{field}` is not a number"))?;
+            if parsed < 0.0 {
+                return Err(format!("`{value}` must be non-negative"));
+            }
+            // Only the last (seconds) field may be fractional; earlier fields
+            // are whole hours/minutes.
+            let is_last = i + 1 == fields.len();
+            if !is_last && parsed.fract() != 0.0 {
+                return Err(format!(
+                    "`{value}`: only the seconds field may be fractional"
+                ));
+            }
+            let unit = 60f64.powi((fields.len() - 1 - i) as i32);
+            seconds += parsed * unit;
+        }
+        Ok(Timecode(seconds))
     }
 }
 

@@ -64,6 +64,7 @@ fn asr_code(err: &WhisperError) -> &'static str {
             "model_unavailable"
         },
         WhisperError::InvalidOptions(_) => "invalid_options",
+        WhisperError::Io(_) => "io_error",
     }
 }
 
