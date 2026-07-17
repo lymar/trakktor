@@ -12,11 +12,7 @@ use trakktor_core::asr::{
     },
 };
 
-use crate::{
-    cli::{VadModeArg, WhisperArgs},
-    error::CliError,
-    output,
-};
+use crate::{cli::WhisperArgs, error::CliError, output};
 
 mod writers;
 
@@ -75,7 +71,7 @@ pub(crate) fn run_whisper(
         None
     };
 
-    let mut options = TranscribeOptions {
+    let options = TranscribeOptions {
         temperature,
         compression_ratio_threshold: args
             .compression_ratio_threshold
@@ -107,22 +103,14 @@ pub(crate) fn run_whisper(
             .map(<[(usize, usize)]>::to_vec),
     };
 
-    // Pick the transcription input per VAD mode: `collapse` builds a dense
-    // speech buffer (transcribed whole, then mapped back); `fragments` feeds
-    // the speech spans as clips over the original audio.
+    // With VAD, collapse the detected speech into a dense buffer, transcribed
+    // whole and then mapped back to the original timeline.
     let collapsed = match &vad_speech {
-        Some(speech)
-            if args.vad_mode == VadModeArg::Collapse && !speech.is_empty() =>
-        {
+        Some(speech) if !speech.is_empty() => {
             Some(vad::collapse::collapse(&audio, speech))
         },
         _ => None,
     };
-    if let Some(speech) = &vad_speech {
-        if args.vad_mode == VadModeArg::Fragments {
-            options.clip_timestamps = clips_from_speech(speech);
-        }
-    }
     // VAD that found nothing means an empty result — never a whole-file run.
     let no_speech = matches!(&vad_speech, Some(speech) if speech.is_empty());
     let buffer: &[f32] = collapsed
@@ -134,11 +122,11 @@ pub(crate) fn run_whisper(
         empty_transcription(&audio, options.language.clone())
     } else {
         let mut report = transcribe_progress(started);
-        // In collapse mode the loop runs on the dense speech buffer, so its
-        // progress is in buffer time against the speech duration. Map the
+        // With VAD the loop runs on the dense speech buffer, so its progress is
+        // in buffer time against the (shorter) speech duration. Map the
         // position back to the original timeline and report against the
         // original duration, so the length shown is the file's, not the
-        // (shorter) speech's. Other modes pass through unchanged.
+        // speech's. Without VAD the position passes through unchanged.
         let mut progress = |p: whisper::TranscribeProgress| match &collapsed {
             Some(collapsed) => report(whisper::TranscribeProgress {
                 processed_seconds: collapsed.mapping.map(p.processed_seconds),
@@ -153,7 +141,7 @@ pub(crate) fn run_whisper(
             &mut progress,
         )?
     };
-    // Collapse: map the buffer-timeline timestamps back to the original.
+    // With VAD, map the buffer-timeline timestamps back to the original.
     if let Some(collapsed) = &collapsed {
         remap_transcription(&mut transcription, &collapsed.mapping);
         transcription.duration = collapsed.duration;
@@ -252,28 +240,8 @@ fn intersect_speech(
         .collect()
 }
 
-/// Flattens speech segments into `clip_timestamps` second pairs, coalescing
-/// touching or overlapping spans so a burst of speech is one clip, not many
-/// padded windows.
-fn clips_from_speech(speech: &[SpeechSegment]) -> Vec<f32> {
-    let mut clips: Vec<f32> = Vec::with_capacity(speech.len() * 2);
-    for segment in speech {
-        let start = segment.start as f32;
-        let end = segment.end as f32;
-        if let Some(prev_end) = clips.last_mut() {
-            if start <= *prev_end {
-                *prev_end = prev_end.max(end);
-                continue;
-            }
-        }
-        clips.push(start);
-        clips.push(end);
-    }
-    clips
-}
-
-/// Maps every segment and word timestamp of a collapse-mode transcription back
-/// to the original timeline.
+/// Maps every segment and word timestamp of a collapse transcription back to
+/// the original timeline.
 fn remap_transcription(
     transcription: &mut whisper::Transcription,
     mapping: &vad::TimeMapping,

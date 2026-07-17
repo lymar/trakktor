@@ -10,10 +10,9 @@
 //! The stage is a faithful port of the original Silero-VAD v5: the [`model`]
 //! reproduces the network op for op, and [`segment`] reproduces the canonical
 //! `get_speech_timestamps` state machine. The model is tiny and runs on the
-//! CPU. Two ways to feed the detected speech into an engine are provided; the
-//! reusable half (building a dense speech buffer with a time map) lives in
-//! [`collapse`], the other (feeding speech spans as clip ranges) is a plain
-//! list of segments the caller passes on.
+//! CPU. The detected speech is fed into an engine by collapsing it into a dense
+//! speech buffer with a time map back to the original timeline; that reusable
+//! half lives in [`collapse`].
 //!
 //! The module depends only on candle and the standard library, with no ties to
 //! any particular engine.

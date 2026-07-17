@@ -67,7 +67,10 @@ fn stub_has_strict_frontmatter_and_points_at_the_binary() {
     assert!(stub.contains("name: trakktor\n"));
     assert!(stub.contains("allowed-tools: Bash(trakktor:*)\n"));
     // Description is the curated trigger line, NOT the root `about`.
-    assert!(stub.contains("description: \"Use trakktor from the command line"));
+    assert!(stub.contains(
+        "description: \"Use trakktor, a predictable, automation-friendly CLI \
+         toolbox"
+    ));
     assert!(!stub.contains("feeds and more.")); // sample()'s `about`
     // Body is a pointer, not a reference dump.
     assert!(stub.contains("trakktor skill show"));
@@ -80,7 +83,9 @@ fn stub_description_is_a_bounded_trigger_line() {
     let desc = stub_description(&sample());
     // What it does + when to use it — the field an agent matches on.
     assert!(
-        desc.starts_with("Use trakktor from the command line"),
+        desc.starts_with(
+            "Use trakktor, a predictable, automation-friendly CLI toolbox"
+        ),
         "got: {desc:?}"
     );
     // The trigger line must name each capability so an agent discovers the

@@ -323,18 +323,15 @@ fn run_transcription<P: ForwardProvider>(
         .collect();
 
     // Determine the language: given, forced for English-only models, or
-    // detected on the first window of the first clip. Detecting at the clip
-    // start rather than a hard frame 0 matters when the file opens with
-    // non-speech that a VAD clip skips; with no clips the first clip starts at
-    // 0, so this is unchanged for whole-file transcription.
+    // detected on the first 30 s window of the audio (frame 0), as in the
+    // reference.
     let language: String = match &options.language {
         Some(language) => language.clone(),
         None if !multilingual => "en".to_string(),
         None => {
             let detection_tokenizer =
                 Tokenizer::new(true, num_languages, None, None)?;
-            let features =
-                provider.encode(&mel.window(seek_clips[0].0, N_FRAMES))?;
+            let features = provider.encode(&mel.window(0, N_FRAMES))?;
             let (code, _) = decoding::detect_language(
                 provider,
                 &detection_tokenizer,

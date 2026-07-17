@@ -1,7 +1,7 @@
 //! Building a dense speech-only buffer and the map back to the original time.
 //!
-//! For the `collapse` integration mode: the speech segments are concatenated
-//! into one short buffer (with a short silence between them, as in
+//! This is how detected speech reaches the engine: the speech segments are
+//! concatenated into one short buffer (with a short silence between them, as in
 //! whisper.cpp), the engine transcribes that, and the resulting timestamps are
 //! mapped back to the original timeline. Because the port builds the buffer
 //! itself, every region maps 1:1 (slope 1), so the map is a single
@@ -18,7 +18,7 @@ mod tests;
 use super::{SAMPLE_RATE, segment::SpeechSegment};
 
 /// Silence inserted between glued speech regions, milliseconds. Matches
-/// whisper.cpp: a pause cue so adjacent fragments do not run together.
+/// whisper.cpp: a pause cue so adjacent speech spans do not run together.
 const SILENCE_MS: usize = 100;
 
 /// One collapsed region: a span in the processed buffer that maps 1:1 back to

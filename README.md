@@ -1,9 +1,8 @@
 # trakktor
 
-`trakktor` is a Rust command-line utility that exposes helper functions for
-coding agents (Claude Code, OpenCode, etc.). It is built to be **predictable and
-automation-friendly**: stable commands and flags, machine-readable output, and
-meaningful exit codes.
+`trakktor` is a predictable, automation-friendly Rust CLI toolbox for coding
+agents (Claude Code, OpenCode, etc.): speech-to-text, feeds, and more —
+machine-readable output, stable flags, and meaningful exit codes.
 
 ## Install
 
@@ -215,17 +214,9 @@ transcription itself.
 trakktor asr whisper interview.mp3 --vad
 ```
 
-Two modes control how the detected speech reaches the model:
-
-```
---vad-mode collapse|fragments   # default: collapse
-```
-
-- `collapse` (default) — the speech is glued into one dense buffer, transcribed
-  in a single pass, then the timestamps are mapped back. It packs speech tightly
-  and is markedly faster on fragmented speech.
-- `fragments` — each speech span is transcribed where it is and the silence
-  between spans is skipped; timestamps stay native on the original timeline.
+The detected speech is glued into one dense buffer, transcribed in a single
+pass, and the timestamps are then mapped back to the original timeline — so the
+output stays on the source clock while non-speech is never sent to the model.
 
 Detection is tunable (shown with the reference defaults):
 
@@ -362,9 +353,9 @@ the complete list with defaults and exact value formats. In brief:
 - **Partial audio** — `--clip-timestamps` to transcribe only selected
   `start,end` second ranges. For a single range, the `--start`/`--end` flags
   above are usually easier.
-- **Voice-activity detection** — `--vad` (with `--vad-mode` and the `--vad-*`
-  tuning flags) detects speech and skips non-speech before transcribing; see
-  the VAD section above.
+- **Voice-activity detection** — `--vad` (with the `--vad-*` tuning flags)
+  detects speech and skips non-speech before transcribing; see the VAD section
+  above.
 
 ### Examples
 

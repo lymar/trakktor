@@ -24,11 +24,11 @@ const DEFAULT_WORK_DIR: &str = ".trakktor";
 /// split by location (the home directory vs the current project).
 const DEFAULT_MODEL_DIR_NAME: &str = ".trakktor";
 
-/// Helper commands for coding agents: predictable, machine-readable building
-/// blocks (web feeds and speech-to-text today, more later) that an agent runs
-/// as a tool. Use trakktor when a task needs one of these helpers — for
-/// example, fetching the unread items of a feed, or transcribing an audio file
-/// to timestamped text.
+/// A predictable, automation-friendly CLI toolbox for coding agents (Claude
+/// Code, OpenCode, etc.): speech-to-text, feeds, and more — machine-readable
+/// output, stable flags, and meaningful exit codes. Reach for it when a task
+/// needs one of these helpers, such as fetching a feed's unread items or
+/// transcribing an audio file to timestamped text.
 ///
 /// Output is JSON by default (`--pretty` indents it); pass `--text` for
 /// human-readable text. Results go to stdout, errors to stderr. Exit codes are
@@ -361,19 +361,6 @@ pub(crate) struct WhisperArgs {
     #[arg(long, conflicts_with = "clip_timestamps")]
     pub(crate) vad: bool,
 
-    /// How VAD feeds speech to the model: `collapse` (the default) glues the
-    /// speech into a dense buffer and maps the timestamps back — faster and
-    /// denser; `fragments` keeps each speech span at its original position,
-    /// with the silence skipped and timestamps left native. Only used with
-    /// `--vad`.
-    #[arg(
-        long,
-        value_enum,
-        default_value_t = VadModeArg::Collapse,
-        value_name = "mode"
-    )]
-    pub(crate) vad_mode: VadModeArg,
-
     /// VAD speech-probability threshold in 0..=1; higher detects less speech.
     #[arg(long, default_value_t = 0.5, value_name = "float")]
     pub(crate) vad_threshold: f32,
@@ -481,18 +468,6 @@ pub(crate) enum AudioDecoderArg {
     Builtin,
     /// An external `ffmpeg` process; supports more input formats.
     Ffmpeg,
-}
-
-/// The `--vad-mode` value of `asr whisper`: how detected speech reaches the
-/// model.
-#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub(crate) enum VadModeArg {
-    /// Speech spans stay at their original positions as clip ranges; silence
-    /// between them is skipped.
-    Fragments,
-    /// Speech is glued into a dense buffer and the timestamps are mapped back
-    /// (the default).
-    Collapse,
 }
 
 /// A clip boundary for `--start`/`--end`: a plain number of seconds (`90`,

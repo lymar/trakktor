@@ -22,17 +22,17 @@ const DESCRIPTION_MAX: usize = 1024;
 /// gains or changes capabilities — it is not generated from the command tree,
 /// so a new feature does not reach skill discovery on its own.
 const STUB_DESCRIPTION: &str =
-    "Use {name} from the command line for coding-agent helper tasks over web \
-     feeds and audio. Feeds: discover the RSS/Atom/JSON feeds a page \
-     declares, read a feed's latest entries as structured JSON, and track \
-     which entries have already been seen. Speech: transcribe (or translate \
-     to English) an audio file with a local Whisper model, returning the text \
-     with word- or segment-level timestamps, optionally using voice-activity \
-     detection to skip silence, music, and noise. Reach for it whenever a \
-     task involves an RSS/Atom/JSON feed, a blog or news feed URL, \
-     subscribing to or polling a site for new posts, catching up on what is \
-     new since last time, or turning speech from an audio file (mp3, wav, \
-     m4a, flac, and more) into a transcript or captions.";
+    "Use {name}, a predictable, automation-friendly CLI toolbox for coding \
+     agents, for helper tasks over web feeds and audio. Feeds: discover the \
+     RSS/Atom/JSON feeds a page declares, read a feed's latest entries as \
+     structured JSON, and track which entries have already been seen. Speech: \
+     transcribe (or translate to English) an audio file with a local Whisper \
+     model, returning the text with word- or segment-level timestamps, \
+     optionally using voice-activity detection to skip silence, music, and \
+     noise. Reach for it whenever a task involves an RSS/Atom/JSON feed, a \
+     blog or news feed URL, subscribing to or polling a site for new posts, \
+     catching up on what is new since last time, or turning speech from an \
+     audio file (mp3, wav, m4a, flac, and more) into a transcript or captions.";
 
 /// Renders the agent-facing guide (`trakktor skill show`).
 ///
