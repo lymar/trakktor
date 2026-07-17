@@ -82,6 +82,15 @@ published separately). Rationale: `../trakktor_project/docs/adr/0002-cargo-works
   `--help`, and confirm nothing internal leaked. The test
   `no_internal_doc_references_leak_into_user_facing_text` enforces this; see
   `conventions/cli.md`.
+- Some agent- and user-facing surfaces are **hand-written, not generated** from
+  the command tree, so a new feature does not reach them on its own — update
+  them **in the same change** whenever trakktor gains or changes a capability:
+  the **`README`**, and the **skill's discovery `description`** (the trigger
+  line an agent matches to decide whether to load the skill — the
+  `STUB_DESCRIPTION` constant in `trakktor_core/src/skill/render.rs`, plus the
+  top-level `about` that opens the narrative guide). The generated `skill show
+  --full` reference lists a new command automatically, but it does **not** make
+  the skill discoverable for it — that is what the trigger `description` is for.
 
 ## Rust module and test layout
 

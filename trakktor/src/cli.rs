@@ -19,9 +19,10 @@ use crate::{error::CliError, output};
 const DEFAULT_WORK_DIR: &str = ".trakktor";
 
 /// Helper commands for coding agents: predictable, machine-readable building
-/// blocks (RSS/Atom/JSON feeds today, more later) that an agent runs as a
-/// tool. Use trakktor when a task needs one of these helpers — for example,
-/// fetching and tracking the unread items of a feed.
+/// blocks (web feeds and speech-to-text today, more later) that an agent runs
+/// as a tool. Use trakktor when a task needs one of these helpers — for
+/// example, fetching the unread items of a feed, or transcribing an audio file
+/// to timestamped text.
 ///
 /// Output is JSON by default (`--pretty` indents it); pass `--text` for
 /// human-readable text. Results go to stdout, errors to stderr. Exit codes are
