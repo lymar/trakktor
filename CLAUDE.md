@@ -7,6 +7,21 @@ coding agents (Claude Code, OpenCode, etc.): RSS/Atom/JSON feeds, speech
 (ASR/TTS), OCR, file/document conversion, and more. This repository holds the
 **implementation**.
 
+## Committing: NEVER commit or push unprompted
+
+**Never run `git commit` or `git push` on your own initiative.** Commit or push
+**only** when the user explicitly asks for it **in that same request** ("commit
+this", "commit and push", etc.). This is a hard rule, in this repo and the docs
+repo.
+
+- An earlier commit in the session grants **no** standing permission for later
+  ones. Each commit requires its own fresh, explicit request — even if you just
+  committed something a moment ago.
+- Finishing a task, green tests, or "the change looks done" is **not** a reason
+  to commit. Leave the work in the working tree, report what changed, and let
+  the user decide when (and whether) to commit.
+- When in doubt, do not commit — stop and ask.
+
 ## Source of truth: the design docs
 
 The project's design, specifications, and decisions live in a **separate
