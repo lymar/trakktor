@@ -6,8 +6,9 @@
 # Local scratch and sample media (developer-local, not part of the project)
 /tmp/
 
-# trakktor working directory: local state (downloaded models, caches, feed
-# read-state). Created at runtime, never part of the project.
+# trakktor working directory: per-project local state (feed read-state).
+# Created at runtime, never part of the project. Model weights live under the
+# model directory (~/.trakktor by default), outside the project tree.
 .trakktor/
 
 # Claude Code runtime artifacts (the scheduled-tasks lock is per-process state,

@@ -81,7 +81,10 @@ switches to human-readable text. Data is written to stdout, errors to stderr.
   argument parser.
 
 Global options (usable before or after the command): `--work-dir <path>` (also
-`TRAKKTOR_DIR`; default `./.trakktor`), `--text`, `--pretty`.
+`TRAKKTOR_DIR`; default `./.trakktor`, per-project state such as feed
+read-state), `--model-dir <path>` (also `TRAKKTOR_MODEL_DIR`; default
+`~/.trakktor`, where model weights are cached — see `asr`), `--text`,
+`--pretty`.
 
 ## `asr` — speech recognition
 
@@ -112,10 +115,17 @@ decoding behavior.
 --model <name|dir>      # default: tiny
 ```
 
-Pass a **published name** — downloaded on first use into
-`<work-dir>/asr/whisper/<name>/` and reused on later runs — or a **path** to a
-local checkpoint directory (one containing `config.json`). First-run download
-progress is printed to stderr.
+Pass a **published name** — downloaded on first use into the model directory
+(`~/.trakktor/asr/whisper/<name>/` by default) and reused on later runs — or a
+**path** to a local checkpoint directory (one containing `config.json`).
+First-run download progress is printed to stderr.
+
+Model weights are large and **shared across projects**: they live under the
+**model directory** — `~/.trakktor` by default — *not* in the per-project
+`--work-dir`. Override it with `--model-dir <path>` or `TRAKKTOR_MODEL_DIR`
+(precedence: flag > env > `~/.trakktor`). To reuse weights already downloaded
+elsewhere, point it at that root — e.g. `TRAKKTOR_MODEL_DIR=/data/models` looks
+for `/data/models/asr/whisper/<name>/`.
 
 Names, smallest to largest (larger is slower but more accurate):
 

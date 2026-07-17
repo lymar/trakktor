@@ -51,7 +51,7 @@ pub struct ResolvedModel {
 }
 
 /// Resolves `model` to a checkpoint directory, downloading a named model
-/// into `<work_dir>/asr/whisper/<name>/` on first use.
+/// into `<models_dir>/asr/whisper/<name>/` on first use.
 ///
 /// `progress` is called as the download advances with
 /// `(file name, bytes done, bytes total when known)`.
@@ -61,7 +61,7 @@ pub struct ResolvedModel {
 /// Returns [`WhisperError::InvalidModel`] for an unknown name and
 /// [`WhisperError::ModelDownload`] when fetching the checkpoint fails.
 pub fn resolve_model(
-    work_dir: &Path,
+    models_dir: &Path,
     model: &str,
     progress: &mut dyn FnMut(&str, u64, Option<u64>),
 ) -> Result<ResolvedModel, WhisperError> {
@@ -87,7 +87,7 @@ pub fn resolve_model(
         )));
     };
 
-    let dir = work_dir.join("asr").join("whisper").join(name);
+    let dir = models_dir.join("asr").join("whisper").join(name);
     if CHECKPOINT_FILES.iter().all(|file| dir.join(file).is_file()) {
         return Ok(ResolvedModel {
             dir,

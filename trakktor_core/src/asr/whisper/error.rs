@@ -42,4 +42,14 @@ pub enum WhisperError {
     /// Writing a requested output file failed (`io_error`).
     #[error("failed to write output file: {0}")]
     Io(String),
+
+    /// The home directory could not be determined (`no_home_dir`).
+    ///
+    /// Raised when the default model directory (`~/.trakktor`) is needed but no
+    /// home directory is known.
+    #[error(
+        "could not determine the home directory; set --model-dir or \
+         TRAKKTOR_MODEL_DIR"
+    )]
+    HomeDirUnknown,
 }

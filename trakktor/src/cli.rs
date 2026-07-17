@@ -10,13 +10,19 @@ use std::path::PathBuf;
 use clap::{
     Args, CommandFactory, Parser, Subcommand, ValueEnum, error::ErrorKind,
 };
-use trakktor_core::{feed, skill::Target};
+use trakktor_core::{asr::whisper::WhisperError, feed, skill::Target};
 
 use crate::{error::CliError, output};
 
 /// Default working directory when neither `--work-dir` nor `TRAKKTOR_DIR` is
 /// set.
 const DEFAULT_WORK_DIR: &str = ".trakktor";
+
+/// Home-relative default for the model directory (`~/.trakktor`), used when
+/// neither `--model-dir` nor `TRAKKTOR_MODEL_DIR` is set. It shares the
+/// basename with the working directory by design — both hold trakktor's data,
+/// split by location (the home directory vs the current project).
+const DEFAULT_MODEL_DIR_NAME: &str = ".trakktor";
 
 /// Helper commands for coding agents: predictable, machine-readable building
 /// blocks (web feeds and speech-to-text today, more later) that an agent runs
@@ -45,9 +51,21 @@ pub struct Cli {
 /// Options that apply to every command.
 #[derive(Args)]
 struct GlobalOpts {
-    /// Working directory for local state (default: ./.trakktor).
+    /// Working directory for per-project local state such as feed read-state
+    /// (default: ./.trakktor). Model weights live under `--model-dir` instead.
     #[arg(long, global = true, env = "TRAKKTOR_DIR", value_name = "path")]
     work_dir: Option<PathBuf>,
+
+    /// Directory for downloaded model weights (default: ~/.trakktor), shared
+    /// across projects rather than kept in the working directory. Also set by
+    /// TRAKKTOR_MODEL_DIR.
+    #[arg(
+        long,
+        global = true,
+        env = "TRAKKTOR_MODEL_DIR",
+        value_name = "path"
+    )]
+    model_dir: Option<PathBuf>,
 
     /// Print human-readable text instead of the default JSON.
     #[arg(long, global = true)]
@@ -65,6 +83,18 @@ impl GlobalOpts {
         self.work_dir
             .clone()
             .unwrap_or_else(|| PathBuf::from(DEFAULT_WORK_DIR))
+    }
+
+    /// Resolves the model directory: `--model-dir` > `TRAKKTOR_MODEL_DIR` >
+    /// `~/.trakktor`. Only ASR uses it, so a missing home directory is an error
+    /// (`no_home_dir`) rather than a silent fallback — feed never calls this.
+    fn model_dir(&self) -> Result<PathBuf, WhisperError> {
+        if let Some(dir) = &self.model_dir {
+            return Ok(dir.clone());
+        }
+        std::env::home_dir()
+            .map(|home| home.join(DEFAULT_MODEL_DIR_NAME))
+            .ok_or(WhisperError::HomeDirUnknown)
     }
 
     /// Whether to emit JSON. JSON is the default; `--text` opts out.
@@ -119,8 +149,8 @@ pub(crate) enum AsrCommand {
     /// vorbis, flac, alac, and pcm audio in wav/aiff/caf/ogg/mp4/mkv
     /// containers — and transcribed window by window with a fallback policy
     /// that guards against repetition loops. The first use of a model
-    /// downloads its checkpoint into the working directory; later runs
-    /// reuse it.
+    /// downloads its checkpoint into the model directory (~/.trakktor by
+    /// default; see --model-dir), and later runs reuse it.
     Whisper(WhisperArgs),
 }
 
@@ -598,7 +628,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
         Command::Asr { command } => match command {
             AsrCommand::Whisper(args) => crate::asr::run_whisper(
                 args,
-                &global.work_dir(),
+                &global.model_dir()?,
                 global.json(),
                 global.pretty,
             ),

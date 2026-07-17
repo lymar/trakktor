@@ -17,7 +17,7 @@ mod writers;
 /// model, load it, decode the audio, transcribe, and print the result.
 pub(crate) fn run_whisper(
     args: &WhisperArgs,
-    work_dir: &Path,
+    model_dir: &Path,
     json: bool,
     pretty: bool,
 ) -> Result<(), CliError> {
@@ -29,7 +29,7 @@ pub(crate) fn run_whisper(
     );
 
     let resolved = whisper::resolve_model(
-        work_dir,
+        model_dir,
         &args.model,
         &mut download_progress(),
     )?;

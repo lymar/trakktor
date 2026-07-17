@@ -65,6 +65,7 @@ fn asr_code(err: &WhisperError) -> &'static str {
         },
         WhisperError::InvalidOptions(_) => "invalid_options",
         WhisperError::Io(_) => "io_error",
+        WhisperError::HomeDirUnknown => "no_home_dir",
     }
 }
 
