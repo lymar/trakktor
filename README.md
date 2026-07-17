@@ -205,6 +205,49 @@ trakktor asr whisper talk.mp3 --end 1:02:03.250         # from the start to 1:02
 They are a convenience over `--clip-timestamps` and cannot be combined with it;
 use `--clip-timestamps` directly to transcribe several ranges at once.
 
+### Voice-activity detection (VAD)
+
+`--vad` runs Silero voice-activity detection first and transcribes only the
+speech, dropping silence, music, and noise. It is the direct remedy for
+Whisper's tendency to hallucinate and loop over long non-speech stretches, and
+it is faster on sparse audio. Off by default; the model is built in (nothing to
+download) and runs on the CPU, so `--device metal` still accelerates the
+transcription itself.
+
+```sh
+trakktor asr whisper interview.mp3 --vad
+```
+
+Two modes control how the detected speech reaches the model:
+
+```
+--vad-mode collapse|fragments   # default: collapse
+```
+
+- `collapse` (default) — the speech is glued into one dense buffer, transcribed
+  in a single pass, then the timestamps are mapped back. It packs speech tightly
+  and is markedly faster on fragmented speech.
+- `fragments` — each speech span is transcribed where it is and the silence
+  between spans is skipped; timestamps stay native on the original timeline.
+
+Detection is tunable (shown with the reference defaults):
+
+```
+--vad-threshold 0.5                 # speech-probability cutoff (0..=1)
+--vad-min-speech-duration-ms 250    # drop shorter detections
+--vad-min-silence-duration-ms 100   # a shorter pause won't split a segment
+--vad-speech-pad-ms 30              # padding kept around each speech span
+--vad-max-speech-duration-s none    # force-split longer speech (none = never)
+```
+
+`--vad` combines with `--start`/`--end` (detect speech within that range) but
+not with `--clip-timestamps`. When VAD is active the JSON result gains a
+top-level `vad` block listing the detected speech spans (original timeline):
+
+```json
+"vad": { "speech": [ { "start": 0.48, "end": 12.3 } ] }
+```
+
 ### Timestamps and output shape
 
 ```
@@ -322,6 +365,9 @@ the complete list with defaults and exact value formats. In brief:
 - **Partial audio** — `--clip-timestamps` to transcribe only selected
   `start,end` second ranges. For a single range, the `--start`/`--end` flags
   above are usually easier.
+- **Voice-activity detection** — `--vad` (with `--vad-mode` and the `--vad-*`
+  tuning flags) detects speech and skips non-speech before transcribing; see
+  the VAD section above.
 
 ### Examples
 

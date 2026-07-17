@@ -299,34 +299,9 @@ fn run_transcription<P: ForwardProvider>(
     let content_duration =
         content_frames as f64 * HOP_LENGTH as f64 / SAMPLE_RATE as f64;
 
-    // Determine the language: given, forced for English-only models, or
-    // detected on the first window.
-    let language: String = match &options.language {
-        Some(language) => language.clone(),
-        None if !multilingual => "en".to_string(),
-        None => {
-            let detection_tokenizer =
-                Tokenizer::new(true, num_languages, None, None)?;
-            let features = provider.encode(&mel.window(0, mel.n_frames()))?;
-            let (code, _) = decoding::detect_language(
-                provider,
-                &detection_tokenizer,
-                &features,
-            )?;
-            code.to_string()
-        },
-    };
-    let tokenizer = Tokenizer::new(
-        multilingual,
-        num_languages,
-        Some(&language),
-        Some(options.task),
-    )?;
-
     // Clips: second pairs to frame ranges; the last end defaults to the end
-    // of the content.
-    // Ends are capped at the audio length so a clip can never point past
-    // the content.
+    // of the content. Ends are capped at the audio length so a clip can never
+    // point past the content.
     let mut seek_points: Vec<usize> = options
         .clip_timestamps
         .iter()
@@ -346,6 +321,34 @@ fn run_transcription<P: ForwardProvider>(
         .chunks_exact(2)
         .map(|pair| (pair[0], pair[1]))
         .collect();
+
+    // Determine the language: given, forced for English-only models, or
+    // detected on the first window of the first clip. Detecting at the clip
+    // start rather than a hard frame 0 matters when the file opens with
+    // non-speech that a VAD clip skips; with no clips the first clip starts at
+    // 0, so this is unchanged for whole-file transcription.
+    let language: String = match &options.language {
+        Some(language) => language.clone(),
+        None if !multilingual => "en".to_string(),
+        None => {
+            let detection_tokenizer =
+                Tokenizer::new(true, num_languages, None, None)?;
+            let features =
+                provider.encode(&mel.window(seek_clips[0].0, N_FRAMES))?;
+            let (code, _) = decoding::detect_language(
+                provider,
+                &detection_tokenizer,
+                &features,
+            )?;
+            code.to_string()
+        },
+    };
+    let tokenizer = Tokenizer::new(
+        multilingual,
+        num_languages,
+        Some(&language),
+        Some(options.task),
+    )?;
 
     // Mel frames per output token (2) and seconds per token (0.02).
     assert_eq!(

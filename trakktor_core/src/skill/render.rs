@@ -27,11 +27,12 @@ const STUB_DESCRIPTION: &str =
      declares, read a feed's latest entries as structured JSON, and track \
      which entries have already been seen. Speech: transcribe (or translate \
      to English) an audio file with a local Whisper model, returning the text \
-     with word- or segment-level timestamps. Reach for it whenever a task \
-     involves an RSS/Atom/JSON feed, a blog or news feed URL, subscribing to \
-     or polling a site for new posts, catching up on what is new since last \
-     time, or turning speech from an audio file (mp3, wav, m4a, flac, and \
-     more) into a transcript or captions.";
+     with word- or segment-level timestamps, optionally using voice-activity \
+     detection to skip silence, music, and noise. Reach for it whenever a \
+     task involves an RSS/Atom/JSON feed, a blog or news feed URL, \
+     subscribing to or polling a site for new posts, catching up on what is \
+     new since last time, or turning speech from an audio file (mp3, wav, \
+     m4a, flac, and more) into a transcript or captions.";
 
 /// Renders the agent-facing guide (`trakktor skill show`).
 ///

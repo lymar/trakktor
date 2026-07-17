@@ -8,13 +8,17 @@ rust-version.workspace = true
 license.workspace = true
 
 [features]
-default = ["whisper-runtime", "audio"]
+default = ["whisper-runtime", "audio", "vad"]
 # Built-in audio decoding (symphonia) and the sample-rate/channel conversion
 # pipeline. Off the default set the crate builds without media support.
 audio = ["dep:symphonia"]
 # The candle-backed Whisper runtime. Off the default set this crate builds
 # without the ML stack (feeds/skill only).
 whisper-runtime = ["dep:candle-core", "dep:candle-nn", "dep:serde_json"]
+# Silero voice-activity detection: an engine-independent speech-preprocessing
+# stage over ASR. Needs candle (the model runs on the CPU). Off the default set
+# the crate builds without VAD.
+vad = ["dep:candle-core", "dep:candle-nn"]
 # GPU acceleration for the Whisper runtime.
 whisper-metal = ["whisper-runtime", "candle-core/metal", "candle-nn/metal"]
 whisper-cuda = ["whisper-runtime", "candle-core/cuda", "candle-nn/cuda"]

@@ -352,6 +352,50 @@ pub(crate) struct WhisperArgs {
     /// seconds when a probable hallucination is detected, or `none`.
     #[arg(long, default_value = "none", value_name = "float|none")]
     pub(crate) hallucination_silence_threshold: OrNone<f64>,
+
+    /// Detect speech with Silero voice-activity detection and drop non-speech
+    /// (silence, music, noise) before transcribing — fewer repetition loops
+    /// and faster on sparse audio. Off by default. Cannot be combined with
+    /// `--clip-timestamps`; combined with `--start`/`--end` it detects speech
+    /// within that range.
+    #[arg(long, conflicts_with = "clip_timestamps")]
+    pub(crate) vad: bool,
+
+    /// How VAD feeds speech to the model: `collapse` (the default) glues the
+    /// speech into a dense buffer and maps the timestamps back — faster and
+    /// denser; `fragments` keeps each speech span at its original position,
+    /// with the silence skipped and timestamps left native. Only used with
+    /// `--vad`.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = VadModeArg::Collapse,
+        value_name = "mode"
+    )]
+    pub(crate) vad_mode: VadModeArg,
+
+    /// VAD speech-probability threshold in 0..=1; higher detects less speech.
+    #[arg(long, default_value_t = 0.5, value_name = "float")]
+    pub(crate) vad_threshold: f32,
+
+    /// VAD: drop detected speech shorter than this many milliseconds.
+    #[arg(long, default_value_t = 250, value_name = "ms")]
+    pub(crate) vad_min_speech_duration_ms: u32,
+
+    /// VAD: a silence shorter than this many milliseconds does not split a
+    /// speech segment — brief pauses are bridged.
+    #[arg(long, default_value_t = 100, value_name = "ms")]
+    pub(crate) vad_min_silence_duration_ms: u32,
+
+    /// VAD: padding added to each side of a detected speech segment, in
+    /// milliseconds.
+    #[arg(long, default_value_t = 30, value_name = "ms")]
+    pub(crate) vad_speech_pad_ms: u32,
+
+    /// VAD: force-split speech longer than this many seconds, or `none` to
+    /// never split.
+    #[arg(long, default_value = "none", value_name = "float|none")]
+    pub(crate) vad_max_speech_duration_s: OrNone<f64>,
 }
 
 /// The `--timestamps` granularity of `asr` output.
@@ -437,6 +481,18 @@ pub(crate) enum AudioDecoderArg {
     Builtin,
     /// An external `ffmpeg` process; supports more input formats.
     Ffmpeg,
+}
+
+/// The `--vad-mode` value of `asr whisper`: how detected speech reaches the
+/// model.
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum VadModeArg {
+    /// Speech spans stay at their original positions as clip ranges; silence
+    /// between them is skipped.
+    Fragments,
+    /// Speech is glued into a dense buffer and the timestamps are mapped back
+    /// (the default).
+    Collapse,
 }
 
 /// A clip boundary for `--start`/`--end`: a plain number of seconds (`90`,

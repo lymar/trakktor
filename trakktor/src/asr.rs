@@ -5,11 +5,18 @@ use std::{
     path::Path,
 };
 
-use trakktor_core::asr::whisper::{
-    self, AudioDecoder, TranscribeOptions, WhisperError, alignment_heads,
+use trakktor_core::asr::{
+    vad::{self, SpeechSegment, VadOptions},
+    whisper::{
+        self, AudioDecoder, TranscribeOptions, WhisperError, alignment_heads,
+    },
 };
 
-use crate::{cli::WhisperArgs, error::CliError, output};
+use crate::{
+    cli::{VadModeArg, WhisperArgs},
+    error::CliError,
+    output,
+};
 
 mod writers;
 
@@ -22,7 +29,19 @@ pub(crate) fn run_whisper(
     pretty: bool,
 ) -> Result<(), CliError> {
     let suppress_tokens = parse_suppress_tokens(&args.suppress_tokens)?;
-    let clip_timestamps = resolve_clip_timestamps(args)?;
+    // Resolve clip/range options up front so bad ones fail before any download
+    // or decode. With `--vad`, clips come from detected speech instead, but the
+    // optional `--start`/`--end` range is still validated here.
+    let manual_clips = if args.vad {
+        Vec::new()
+    } else {
+        resolve_clip_timestamps(args)?
+    };
+    let vad_range = if args.vad {
+        parse_vad_range(args)?
+    } else {
+        None
+    };
     let temperature = temperature_schedule(
         args.temperature,
         args.temperature_increment_on_fallback.0,
@@ -43,7 +62,20 @@ pub(crate) fn run_whisper(
     eprintln!("decoding audio...");
     let audio = decode_audio(args)?;
 
-    let options = TranscribeOptions {
+    // Optional VAD: detect speech, then restrict to the `--start`/`--end`
+    // range if one was given.
+    let vad_speech: Option<Vec<SpeechSegment>> = if args.vad {
+        eprintln!("detecting speech...");
+        let mut speech = vad::detect_speech(&audio, &vad_options(args))?;
+        if let Some((lo, hi)) = vad_range {
+            speech = intersect_speech(&speech, lo, hi);
+        }
+        Some(speech)
+    } else {
+        None
+    };
+
+    let mut options = TranscribeOptions {
         temperature,
         compression_ratio_threshold: args
             .compression_ratio_threshold
@@ -54,7 +86,7 @@ pub(crate) fn run_whisper(
         condition_on_previous_text: args.condition_on_previous_text,
         initial_prompt: args.initial_prompt.clone(),
         carry_initial_prompt: args.carry_initial_prompt,
-        clip_timestamps,
+        clip_timestamps: manual_clips,
         language: args.language.clone(),
         task: args.task.to_core(),
         beam_size: args.beam_size.0,
@@ -75,17 +107,61 @@ pub(crate) fn run_whisper(
             .map(<[(usize, usize)]>::to_vec),
     };
 
+    // Pick the transcription input per VAD mode: `collapse` builds a dense
+    // speech buffer (transcribed whole, then mapped back); `fragments` feeds
+    // the speech spans as clips over the original audio.
+    let collapsed = match &vad_speech {
+        Some(speech)
+            if args.vad_mode == VadModeArg::Collapse && !speech.is_empty() =>
+        {
+            Some(vad::collapse::collapse(&audio, speech))
+        },
+        _ => None,
+    };
+    if let Some(speech) = &vad_speech {
+        if args.vad_mode == VadModeArg::Fragments {
+            options.clip_timestamps = clips_from_speech(speech);
+        }
+    }
+    // VAD that found nothing means an empty result — never a whole-file run.
+    let no_speech = matches!(&vad_speech, Some(speech) if speech.is_empty());
+    let buffer: &[f32] = collapsed
+        .as_ref()
+        .map_or(&audio[..], |c| c.buffer.as_slice());
+
     let started = std::time::Instant::now();
-    let mut progress = transcribe_progress(started);
-    let transcription = whisper::transcribe_with_progress(
-        &mut runtime,
-        &audio,
-        &options,
-        &mut progress,
-    )?;
+    let mut transcription = if no_speech {
+        empty_transcription(&audio, options.language.clone())
+    } else {
+        let mut report = transcribe_progress(started);
+        // In collapse mode the loop runs on the dense speech buffer, so its
+        // progress is in buffer time against the speech duration. Map the
+        // position back to the original timeline and report against the
+        // original duration, so the length shown is the file's, not the
+        // (shorter) speech's. Other modes pass through unchanged.
+        let mut progress = |p: whisper::TranscribeProgress| match &collapsed {
+            Some(collapsed) => report(whisper::TranscribeProgress {
+                processed_seconds: collapsed.mapping.map(p.processed_seconds),
+                total_seconds: collapsed.duration,
+            }),
+            None => report(p),
+        };
+        whisper::transcribe_with_progress(
+            &mut runtime,
+            buffer,
+            &options,
+            &mut progress,
+        )?
+    };
+    // Collapse: map the buffer-timeline timestamps back to the original.
+    if let Some(collapsed) = &collapsed {
+        remap_transcription(&mut transcription, &collapsed.mapping);
+        transcription.duration = collapsed.duration;
+    }
+
     // Close the in-place progress line on a terminal with a final 100% and the
     // total wall time; `\x1b[K` clears the leftover of the longer live line.
-    if std::io::stderr().is_terminal() {
+    if !no_speech && std::io::stderr().is_terminal() {
         let total = clock(transcription.duration);
         let elapsed = clock(started.elapsed().as_secs_f64());
         eprintln!(
@@ -93,10 +169,13 @@ pub(crate) fn run_whisper(
              elapsed\x1b[K"
         );
     }
+
+    let vad_speech = vad_speech.as_deref();
     output::print_transcription(
         &transcription,
         &args.model,
         args.timestamps,
+        vad_speech,
         json,
         pretty,
     );
@@ -113,12 +192,114 @@ pub(crate) fn run_whisper(
             format,
             &args.output_dir,
             with_words,
+            vad_speech,
         )?;
         for path in &paths {
             eprintln!("wrote {}", path.display());
         }
     }
     Ok(())
+}
+
+/// Builds [`VadOptions`] from the `--vad-*` flags.
+fn vad_options(args: &WhisperArgs) -> VadOptions {
+    VadOptions {
+        threshold: args.vad_threshold,
+        min_speech_duration_ms: args.vad_min_speech_duration_ms,
+        min_silence_duration_ms: args.vad_min_silence_duration_ms,
+        speech_pad_ms: args.vad_speech_pad_ms,
+        max_speech_duration_s: args
+            .vad_max_speech_duration_s
+            .0
+            .map(|s| s as f32),
+    }
+}
+
+/// The `--start`/`--end` range (seconds) for `--vad`, validated. `None` when
+/// neither is given (the whole file).
+fn parse_vad_range(args: &WhisperArgs) -> Result<Option<(f64, f64)>, CliError> {
+    if args.start.is_none() && args.end.is_none() {
+        return Ok(None);
+    }
+    let lo = args.start.map_or(0.0, |t| t.0);
+    let hi = match args.end {
+        Some(end) if end.0 <= lo => {
+            return Err(WhisperError::InvalidOptions(format!(
+                "--end ({}) must be greater than --start ({lo})",
+                end.0
+            ))
+            .into());
+        },
+        Some(end) => end.0,
+        None => f64::INFINITY,
+    };
+    Ok(Some((lo, hi)))
+}
+
+/// Clips each speech segment to `[lo, hi]`, dropping any that fall outside.
+fn intersect_speech(
+    speech: &[SpeechSegment],
+    lo: f64,
+    hi: f64,
+) -> Vec<SpeechSegment> {
+    speech
+        .iter()
+        .filter_map(|segment| {
+            let start = segment.start.max(lo);
+            let end = segment.end.min(hi);
+            (end > start).then_some(SpeechSegment { start, end })
+        })
+        .collect()
+}
+
+/// Flattens speech segments into `clip_timestamps` second pairs, coalescing
+/// touching or overlapping spans so a burst of speech is one clip, not many
+/// padded windows.
+fn clips_from_speech(speech: &[SpeechSegment]) -> Vec<f32> {
+    let mut clips: Vec<f32> = Vec::with_capacity(speech.len() * 2);
+    for segment in speech {
+        let start = segment.start as f32;
+        let end = segment.end as f32;
+        if let Some(prev_end) = clips.last_mut() {
+            if start <= *prev_end {
+                *prev_end = prev_end.max(end);
+                continue;
+            }
+        }
+        clips.push(start);
+        clips.push(end);
+    }
+    clips
+}
+
+/// Maps every segment and word timestamp of a collapse-mode transcription back
+/// to the original timeline.
+fn remap_transcription(
+    transcription: &mut whisper::Transcription,
+    mapping: &vad::TimeMapping,
+) {
+    for segment in &mut transcription.segments {
+        segment.start = mapping.map(segment.start);
+        segment.end = mapping.map(segment.end);
+        for word in &mut segment.words {
+            word.start = mapping.map(word.start);
+            word.end = mapping.map(word.end);
+        }
+    }
+}
+
+/// An empty transcription for when VAD found no speech: no text, no segments,
+/// the original audio duration.
+fn empty_transcription(
+    audio: &[f32],
+    language: Option<String>,
+) -> whisper::Transcription {
+    whisper::Transcription {
+        text: String::new(),
+        segments: Vec::new(),
+        language: language.unwrap_or_default(),
+        duration: audio.len() as f64 / whisper::constants::SAMPLE_RATE as f64,
+    }
 }
 
 /// Decodes the input audio with the decoder selected by `--audio-decoder`.

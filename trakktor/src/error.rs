@@ -6,7 +6,9 @@
 //! never change its external `code`.
 
 use trakktor_core::{
-    asr::whisper::WhisperError, feed::FeedError, http::HttpError,
+    asr::{vad::VadError, whisper::WhisperError},
+    feed::FeedError,
+    http::HttpError,
     skill::SkillError,
 };
 
@@ -15,6 +17,8 @@ use trakktor_core::{
 pub enum CliError {
     /// An error from the `asr` feature.
     Asr(WhisperError),
+    /// An error from the VAD preprocessing stage.
+    Vad(VadError),
     /// An error from the `feed` feature.
     Feed(FeedError),
     /// An error from the `skill` feature.
@@ -27,6 +31,7 @@ impl CliError {
     pub fn code(&self) -> &'static str {
         match self {
             CliError::Asr(err) => asr_code(err),
+            CliError::Vad(_) => "vad_failed",
             CliError::Feed(err) => feed_code(err),
             CliError::Skill(err) => skill_code(err),
         }
@@ -37,6 +42,7 @@ impl std::fmt::Display for CliError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CliError::Asr(err) => write!(f, "{err}"),
+            CliError::Vad(err) => write!(f, "{err}"),
             CliError::Feed(err) => write!(f, "{err}"),
             CliError::Skill(err) => write!(f, "{err}"),
         }
@@ -45,6 +51,10 @@ impl std::fmt::Display for CliError {
 
 impl From<WhisperError> for CliError {
     fn from(err: WhisperError) -> Self { CliError::Asr(err) }
+}
+
+impl From<VadError> for CliError {
+    fn from(err: VadError) -> Self { CliError::Vad(err) }
 }
 
 impl From<FeedError> for CliError {

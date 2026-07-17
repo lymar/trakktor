@@ -9,7 +9,10 @@ use std::path::Path;
 
 use serde_json::{Map, Value, json};
 use trakktor_core::{
-    asr::whisper::{Segment, Transcription, Word},
+    asr::{
+        vad::SpeechSegment,
+        whisper::{Segment, Transcription, Word},
+    },
     feed::{
         Author, ContentBlock, DiscoveredFeed, Field, MarkReadSummary,
         Publication,
@@ -32,6 +35,7 @@ pub fn print_transcription(
     transcription: &Transcription,
     model: &str,
     timestamps: TimestampsArg,
+    vad_speech: Option<&[SpeechSegment]>,
     json: bool,
     pretty: bool,
 ) {
@@ -41,6 +45,7 @@ pub fn print_transcription(
             model,
             timestamps != TimestampsArg::None,
             timestamps == TimestampsArg::Word,
+            vad_speech,
         );
         print_json(&value, pretty);
         return;
@@ -69,6 +74,7 @@ pub fn transcription_to_json(
     model: &str,
     include_segments: bool,
     with_words: bool,
+    vad_speech: Option<&[SpeechSegment]>,
 ) -> Value {
     let mut object = Map::new();
     object.insert("text".into(), Value::String(transcription.text.clone()));
@@ -81,6 +87,20 @@ pub fn transcription_to_json(
         "engine".into(),
         json!({ "name": "whisper", "model": model }),
     );
+    // When VAD ran, list the detected speech spans (original timeline) as an
+    // engine-independent diagnostic — present even if empty.
+    if let Some(speech) = vad_speech {
+        let spans: Vec<Value> = speech
+            .iter()
+            .map(|segment| {
+                let mut object = Map::new();
+                insert_f64(&mut object, "start", segment.start);
+                insert_f64(&mut object, "end", segment.end);
+                Value::Object(object)
+            })
+            .collect();
+        object.insert("vad".into(), json!({ "speech": spans }));
+    }
     if include_segments {
         let segments = transcription
             .segments

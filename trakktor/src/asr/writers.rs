@@ -10,7 +10,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use trakktor_core::asr::whisper::{Transcription, WhisperError};
+use trakktor_core::asr::{
+    vad::SpeechSegment,
+    whisper::{Transcription, WhisperError},
+};
 
 use crate::cli::OutputFormatArg;
 
@@ -33,6 +36,7 @@ pub fn write_outputs(
     format: OutputFormatArg,
     output_dir: &Path,
     with_words: bool,
+    vad_speech: Option<&[SpeechSegment]>,
 ) -> Result<Vec<PathBuf>, WhisperError> {
     let stem = audio_path
         .file_stem()
@@ -51,7 +55,7 @@ pub fn write_outputs(
     let mut written = Vec::with_capacity(formats.len());
     for &format in formats {
         let (extension, content) =
-            render(transcription, model, format, with_words);
+            render(transcription, model, format, with_words, vad_speech);
         let path = output_dir.join(format!("{stem}.{extension}"));
         fs::write(&path, content).map_err(|e| {
             WhisperError::Io(format!("{}: {e}", path.display()))
@@ -67,15 +71,17 @@ fn render(
     model: &str,
     format: OutputFormatArg,
     with_words: bool,
+    vad_speech: Option<&[SpeechSegment]>,
 ) -> (&'static str, String) {
     match format {
         OutputFormatArg::Txt => ("txt", render_txt(transcription)),
         OutputFormatArg::Vtt => ("vtt", render_vtt(transcription)),
         OutputFormatArg::Srt => ("srt", render_srt(transcription)),
         OutputFormatArg::Tsv => ("tsv", render_tsv(transcription)),
-        OutputFormatArg::Json => {
-            ("json", render_json(transcription, model, with_words))
-        },
+        OutputFormatArg::Json => (
+            "json",
+            render_json(transcription, model, with_words, vad_speech),
+        ),
         // `All` is expanded by the caller into concrete formats.
         OutputFormatArg::All => unreachable!("all is expanded before render"),
     }
@@ -135,12 +141,14 @@ fn render_json(
     transcription: &Transcription,
     model: &str,
     with_words: bool,
+    vad_speech: Option<&[SpeechSegment]>,
 ) -> String {
     let value = crate::output::transcription_to_json(
         transcription,
         model,
         true,
         with_words,
+        vad_speech,
     );
     serde_json::to_string(&value)
         .expect("serializing a serde_json::Value never fails")

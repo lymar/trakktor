@@ -93,6 +93,7 @@ fn all_writes_every_format_named_after_the_audio() {
         OutputFormatArg::All,
         &dir,
         false,
+        None,
     )
     .expect("write_outputs");
 
