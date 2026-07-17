@@ -129,7 +129,14 @@ def main() -> int:
 
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--npz", required=True, help="path to the reference mel_filters.npz")
-    ap.add_argument("--sample", required=True, help="path to a sample audio file")
+    source = ap.add_mutually_exclusive_group(required=True)
+    source.add_argument("--sample", help="path to a sample audio file (decoded via ffmpeg)")
+    source.add_argument(
+        "--pcm",
+        help="path to an existing raw f32le 16 kHz mono PCM fixture; the mel "
+        "goldens are computed from it and the fixture itself is left as is "
+        "(use when the PCM comes from the trakktor pipeline)",
+    )
     ap.add_argument("--ffmpeg", default="ffmpeg")
     ap.add_argument("--assets-dir", default=str(whisper_dir / "assets"))
     ap.add_argument("--testdata-dir", default=str(whisper_dir / "testdata"))
@@ -145,11 +152,14 @@ def main() -> int:
     write_f32(assets / "mel_80.bin", mel_80)
     write_f32(assets / "mel_128.bin", mel_128)
 
-    pcm = decode_audio(Path(args.sample), args.ffmpeg)[: FIXTURE_SECONDS * SAMPLE_RATE]
-    print(f"decoded sample: {len(pcm)} samples ({len(pcm) / SAMPLE_RATE:.2f}s)")
-
     testdata = Path(args.testdata_dir)
-    write_f32(testdata / "sample_2s.pcm.bin", pcm)
+    if args.pcm:
+        pcm = np.fromfile(args.pcm, dtype="<f4")[: FIXTURE_SECONDS * SAMPLE_RATE]
+        print(f"loaded PCM fixture: {len(pcm)} samples ({len(pcm) / SAMPLE_RATE:.2f}s)")
+    else:
+        pcm = decode_audio(Path(args.sample), args.ffmpeg)[: FIXTURE_SECONDS * SAMPLE_RATE]
+        print(f"decoded sample: {len(pcm)} samples ({len(pcm) / SAMPLE_RATE:.2f}s)")
+        write_f32(testdata / "sample_2s.pcm.bin", pcm)
     write_f32(testdata / "sample_2s.mel80.bin", build_golden(pcm, 80, mel_80))
     write_f32(testdata / "sample_2s.mel128.bin", build_golden(pcm, 128, mel_128))
     return 0

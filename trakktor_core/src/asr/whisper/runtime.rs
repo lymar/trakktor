@@ -1,10 +1,10 @@
 //! The candle-backed Whisper runtime.
 //!
 //! Loads a checkpoint (a directory holding `config.json` and
-//! `model.safetensors` in the published layout) in full precision and
-//! implements [`ForwardProvider`] on top of the vendored network in [`net`].
-//! Devices: CPU always; Metal and CUDA behind the corresponding cargo
-//! features.
+//! `model.safetensors` in the published layout) at a selectable
+//! [`Precision`] and implements [`ForwardProvider`] on top of the vendored
+//! network in [`net`]. Devices: CPU always; Metal and CUDA behind the
+//! corresponding cargo features.
 
 mod net;
 #[cfg(test)]
@@ -36,10 +36,36 @@ struct Session {
     offset: usize,
 }
 
+/// Compute precision of the runtime.
+///
+/// The published checkpoints ship in half precision, and the reference runs
+/// its GPU path in half precision too. [`F16`](Precision::F16) matches that —
+/// half the memory and roughly twice the matmul throughput — and is the
+/// default. [`F32`](Precision::F32) keeps full precision for bit-exact
+/// reference parity, at double the weight memory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Precision {
+    /// Half precision (`f16`).
+    #[default]
+    F16,
+    /// Full precision (`f32`).
+    F32,
+}
+
+impl Precision {
+    fn dtype(self) -> DType {
+        match self {
+            Self::F16 => DType::F16,
+            Self::F32 => DType::F32,
+        }
+    }
+}
+
 /// The Whisper network running on candle.
 pub struct CandleRuntime {
     dims: ModelDims,
     device: Device,
+    dtype: DType,
     encoder: net::AudioEncoder,
     decoder: net::TextDecoder,
     session: Option<Session>,
@@ -47,7 +73,7 @@ pub struct CandleRuntime {
 
 impl CandleRuntime {
     /// Loads a checkpoint directory (`config.json` + `model.safetensors`)
-    /// onto `device`, converting the weights to full precision.
+    /// onto `device`, converting the weights to `precision`.
     ///
     /// # Errors
     ///
@@ -56,6 +82,7 @@ impl CandleRuntime {
     pub fn load(
         model_dir: &Path,
         device: Device,
+        precision: Precision,
     ) -> Result<Self, WhisperError> {
         let config_path = model_dir.join("config.json");
         let raw = std::fs::read_to_string(&config_path)
@@ -63,14 +90,11 @@ impl CandleRuntime {
         let dims = parse_config(&raw)?;
 
         let weights = model_dir.join("model.safetensors");
+        let dtype = precision.dtype();
         // Safety: the checkpoint file is mapped read-only and must not be
         // modified while the runtime is alive.
         let vb = unsafe {
-            VarBuilder::from_mmaped_safetensors(
-                &[&weights],
-                DType::F32,
-                &device,
-            )
+            VarBuilder::from_mmaped_safetensors(&[&weights], dtype, &device)
         }
         .map_err(|e| model_err(&weights.display().to_string(), e))?;
 
@@ -82,6 +106,7 @@ impl CandleRuntime {
         Ok(Self {
             dims,
             device,
+            dtype,
             encoder,
             decoder,
             session: None,
@@ -96,8 +121,11 @@ impl CandleRuntime {
     /// # Errors
     ///
     /// See [`load`](Self::load).
-    pub fn load_cpu(model_dir: &Path) -> Result<Self, WhisperError> {
-        Self::load(model_dir, Device::Cpu)
+    pub fn load_cpu(
+        model_dir: &Path,
+        precision: Precision,
+    ) -> Result<Self, WhisperError> {
+        Self::load(model_dir, Device::Cpu, precision)
     }
 
     /// [`load`](Self::load) on the first Metal device.
@@ -107,10 +135,13 @@ impl CandleRuntime {
     /// Returns [`WhisperError::InvalidModel`] when no Metal device is
     /// available; otherwise see [`load`](Self::load).
     #[cfg(feature = "whisper-metal")]
-    pub fn load_metal(model_dir: &Path) -> Result<Self, WhisperError> {
+    pub fn load_metal(
+        model_dir: &Path,
+        precision: Precision,
+    ) -> Result<Self, WhisperError> {
         let device = Device::new_metal(0)
             .map_err(|e| model_err("creating the metal device", e))?;
-        Self::load(model_dir, device)
+        Self::load(model_dir, device, precision)
     }
 }
 
@@ -159,6 +190,7 @@ impl ForwardProvider for CandleRuntime {
             (1, self.dims.n_mels, N_FRAMES),
             &self.device,
         )
+        .and_then(|t| t.to_dtype(self.dtype))
         .map_err(|e| model_err("building mel tensor", e))?;
         self.encoder
             .forward(&mel)
@@ -223,7 +255,8 @@ impl ForwardProvider for CandleRuntime {
         session.offset += n_step;
 
         let data = logits
-            .flatten_all()
+            .to_dtype(DType::F32)
+            .and_then(|t| t.flatten_all())
             .and_then(|t| t.to_vec1::<f32>())
             .map_err(|e| model_err("reading logits", e))?;
         Ok(Logits::new(n_batch, n_step, self.dims.n_vocab, data))
@@ -273,7 +306,8 @@ impl ForwardProvider for CandleRuntime {
             .final_linear(&hidden)
             .map_err(|e| model_err("logits projection", e))?;
         let logits_data = logits
-            .flatten_all()
+            .to_dtype(DType::F32)
+            .and_then(|t| t.flatten_all())
             .and_then(|t| t.to_vec1::<f32>())
             .map_err(|e| model_err("reading logits", e))?;
 
@@ -291,7 +325,8 @@ impl ForwardProvider for CandleRuntime {
             Vec::with_capacity(n_layers * n_heads * n_tokens * n_frames);
         for qk in &cross_qks {
             data.extend(
-                qk.flatten_all()
+                qk.to_dtype(DType::F32)
+                    .and_then(|t| t.flatten_all())
                     .and_then(|t| t.to_vec1::<f32>())
                     .map_err(|e| model_err("reading cross-attention", e))?,
             );

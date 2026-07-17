@@ -32,6 +32,8 @@ Key documents (in `../trakktor_project/docs/`):
 - `architecture.md` — code organization (this workspace and its crates).
 - `features/<feature>/design.md` — per-feature specs (e.g.
   `features/feed/design.md`).
+- `core/<subsystem>/design.md` — specs for core-internal subsystems that are
+  not CLI features (e.g. `core/audio/design.md`).
 - `adr/` — Architecture Decision Records (rationale for big decisions).
 - `conventions/` — cross-cutting rules: `cli.md`, `output.md`,
   `error-handling.md`, `http.md`, `working-directory.md`, `language.md`.

@@ -31,13 +31,15 @@ pub(crate) fn run_whisper(
         &args.model,
         &mut download_progress(),
     )?;
+    let precision = args.precision.to_core();
     let mut runtime = match args.device {
         crate::cli::DeviceArg::Cpu => {
-            whisper::CandleRuntime::load_cpu(&resolved.dir)?
+            whisper::CandleRuntime::load_cpu(&resolved.dir, precision)?
         },
-        crate::cli::DeviceArg::Metal => load_metal(&resolved.dir)?,
+        crate::cli::DeviceArg::Metal => load_metal(&resolved.dir, precision)?,
     };
-    let audio = whisper::FfmpegDecoder::default().decode(&args.audio)?;
+    eprintln!("decoding audio...");
+    let audio = whisper::BuiltinDecoder.decode(&args.audio)?;
 
     let options = TranscribeOptions {
         temperature,
@@ -71,7 +73,24 @@ pub(crate) fn run_whisper(
             .map(<[(usize, usize)]>::to_vec),
     };
 
-    let transcription = whisper::transcribe(&mut runtime, &audio, &options)?;
+    let started = std::time::Instant::now();
+    let mut progress = transcribe_progress(started);
+    let transcription = whisper::transcribe_with_progress(
+        &mut runtime,
+        &audio,
+        &options,
+        &mut progress,
+    )?;
+    // Close the in-place progress line on a terminal with a final 100% and the
+    // total wall time; `\x1b[K` clears the leftover of the longer live line.
+    if std::io::stderr().is_terminal() {
+        let total = clock(transcription.duration);
+        let elapsed = clock(started.elapsed().as_secs_f64());
+        eprintln!(
+            "\r✓ transcribing {total} / {total} (100%) · {elapsed} \
+             elapsed\x1b[K"
+        );
+    }
     output::print_transcription(
         &transcription,
         &args.model,
@@ -84,13 +103,19 @@ pub(crate) fn run_whisper(
 
 /// Loads the model on Metal (builds with the `metal` feature).
 #[cfg(feature = "metal")]
-fn load_metal(model_dir: &Path) -> Result<whisper::CandleRuntime, CliError> {
-    Ok(whisper::CandleRuntime::load_metal(model_dir)?)
+fn load_metal(
+    model_dir: &Path,
+    precision: whisper::Precision,
+) -> Result<whisper::CandleRuntime, CliError> {
+    Ok(whisper::CandleRuntime::load_metal(model_dir, precision)?)
 }
 
 /// Without the `metal` feature, `--device metal` is a validation error.
 #[cfg(not(feature = "metal"))]
-fn load_metal(_model_dir: &Path) -> Result<whisper::CandleRuntime, CliError> {
+fn load_metal(
+    _model_dir: &Path,
+    _precision: whisper::Precision,
+) -> Result<whisper::CandleRuntime, CliError> {
     Err(WhisperError::InvalidOptions(
         "this build has no Metal support; install or build trakktor with the \
          `metal` feature"
@@ -156,6 +181,95 @@ fn parse_clip_timestamps(csv: &str) -> Result<Vec<f32>, CliError> {
         clips.push(seconds);
     }
     Ok(clips)
+}
+
+/// A transcription progress reporter: the audio position and percentage on
+/// stderr, rewritten in place on a terminal and printed once per advance
+/// otherwise. Diagnostics only — the result never goes to stderr.
+fn transcribe_progress(
+    started: std::time::Instant,
+) -> impl FnMut(whisper::TranscribeProgress) {
+    let interactive = std::io::stderr().is_terminal();
+    let mut last_percent: u64 = u64::MAX;
+    let mut frame: usize = 0;
+    let mut last_render: Option<std::time::Instant> = None;
+    let mut last_shown: f64 = 0.0;
+    let mut eta_pos: f64 = 0.0;
+    let mut eta: Option<String> = None;
+    move |p: whisper::TranscribeProgress| {
+        // The callback fires on every sampled token; render at most every
+        // quarter second so a fast model does not flood stderr.
+        let now = std::time::Instant::now();
+        let too_soon = last_render.is_some_and(|last| {
+            now.duration_since(last) < std::time::Duration::from_millis(250)
+        });
+        if too_soon {
+            return;
+        }
+        // Clamp to the furthest position shown so a beam reshuffle can't tick
+        // the mid-window position backward.
+        let position = p.processed_seconds.max(last_shown);
+        let percent = if p.total_seconds > 0.0 {
+            (position / p.total_seconds * 100.0).round() as u64
+        } else {
+            100
+        };
+        // Off a terminal, only an advancing position is worth a line.
+        if !interactive && percent == last_percent {
+            return;
+        }
+        last_render = Some(now);
+        last_shown = position;
+        last_percent = percent;
+        let processed = clock(position);
+        let total = clock(p.total_seconds);
+        let elapsed_s = started.elapsed().as_secs_f64();
+        // Recompute the time-left estimate only when the position actually
+        // advances. Otherwise the wall clock keeps growing while progress
+        // stalls and the estimate would creep upward, then snap down on the
+        // next advance — jumpy. Hold the last value between advances, and show
+        // a placeholder until the first one exists. (Approximate anyway: the
+        // first window carries one-time setup, so early estimates run high.)
+        if position > eta_pos && position < p.total_seconds {
+            eta_pos = position;
+            eta = Some(clock(
+                elapsed_s * (p.total_seconds - position) / position,
+            ));
+        }
+        let left = eta.as_deref().unwrap_or("--:--");
+        let elapsed = clock(elapsed_s);
+        if interactive {
+            // A spinner shows life even inside a single slow window; the
+            // position, percent, and estimate update as the window decodes.
+            // `\x1b[K` clears the previous, possibly longer, line.
+            const SPINNER: [char; 10] =
+                ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+            let spin = SPINNER[frame % SPINNER.len()];
+            frame = frame.wrapping_add(1);
+            eprint!(
+                "\r{spin} transcribing {processed} / {total} ({percent}%) · \
+                 {elapsed} elapsed · ~{left} left\x1b[K"
+            );
+            let _ = std::io::stderr().flush();
+        } else {
+            eprintln!(
+                "transcribing {processed} / {total} ({percent}%) · {elapsed} \
+                 elapsed · ~{left} left"
+            );
+        }
+    }
+}
+
+/// Formats a number of seconds as `mm:ss`, or `h:mm:ss` past an hour.
+fn clock(seconds: f64) -> String {
+    let total = seconds.max(0.0) as u64;
+    let (hours, minutes, secs) =
+        (total / 3600, (total % 3600) / 60, total % 60);
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{secs:02}")
+    } else {
+        format!("{minutes:02}:{secs:02}")
+    }
 }
 
 /// A download progress reporter: percentages on stderr when it is a

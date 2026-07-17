@@ -139,8 +139,20 @@ pub fn log_mel_spectrogram(
     let mut spectrum = r2c.make_output_vec();
     let mut scratch = r2c.make_scratch_vec();
 
-    // Power spectrum, stored frame-major: `[frame][freq]`.
-    let mut power = vec![0.0f32; n_frames * N_FREQS];
+    let filters = assets::mel_filters(bands);
+    let n_mels = bands.count();
+
+    // The mel spectrogram, row-major `[mel][frame]`. The full spectrogram is
+    // materialized on purpose: the log rescale below normalizes against its
+    // global maximum, so windows must be sliced from the finished result.
+    let mut data = vec![0.0f32; n_mels * n_frames];
+
+    // One frame's power spectrum, reused across frames. The mel projection is
+    // folded into the framing loop so the full `[frame][freq]` power matrix is
+    // never held at once — for a long recording that matrix dwarfs the mel.
+    // Each `data[mel][frame]` is still the same freq-order dot product, so the
+    // result is bit-identical to accumulating a full power matrix first.
+    let mut power = vec![0.0f32; N_FREQS];
     for f in 0..n_frames {
         let start = f * HOP_LENGTH;
         for (i, slot) in frame_buf.iter_mut().enumerate() {
@@ -148,23 +160,13 @@ pub fn log_mel_spectrogram(
         }
         r2c.process_with_scratch(&mut frame_buf, &mut spectrum, &mut scratch)
             .expect("real FFT of a correctly sized frame cannot fail");
-        let row = &mut power[f * N_FREQS..(f + 1) * N_FREQS];
-        for (p, c) in row.iter_mut().zip(spectrum.iter()) {
+        for (p, c) in power.iter_mut().zip(spectrum.iter()) {
             *p = c.re * c.re + c.im * c.im;
         }
-    }
-
-    // Mel projection: filters (n_mels x N_FREQS) times power (N_FREQS x
-    // frames).
-    let filters = assets::mel_filters(bands);
-    let n_mels = bands.count();
-    let mut data = vec![0.0f32; n_mels * n_frames];
-    for m in 0..n_mels {
-        let fbank = &filters[m * N_FREQS..(m + 1) * N_FREQS];
-        for f in 0..n_frames {
-            let frame_power = &power[f * N_FREQS..(f + 1) * N_FREQS];
+        for m in 0..n_mels {
+            let fbank = &filters[m * N_FREQS..(m + 1) * N_FREQS];
             let mut acc = 0.0f32;
-            for (w, p) in fbank.iter().zip(frame_power.iter()) {
+            for (w, p) in fbank.iter().zip(power.iter()) {
                 acc += w * p;
             }
             data[m * n_frames + f] = acc;

@@ -5,6 +5,8 @@
 //! configuration, and formats the values returned here.
 
 pub mod asr;
+#[cfg(feature = "audio")]
+pub mod audio;
 pub mod feed;
 pub mod http;
 pub mod skill;

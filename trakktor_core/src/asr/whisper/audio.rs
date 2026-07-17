@@ -1,11 +1,11 @@
 //! Audio decoding for the Whisper engine.
 //!
 //! The engine consumes 16 kHz mono f32 PCM. Turning an arbitrary media file
-//! into that form is kept behind the [`AudioDecoder`] trait so the backend can
-//! change later — today an external ffmpeg process, in future an in-process
-//! decoder — without touching feature extraction or decoding.
+//! into that form is kept behind the [`AudioDecoder`] trait so the backend
+//! can be swapped (tests use scripted decoders) without touching feature
+//! extraction or decoding.
 
-use std::{path::Path, process::Command};
+use std::path::Path;
 
 use super::{constants::SAMPLE_RATE, error::WhisperError};
 
@@ -19,71 +19,26 @@ pub trait AudioDecoder {
     fn decode(&self, path: &Path) -> Result<Vec<f32>, WhisperError>;
 }
 
-/// An [`AudioDecoder`] backed by an external `ffmpeg` process.
+/// The built-in [`AudioDecoder`].
 ///
-/// Runs `ffmpeg` to downmix to mono, resample to 16 kHz, and emit signed 16-bit
-/// little-endian PCM, then scales the samples to f32. This mirrors the
-/// reference decoding path, so the resulting signal is numerically comparable.
-#[derive(Debug, Clone)]
-pub struct FfmpegDecoder {
-    binary: String,
-}
+/// Decodes with the crate's audio subsystem (pure-Rust decoding plus a
+/// conversion pipeline numerically faithful to the classic
+/// `ffmpeg -f s16le -ac 1 -ar 16000` chain): downmix to mono, resample to
+/// 16 kHz, quantize to s16, then scale to f32. The resulting signal matches
+/// that reference bit for bit on lossless inputs and within ±1 least
+/// significant bit on a small fraction of samples for lossy codecs.
+#[cfg(feature = "audio")]
+#[derive(Debug, Clone, Default)]
+pub struct BuiltinDecoder;
 
-impl FfmpegDecoder {
-    /// Uses the given `ffmpeg` executable (a name resolved on `PATH`, or an
-    /// absolute path).
-    pub fn new(binary: impl Into<String>) -> Self {
-        Self {
-            binary: binary.into(),
-        }
-    }
-}
-
-impl Default for FfmpegDecoder {
-    fn default() -> Self { Self::new("ffmpeg") }
-}
-
-impl AudioDecoder for FfmpegDecoder {
+#[cfg(feature = "audio")]
+impl AudioDecoder for BuiltinDecoder {
     fn decode(&self, path: &Path) -> Result<Vec<f32>, WhisperError> {
-        let output = Command::new(&self.binary)
-            .args(["-nostdin", "-threads", "0", "-i"])
-            .arg(path)
-            .args(["-f", "s16le", "-ac", "1", "-acodec", "pcm_s16le", "-ar"])
-            .arg(SAMPLE_RATE.to_string())
-            .arg("-")
-            .output()
-            .map_err(|e| {
-                WhisperError::AudioDecode(format!(
-                    "could not run '{}': {e}",
-                    self.binary
-                ))
-            })?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let detail = stderr
-                .lines()
-                .rev()
-                .find(|l| !l.trim().is_empty())
-                .unwrap_or("unknown error");
-            return Err(WhisperError::AudioDecode(format!(
-                "ffmpeg exited with {}: {detail}",
-                output.status
-            )));
-        }
-
-        Ok(pcm_s16le_to_f32(&output.stdout))
+        let samples =
+            crate::audio::decode_to_mono_s16(path, SAMPLE_RATE as u32)
+                .map_err(|e| WhisperError::AudioDecode(e.to_string()))?;
+        Ok(samples.iter().map(|&s| f32::from(s) / 32768.0).collect())
     }
-}
-
-/// Converts signed 16-bit little-endian PCM bytes to f32 in `[-1, 1)`.
-///
-/// A trailing odd byte (an incomplete sample) is ignored.
-fn pcm_s16le_to_f32(bytes: &[u8]) -> Vec<f32> {
-    bytes
-        .chunks_exact(2)
-        .map(|b| f32::from(i16::from_le_bytes([b[0], b[1]])) / 32768.0)
-        .collect()
 }
 
 /// Right-pads with zeros or truncates `samples` to exactly `length`.

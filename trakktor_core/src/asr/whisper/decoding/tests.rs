@@ -286,7 +286,8 @@ fn decode_greedy_produces_a_timestamped_segment() {
         language: Some("en".into()),
         ..Default::default()
     };
-    let result = decode(&mut provider, &tok, &(), &options).unwrap();
+    let result =
+        decode(&mut provider, &tok, &(), &options, &mut |_| {}).unwrap();
 
     assert_eq!(result.tokens, vec![ts, text_token, ts + 10]);
     // Decoded, timestamps dropped, trimmed.
@@ -337,7 +338,8 @@ fn decode_beam_reorders_the_cache() {
         beam_size: Some(2),
         ..Default::default()
     };
-    let result = decode(&mut provider, &tok, &(), &options).unwrap();
+    let result =
+        decode(&mut provider, &tok, &(), &options, &mut |_| {}).unwrap();
 
     assert_eq!(result.tokens, vec![ts, text_token, ts + 10]);
     assert!(!provider.rearranges.is_empty());
@@ -366,7 +368,8 @@ fn decode_detects_language_when_unset() {
     let mut provider = FakeProvider::new(n_vocab, script);
 
     let options = DecodingOptions::default(); // language: None
-    let result = decode(&mut provider, &tok, &(), &options).unwrap();
+    let result =
+        decode(&mut provider, &tok, &(), &options, &mut |_| {}).unwrap();
 
     assert_eq!(result.language, "ru");
     assert_eq!(provider.sessions, 2); // detection + main loop
@@ -409,7 +412,7 @@ mod reference_parity {
             audio::pad_or_trim,
             constants::{N_FRAMES, N_SAMPLES},
             feature::{MelBands, log_mel_spectrogram},
-            runtime::CandleRuntime,
+            runtime::{CandleRuntime, Precision},
         },
         *,
     };
@@ -443,12 +446,15 @@ mod reference_parity {
         let mut runtime = CandleRuntime::load(
             &repo_path("tmp/models/whisper-tiny"),
             Device::Cpu,
+            Precision::F32,
         )
         .expect("loading the local whisper-tiny checkpoint");
         let features = fixture_features(&mut runtime);
         let tok = tokenizer();
 
-        let result = decode(&mut runtime, &tok, &features, options).unwrap();
+        let result =
+            decode(&mut runtime, &tok, &features, options, &mut |_| {})
+                .unwrap();
 
         let want_tokens: Vec<TokenId> = case["tokens"]
             .as_array()
@@ -508,6 +514,7 @@ mod reference_parity {
         let mut runtime = CandleRuntime::load(
             &repo_path("tmp/models/whisper-tiny"),
             Device::Cpu,
+            Precision::F32,
         )
         .expect("loading the local whisper-tiny checkpoint");
         let features = fixture_features(&mut runtime);

@@ -114,10 +114,12 @@ enum Command {
 pub(crate) enum AsrCommand {
     /// Transcribe audio with a Whisper model.
     ///
-    /// The audio file is decoded with the system `ffmpeg` (any common format
-    /// works) and transcribed window by window with a fallback policy that
-    /// guards against repetition loops. The first use of a model downloads
-    /// its checkpoint into the working directory; later runs reuse it.
+    /// The audio file is decoded by the built-in decoder — mp3, aac (LC),
+    /// vorbis, flac, alac, and pcm audio in wav/aiff/caf/ogg/mp4/mkv
+    /// containers — and transcribed window by window with a fallback policy
+    /// that guards against repetition loops. The first use of a model
+    /// downloads its checkpoint into the working directory; later runs
+    /// reuse it.
     Whisper(WhisperArgs),
 }
 
@@ -158,6 +160,17 @@ pub(crate) struct WhisperArgs {
         value_name = "device"
     )]
     pub(crate) device: DeviceArg,
+
+    /// Compute precision. `f16` (the default) uses about half the memory and
+    /// is faster; `f32` runs in full precision for reproducible results, at
+    /// twice the memory.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = PrecisionArg::F16,
+        value_name = "precision"
+    )]
+    pub(crate) precision: PrecisionArg,
 
     /// Transcribe in the source language, or translate into English.
     #[arg(
@@ -290,6 +303,24 @@ pub(crate) enum DeviceArg {
     Cpu,
     /// The GPU via Metal, on macOS.
     Metal,
+}
+
+/// The `--precision` value of `asr whisper`.
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum PrecisionArg {
+    /// Half precision: less memory, faster (the default).
+    F16,
+    /// Full precision: reproducible, at twice the memory.
+    F32,
+}
+
+impl PrecisionArg {
+    pub(crate) fn to_core(self) -> trakktor_core::asr::whisper::Precision {
+        match self {
+            PrecisionArg::F16 => trakktor_core::asr::whisper::Precision::F16,
+            PrecisionArg::F32 => trakktor_core::asr::whisper::Precision::F32,
+        }
+    }
 }
 
 /// The `--task` value of `asr whisper`.

@@ -197,6 +197,19 @@ pub struct WindowTrace {
     pub segments: Vec<(f64, f64)>,
 }
 
+/// Progress of an in-flight transcription, reported once per processed
+/// window.
+///
+/// The window loop is the one long stage; this lets a caller show that a
+/// long file is still advancing instead of appearing hung.
+#[derive(Debug, Clone, Copy)]
+pub struct TranscribeProgress {
+    /// Seconds of audio processed so far (the current seek position).
+    pub processed_seconds: f64,
+    /// Total seconds of audio content to process.
+    pub total_seconds: f64,
+}
+
 /// Transcribes 16 kHz mono PCM.
 ///
 /// # Errors
@@ -212,6 +225,29 @@ pub fn transcribe<P: ForwardProvider>(
         .map(|(transcription, _)| transcription)
 }
 
+/// [`transcribe`], reporting progress once per processed window.
+///
+/// `progress` receives the current audio position after each window (see
+/// [`TranscribeProgress`]); the transcription is otherwise identical to
+/// [`transcribe`].
+///
+/// # Errors
+///
+/// See [`transcribe`].
+pub fn transcribe_with_progress<P, F>(
+    provider: &mut P,
+    audio: &[f32],
+    options: &TranscribeOptions,
+    progress: &mut F,
+) -> Result<Transcription, WhisperError>
+where
+    P: ForwardProvider,
+    F: FnMut(TranscribeProgress),
+{
+    run_transcription(provider, audio, options, progress)
+        .map(|(transcription, _)| transcription)
+}
+
 /// [`transcribe`], additionally returning the per-window decision traces.
 ///
 /// # Errors
@@ -221,6 +257,18 @@ pub fn transcribe_with_trace<P: ForwardProvider>(
     provider: &mut P,
     audio: &[f32],
     options: &TranscribeOptions,
+) -> Result<(Transcription, Vec<WindowTrace>), WhisperError> {
+    run_transcription(provider, audio, options, &mut |_: TranscribeProgress| {})
+}
+
+/// The transcription loop shared by the public entry points. `progress` is
+/// invoked once per processed window (including windows skipped as silent)
+/// with the current audio position.
+fn run_transcription<P: ForwardProvider>(
+    provider: &mut P,
+    audio: &[f32],
+    options: &TranscribeOptions,
+    progress: &mut dyn FnMut(TranscribeProgress),
 ) -> Result<(Transcription, Vec<WindowTrace>), WhisperError> {
     if options.temperature.is_empty() {
         return Err(WhisperError::InvalidOptions(
@@ -372,8 +420,25 @@ pub fn transcribe_with_trace<P: ForwardProvider>(
         let prompt_len = prompt.len();
 
         let features = provider.encode(&window)?;
+        // Report progress on every sampled token, not just once per window —
+        // a single window of a large model can take a long time. `within` is
+        // how far into this window the decode has reached (from the model's
+        // timestamps), so the position advances mid-window instead of sticking
+        // at its start.
+        let mut on_step = |within: f64| {
+            progress(TranscribeProgress {
+                processed_seconds: (time_offset + within).min(content_duration),
+                total_seconds: content_duration,
+            });
+        };
         let (result, attempts) = decode_with_fallback(
-            provider, &tokenizer, &features, options, &language, prompt,
+            provider,
+            &tokenizer,
+            &features,
+            options,
+            &language,
+            prompt,
+            &mut on_step,
         )?;
 
         // Silence check: skip the whole window unless the text is confident
@@ -399,6 +464,7 @@ pub fn transcribe_with_trace<P: ForwardProvider>(
                     context_reset: false,
                     segments: Vec::new(),
                 });
+                report_progress(progress, seek, content_duration);
                 continue;
             }
         }
@@ -545,6 +611,7 @@ pub fn transcribe_with_trace<P: ForwardProvider>(
                             context_reset: false,
                             segments: Vec::new(),
                         });
+                        report_progress(progress, seek, content_duration);
                         continue;
                     }
                 }
@@ -639,6 +706,7 @@ pub fn transcribe_with_trace<P: ForwardProvider>(
             context_reset,
             segments: segment_spans,
         });
+        report_progress(progress, seek, content_duration);
     }
 
     let text = tokenizer.decode(&all_tokens[initial_prompt_tokens.len()..]);
@@ -651,6 +719,22 @@ pub fn transcribe_with_trace<P: ForwardProvider>(
         },
         traces,
     ))
+}
+
+/// Reports the current audio position to the progress callback. `seek` is a
+/// mel-frame offset; it is converted to seconds the same way the loop derives
+/// its time offsets.
+fn report_progress(
+    progress: &mut dyn FnMut(TranscribeProgress),
+    seek: usize,
+    total_seconds: f64,
+) {
+    let processed_seconds =
+        seek as f64 * HOP_LENGTH as f64 / SAMPLE_RATE as f64;
+    progress(TranscribeProgress {
+        processed_seconds: processed_seconds.min(total_seconds),
+        total_seconds,
+    });
 }
 
 /// The mel of the whole signal plus one window of trailing silence.
@@ -671,6 +755,7 @@ fn decode_with_fallback<P: ForwardProvider>(
     options: &TranscribeOptions,
     language: &str,
     prompt: Vec<TokenId>,
+    on_step: &mut dyn FnMut(f64),
 ) -> Result<(DecodeResult, Vec<FallbackAttempt>), WhisperError> {
     let mut attempts: Vec<FallbackAttempt> = Vec::new();
     let mut decode_result: Option<DecodeResult> = None;
@@ -711,8 +796,13 @@ fn decode_with_fallback<P: ForwardProvider>(
             max_initial_timestamp: Some(1.0),
         };
 
-        let result =
-            decoding::decode(provider, tokenizer, features, &decoding_options)?;
+        let result = decoding::decode(
+            provider,
+            tokenizer,
+            features,
+            &decoding_options,
+            on_step,
+        )?;
 
         let mut needs_fallback = false;
         if let Some(threshold) = options.compression_ratio_threshold {

@@ -8,7 +8,10 @@ rust-version.workspace = true
 license.workspace = true
 
 [features]
-default = ["whisper-runtime"]
+default = ["whisper-runtime", "audio"]
+# Built-in audio decoding (symphonia) and the sample-rate/channel conversion
+# pipeline. Off the default set the crate builds without media support.
+audio = ["dep:symphonia"]
 # The candle-backed Whisper runtime. Off the default set this crate builds
 # without the ML stack (feeds/skill only).
 whisper-runtime = ["dep:candle-core", "dep:candle-nn", "dep:serde_json"]
@@ -33,6 +36,7 @@ reqwest.workspace = true
 rustc-hash.workspace = true
 scraper.workspace = true
 serde_json = { workspace = true, optional = true }
+symphonia = { workspace = true, optional = true }
 thiserror.workspace = true
 tiktoken-rs.workspace = true
 url.workspace = true

@@ -101,8 +101,12 @@ fn mean_abs_diff(a: &[f32], b: &[f32]) -> f32 {
 }
 
 fn load_tiny() -> CandleRuntime {
-    CandleRuntime::load(&repo_path("tmp/models/whisper-tiny"), Device::Cpu)
-        .expect("loading the local whisper-tiny checkpoint")
+    CandleRuntime::load(
+        &repo_path("tmp/models/whisper-tiny"),
+        Device::Cpu,
+        Precision::F32,
+    )
+    .expect("loading the local whisper-tiny checkpoint")
 }
 
 /// The committed 2 s PCM fixture as one padded 30 s encoder window.

@@ -401,13 +401,13 @@ fn silent_windows_are_skipped() {
 // `scripts/asr/whisper/gen_transcribe_golden.py`; run with --ignored.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "whisper-runtime")]
+#[cfg(all(feature = "whisper-runtime", feature = "audio"))]
 mod reference_parity {
     use super::{
         super::super::{
-            audio::{AudioDecoder, FfmpegDecoder},
+            audio::{AudioDecoder, BuiltinDecoder},
             model::alignment_heads,
-            runtime::CandleRuntime,
+            runtime::{CandleRuntime, Precision},
         },
         *,
     };
@@ -420,7 +420,7 @@ mod reference_parity {
         if std::env::var("TRAKKTOR_TEST_DEVICE").as_deref() == Ok("metal") {
             #[cfg(feature = "whisper-metal")]
             {
-                return CandleRuntime::load_metal(&dir)
+                return CandleRuntime::load_metal(&dir, Precision::F32)
                     .expect("loading the checkpoint on metal");
             }
             #[cfg(not(feature = "whisper-metal"))]
@@ -428,7 +428,7 @@ mod reference_parity {
                 "TRAKKTOR_TEST_DEVICE=metal needs the whisper-metal feature"
             );
         }
-        CandleRuntime::load_cpu(&dir)
+        CandleRuntime::load_cpu(&dir, Precision::F32)
             .expect("loading the local whisper-tiny checkpoint")
     }
 
@@ -453,7 +453,7 @@ mod reference_parity {
 
         let offset = golden["offset"].as_u64().unwrap() as usize;
         let duration = golden["duration"].as_u64().unwrap() as usize;
-        let pcm = FfmpegDecoder::default()
+        let pcm = BuiltinDecoder
             .decode(&repo_path("tmp/sample.mp3"))
             .expect("decoding the local sample");
         let start = (offset * SAMPLE_RATE).min(pcm.len());
@@ -558,7 +558,7 @@ mod reference_parity {
         // The identical audio slice the reference transcribed.
         let offset = golden["offset"].as_u64().unwrap() as usize;
         let duration = golden["duration"].as_u64().unwrap() as usize;
-        let pcm = FfmpegDecoder::default()
+        let pcm = BuiltinDecoder
             .decode(&repo_path("tmp/sample.mp3"))
             .expect("decoding the local sample");
         let start = (offset * SAMPLE_RATE).min(pcm.len());

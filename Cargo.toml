@@ -38,6 +38,16 @@ serde_json = { version = "1", features = [
     # against reference dumps bit for bit.
     "float_roundtrip",
 ] }
+# Default features (flac/ogg/vorbis/wav/pcm/adpcm/mkv + metadata + SIMD) plus
+# the codecs and containers common for speech recordings.
+symphonia = { version = "0.6", features = [
+    "aac",
+    "alac",
+    "mp3",
+    "isomp4",
+    "aiff",
+    "caf",
+] }
 thiserror = "2"
 tiktoken-rs = { version = "0.12", default-features = false }
 url = "2"

@@ -12,31 +12,53 @@ fn pad_or_trim_truncates() {
     assert_eq!(pad_or_trim(&x, 2), vec![1.0, 2.0]);
 }
 
-#[test]
-fn pcm_decode_scales_i16() {
-    // -32768 -> -1.0, 0 -> 0.0, 32767 -> ~0.99997.
-    let bytes = [0x00, 0x80, 0x00, 0x00, 0xff, 0x7f];
-    let f = pcm_s16le_to_f32(&bytes);
-    assert_eq!(f[0], -1.0);
-    assert_eq!(f[1], 0.0);
-    assert!((f[2] - 0.999_969).abs() < 1e-5);
-}
+#[cfg(feature = "audio")]
+mod builtin {
+    use std::path::Path;
 
-/// Verifies the ffmpeg backend reproduces the committed PCM fixture.
-/// Opt-in: it needs `ffmpeg` on `PATH` and the developer-local sample
-/// file.
-#[test]
-#[ignore = "requires ffmpeg and the local sample; run with --ignored"]
-fn ffmpeg_decode_matches_pcm_fixture() {
-    let sample =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../tmp/sample.mp3");
-    let samples = FfmpegDecoder::default().decode(&sample).expect("decode");
+    use super::*;
 
-    let want: Vec<f32> = include_bytes!("../testdata/sample_2s.pcm.bin")
-        .chunks_exact(4)
-        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-        .collect();
+    fn sample_path() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../tmp/sample.mp3")
+    }
 
-    assert!(samples.len() >= want.len());
-    assert_eq!(&samples[..want.len()], &want[..]);
+    fn fixture_path() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/asr/whisper/testdata/sample_2s.pcm.bin")
+    }
+
+    /// Verifies the built-in decoder reproduces the committed PCM fixture
+    /// bit for bit — the regression anchor of the whole audio pipeline.
+    /// Opt-in: it needs the developer-local sample file.
+    #[test]
+    #[ignore = "requires the local sample; run with --ignored"]
+    fn builtin_decode_matches_pcm_fixture() {
+        let samples = BuiltinDecoder.decode(&sample_path()).expect("decode");
+
+        let want: Vec<f32> = std::fs::read(fixture_path())
+            .expect("reading the fixture")
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect();
+
+        assert!(samples.len() >= want.len());
+        let same = samples[..want.len()]
+            .iter()
+            .zip(&want)
+            .all(|(a, b)| a.to_bits() == b.to_bits());
+        assert!(same, "decoded samples diverge from the fixture");
+    }
+
+    /// Regenerates the committed fixture from the current pipeline. Run
+    /// explicitly (`--ignored write_sample_pcm_fixture`) only when the
+    /// pipeline intentionally changes, and re-run the feature goldens after.
+    #[test]
+    #[ignore = "writes the fixture; run explicitly on intentional changes"]
+    fn write_sample_pcm_fixture() {
+        let samples = BuiltinDecoder.decode(&sample_path()).expect("decode");
+        let two_seconds = &samples[..2 * SAMPLE_RATE];
+        let bytes: Vec<u8> =
+            two_seconds.iter().flat_map(|v| v.to_le_bytes()).collect();
+        std::fs::write(fixture_path(), bytes).expect("writing the fixture");
+    }
 }

@@ -184,6 +184,11 @@ pub fn detect_language<P: ForwardProvider>(
 /// `options.language` is `None`, the language is detected from the window
 /// and the language token in the start sequence is overwritten accordingly.
 ///
+/// `on_step` is invoked once per sampled token with the audio position, in
+/// seconds within this window, that the decode has reached (from the last
+/// timestamp token; zero until the first one). A progress hook for a long
+/// decode; pass `&mut |_| {}` to ignore it.
+///
 /// # Errors
 ///
 /// Returns [`WhisperError::InvalidOptions`] for inconsistent options and
@@ -193,6 +198,7 @@ pub fn decode<P: ForwardProvider>(
     tokenizer: &Tokenizer,
     features: &P::AudioFeatures,
     options: &DecodingOptions,
+    on_step: &mut dyn FnMut(f64),
 ) -> Result<DecodeResult, WhisperError> {
     verify_options(options)?;
 
@@ -200,6 +206,8 @@ pub fn decode<P: ForwardProvider>(
         let dims = provider.dims();
         (dims.n_text_ctx, dims.n_audio_ctx)
     };
+    // Seconds of audio per timestamp token (and per decoder position).
+    let time_precision = CHUNK_LENGTH as f64 / n_audio_ctx as f64;
     let n_group = options.beam_size.or(options.best_of).unwrap_or(1);
     let sample_len = options.sample_len.unwrap_or(n_ctx / 2);
 
@@ -267,10 +275,9 @@ pub fn decode<P: ForwardProvider>(
         )?)));
     }
     if !options.without_timestamps {
-        let precision = CHUNK_LENGTH as f64 / n_audio_ctx as f64;
         let max_initial_timestamp_index = options
             .max_initial_timestamp
-            .map(|max| (max / precision).round() as usize);
+            .map(|max| (max / time_precision).round() as usize);
         logit_filters.push(Box::new(ApplyTimestampRules::new(
             tokenizer,
             sample_begin,
@@ -290,6 +297,8 @@ pub fn decode<P: ForwardProvider>(
         sot_index,
         &logit_filters,
         decoder.as_mut(),
+        time_precision,
+        on_step,
     );
     provider.end_decode();
     let (tokens, sum_logprobs, no_speech_prob) = loop_result?;
@@ -347,10 +356,13 @@ fn main_loop<P: ForwardProvider>(
     sot_index: usize,
     logit_filters: &[Box<dyn LogitFilter>],
     decoder: &mut dyn TokenDecoder,
+    time_precision: f64,
+    on_step: &mut dyn FnMut(f64),
 ) -> Result<(Vec<Vec<TokenId>>, Vec<f32>, f32), WhisperError> {
     let mut tokens: Vec<Vec<TokenId>> = vec![initial_tokens.to_vec(); n_group];
     let mut sum_logprobs = vec![0.0f32; n_group];
     let mut no_speech_prob = f32::NAN;
+    let timestamp_begin = tokenizer.timestamp_begin();
 
     for step in 0..sample_len {
         let logits: Logits = if step == 0 {
@@ -383,6 +395,15 @@ fn main_loop<P: ForwardProvider>(
         if let Some(source_indices) = rearrange {
             provider.rearrange_kv_cache(&source_indices)?;
         }
+        // Report the audio position reached: the most recent timestamp token
+        // of the leading sequence, in seconds within the window (zero until
+        // the first timestamp is emitted).
+        let reached = tokens[0]
+            .iter()
+            .rev()
+            .find(|&&t| t >= timestamp_begin)
+            .map_or(0.0, |&t| f64::from(t - timestamp_begin) * time_precision);
+        on_step(reached);
         if completed || tokens[0].len() > n_ctx {
             break;
         }

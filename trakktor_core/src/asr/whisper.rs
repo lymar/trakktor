@@ -25,7 +25,9 @@ pub mod timing;
 pub mod tokenizer;
 pub mod transcribe;
 
-pub use audio::{AudioDecoder, FfmpegDecoder, pad_or_trim};
+#[cfg(feature = "audio")]
+pub use audio::BuiltinDecoder;
+pub use audio::{AudioDecoder, pad_or_trim};
 pub use decoding::{
     DecodeResult, DecodingOptions, PromptInput, decode, detect_language,
 };
@@ -34,7 +36,10 @@ pub use error::WhisperError;
 pub use feature::{Mel, MelBands, MelWindow, log_mel_spectrogram};
 pub use model::{CrossQk, ForwardProvider, Logits, ModelDims, alignment_heads};
 #[cfg(feature = "whisper-runtime")]
-pub use runtime::CandleRuntime;
+pub use runtime::{CandleRuntime, Precision};
 pub use timing::Word;
 pub use tokenizer::{Task, TokenId, Tokenizer};
-pub use transcribe::{Segment, TranscribeOptions, Transcription, transcribe};
+pub use transcribe::{
+    Segment, TranscribeOptions, TranscribeProgress, Transcription, transcribe,
+    transcribe_with_progress,
+};

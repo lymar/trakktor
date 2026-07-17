@@ -354,8 +354,11 @@ impl AudioEncoder {
         };
         let conv1 = conv1d(dims.n_mels, n_state, 3, cfg1, vb.pp("conv1"))?;
         let conv2 = conv1d(n_state, n_state, 3, cfg2, vb.pp("conv2"))?;
+        // Sinusoids are derived in f32; cast to the weight dtype so the
+        // positional add matches the (possibly f16) activations.
         let positional_embedding =
-            sinusoids(dims.n_audio_ctx, n_state, vb.device())?;
+            sinusoids(dims.n_audio_ctx, n_state, vb.device())?
+                .to_dtype(vb.dtype())?;
         let blocks = (0..dims.n_audio_layer)
             .map(|i| {
                 ResidualAttentionBlock::load(
@@ -429,7 +432,10 @@ impl TextDecoder {
                     .map(move |j| if j > i { f32::NEG_INFINITY } else { 0f32 })
             })
             .collect();
-        let mask = Tensor::from_vec(mask, (n_ctx, n_ctx), vb.device())?;
+        // The additive causal mask (0 / -inf) rides with the attention
+        // scores, so it must share their dtype.
+        let mask = Tensor::from_vec(mask, (n_ctx, n_ctx), vb.device())?
+            .to_dtype(vb.dtype())?;
         Ok(Self {
             token_embedding,
             positional_embedding,
