@@ -48,6 +48,42 @@ fn wav_s16_decodes_natively() {
 }
 
 #[test]
+fn streamed_blocks_concatenate_to_the_batch_result() {
+    // A stereo 44.1 kHz signal through the full downmix+resample chain: the
+    // streaming blocks, concatenated, must equal the batch decode exactly.
+    let mut frames = Vec::new();
+    for i in 0..44_100 {
+        let t = i as f32 / 44_100.0;
+        let left =
+            ((t * 440.0 * std::f32::consts::TAU).sin() * 12_000.0) as i16;
+        let right =
+            ((t * 330.0 * std::f32::consts::TAU).sin() * 9_000.0) as i16;
+        frames.push(left);
+        frames.push(right);
+    }
+    let wav = wav_s16(44_100, 2, &frames);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.wav");
+    std::fs::write(&path, wav).unwrap();
+
+    let batch = decode_to_mono_s16(&path, 16_000).unwrap();
+
+    let mut stream = MonoS16Stream::open(&path, 16_000).unwrap();
+    // WAV declares its length: the hint must be present and close to 1 s.
+    let hint = stream.duration_hint().expect("wav declares duration");
+    assert!((hint - 1.0).abs() < 0.01, "hint {hint}");
+    let mut streamed = Vec::new();
+    let mut blocks = 0usize;
+    while let Some(block) = stream.next_block().unwrap() {
+        assert!(!block.is_empty());
+        streamed.extend(block);
+        blocks += 1;
+    }
+    assert!(blocks > 1, "expected several blocks, got {blocks}");
+    assert_eq!(streamed, batch);
+}
+
+#[test]
 fn unknown_format_is_a_clean_error() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("t.bin");

@@ -42,6 +42,48 @@ const GATES: usize = 4 * HIDDEN;
 /// peak intermediate memory on long files.
 const ENCODER_CHUNK: usize = 2048;
 
+/// Carry-over state of a streaming probability computation: the partial
+/// window, the context tail of the last full window, buffered (not yet
+/// encoded) window frames, and the LSTM recurrence.
+///
+/// Create with [`VadStreamState::new`], feed via [`Vad::stream_push`], flush
+/// with [`Vad::stream_finish`].
+#[derive(Debug, Clone)]
+pub struct VadStreamState {
+    /// Samples of the current, not yet complete 512-sample window.
+    pending: Vec<f32>,
+    /// The last [`CONTEXT_SIZE`] samples of the previous full window (zeros
+    /// before the first).
+    context: [f32; CONTEXT_SIZE],
+    /// Context-prefixed frames of complete windows awaiting an encoder batch.
+    frames: Vec<f32>,
+    /// Number of windows in `frames`.
+    buffered: usize,
+    /// LSTM hidden state.
+    h: Vec<f32>,
+    /// LSTM cell state.
+    c: Vec<f32>,
+}
+
+impl VadStreamState {
+    /// A fresh state: zero context, zero LSTM state, nothing buffered.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            pending: Vec::with_capacity(WINDOW_SIZE),
+            context: [0.0; CONTEXT_SIZE],
+            frames: Vec::new(),
+            buffered: 0,
+            h: vec![0.0; HIDDEN],
+            c: vec![0.0; HIDDEN],
+        }
+    }
+}
+
+impl Default for VadStreamState {
+    fn default() -> Self { Self::new() }
+}
+
 /// The loaded Silero-VAD model.
 pub struct Vad {
     device: Device,
@@ -152,37 +194,97 @@ impl Vad {
     ///
     /// Returns [`VadError`] on a backend failure.
     pub fn probabilities(&self, audio: &[f32]) -> Result<Vec<f32>, VadError> {
-        let n_windows = audio.len().div_ceil(WINDOW_SIZE);
-        if n_windows == 0 {
-            return Ok(Vec::new());
-        }
+        let mut state = VadStreamState::new();
+        let mut probs = self.stream_push(&mut state, audio)?;
+        probs.extend(self.stream_finish(&mut state)?);
+        Ok(probs)
+    }
 
-        // The window of index i is `padded[i*512 .. i*512 + 576]`: 64 samples
-        // of the previous window's tail as context (zeros before the first
-        // window) followed by 512 new samples (zero-filled past the end).
+    /// Feeds more samples into a streaming probability computation, returning
+    /// the probabilities of the windows completed so far.
+    ///
+    /// Windows are encoded in the same [`ENCODER_CHUNK`]-aligned batches as
+    /// [`probabilities`](Self::probabilities), so probabilities arrive in
+    /// bursts (up to ~65 s of audio behind the fed frontier) but the arithmetic
+    /// — and therefore every value — is identical to the whole-buffer call.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VadError`] on a backend failure.
+    pub fn stream_push(
+        &self,
+        state: &mut VadStreamState,
+        samples: &[f32],
+    ) -> Result<Vec<f32>, VadError> {
         let window_len = CONTEXT_SIZE + WINDOW_SIZE;
-        let mut padded = vec![0f32; CONTEXT_SIZE + n_windows * WINDOW_SIZE];
-        padded[CONTEXT_SIZE..CONTEXT_SIZE + audio.len()].copy_from_slice(audio);
-
-        // Input-projection outputs `z_ih` for every window, gathered across
-        // encoder chunks; the recurrence then only needs the (small) recurrent
-        // matmul per step.
-        let mut z_ih = Vec::with_capacity(n_windows * GATES);
-        let mut start = 0;
-        while start < n_windows {
-            let batch = ENCODER_CHUNK.min(n_windows - start);
-            let mut frames = vec![0f32; batch * window_len];
-            for w in 0..batch {
-                let src = (start + w) * WINDOW_SIZE;
-                frames[w * window_len..(w + 1) * window_len]
-                    .copy_from_slice(&padded[src..src + window_len]);
+        let mut probs = Vec::new();
+        let mut input = samples;
+        while !input.is_empty() {
+            let need = WINDOW_SIZE - state.pending.len();
+            let take = need.min(input.len());
+            state.pending.extend_from_slice(&input[..take]);
+            input = &input[take..];
+            if state.pending.len() < WINDOW_SIZE {
+                break;
             }
-            let batch_z = self.encode_chunk(&frames, batch)?;
-            z_ih.extend_from_slice(&batch_z);
-            start += batch;
+            // A full window: append its context-prefixed frame and roll the
+            // context forward.
+            state.frames.extend_from_slice(&state.context);
+            state.frames.extend_from_slice(&state.pending);
+            state
+                .context
+                .copy_from_slice(&state.pending[WINDOW_SIZE - CONTEXT_SIZE..]);
+            state.pending.clear();
+            state.buffered += 1;
+            if state.buffered == ENCODER_CHUNK {
+                let z = self.encode_chunk(&state.frames, state.buffered)?;
+                probs.extend(self.recur_and_classify(
+                    &z,
+                    state.buffered,
+                    &mut state.h,
+                    &mut state.c,
+                ));
+                state.frames.clear();
+                state.buffered = 0;
+            }
         }
+        debug_assert_eq!(state.frames.len(), state.buffered * window_len);
+        Ok(probs)
+    }
 
-        Ok(self.recur_and_classify(&z_ih, n_windows))
+    /// Flushes a streaming computation: zero-pads a trailing partial window
+    /// (exactly as the whole-buffer call does) and encodes the remaining
+    /// buffered windows. The state is reset afterwards.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VadError`] on a backend failure.
+    pub fn stream_finish(
+        &self,
+        state: &mut VadStreamState,
+    ) -> Result<Vec<f32>, VadError> {
+        if !state.pending.is_empty() {
+            state.pending.resize(WINDOW_SIZE, 0.0);
+            state.frames.extend_from_slice(&state.context);
+            state.frames.extend_from_slice(&state.pending);
+            state
+                .context
+                .copy_from_slice(&state.pending[WINDOW_SIZE - CONTEXT_SIZE..]);
+            state.pending.clear();
+            state.buffered += 1;
+        }
+        let mut probs = Vec::new();
+        if state.buffered > 0 {
+            let z = self.encode_chunk(&state.frames, state.buffered)?;
+            probs = self.recur_and_classify(
+                &z,
+                state.buffered,
+                &mut state.h,
+                &mut state.c,
+            );
+        }
+        *state = VadStreamState::new();
+        Ok(probs)
     }
 
     /// Runs the STFT + conv encoder and the input projection for one batch of
@@ -263,15 +365,20 @@ impl Vad {
             .map_err(|e| vad_err("VAD z_ih readout", e))
     }
 
-    /// Steps the LSTM over all windows and applies the classifier, in plain
-    /// f32 Rust. `z_ih` is the pre-computed input projection (`n * GATES`).
+    /// Steps the LSTM over `n` windows and applies the classifier, in plain
+    /// f32 Rust. `z_ih` is the pre-computed input projection (`n * GATES`);
+    /// `(h, c)` is the recurrent state, carried across calls by streaming.
     ///
     /// The cell computes every gate from the previous `(h, c)`, so the new
     /// state is written to separate buffers and swapped in only after the whole
     /// step — a gate must never read a partially updated `h`.
-    fn recur_and_classify(&self, z_ih: &[f32], n: usize) -> Vec<f32> {
-        let mut h = vec![0f32; HIDDEN];
-        let mut c = vec![0f32; HIDDEN];
+    fn recur_and_classify(
+        &self,
+        z_ih: &[f32],
+        n: usize,
+        h: &mut Vec<f32>,
+        c: &mut Vec<f32>,
+    ) -> Vec<f32> {
         let mut next_h = vec![0f32; HIDDEN];
         let mut next_c = vec![0f32; HIDDEN];
         let mut probs = Vec::with_capacity(n);
@@ -280,18 +387,18 @@ impl Vad {
             // Classifier accumulator: fc_b + Σ_k relu(h'_k) · fc_w_k.
             let mut logit = self.fc_b;
             for k in 0..HIDDEN {
-                let ig = sigmoid(self.gate(z, &h, k));
-                let fg = sigmoid(self.gate(z, &h, HIDDEN + k));
-                let gg = self.gate(z, &h, 2 * HIDDEN + k).tanh();
-                let og = sigmoid(self.gate(z, &h, 3 * HIDDEN + k));
+                let ig = sigmoid(self.gate(z, h, k));
+                let fg = sigmoid(self.gate(z, h, HIDDEN + k));
+                let gg = self.gate(z, h, 2 * HIDDEN + k).tanh();
+                let og = sigmoid(self.gate(z, h, 3 * HIDDEN + k));
                 let cell = fg * c[k] + ig * gg;
                 let hid = og * cell.tanh();
                 next_c[k] = cell;
                 next_h[k] = hid;
                 logit += hid.max(0.0) * self.fc_w[k];
             }
-            std::mem::swap(&mut h, &mut next_h);
-            std::mem::swap(&mut c, &mut next_c);
+            std::mem::swap(h, &mut next_h);
+            std::mem::swap(c, &mut next_c);
             probs.push(sigmoid(logit));
         }
         probs

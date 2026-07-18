@@ -141,24 +141,10 @@ pub fn decode_to_mono_s16(
     path: &Path,
     out_rate: u32,
 ) -> Result<Vec<i16>, AudioError> {
-    let mut stream = AudioStream::open(path)?;
-    let mut shaper: Option<Shaper> = None;
+    let mut stream = MonoS16Stream::open(path, out_rate)?;
     let mut out = Vec::new();
-    while let Some(buf) = stream.next_buf()? {
-        let shaper = match &mut shaper {
-            Some(s) => s,
-            None => shaper.insert(Shaper::new(
-                stream.rate,
-                buf.channels(),
-                stream.mask,
-                buf.format(),
-                out_rate,
-            )?),
-        };
-        out.extend(shaper.feed(buf));
-    }
-    if let Some(shaper) = &mut shaper {
-        out.extend(shaper.finish());
+    while let Some(block) = stream.next_block()? {
+        out.extend(block);
     }
     Ok(out)
 }
@@ -176,6 +162,66 @@ pub fn decode_to_mono_f32(
         .collect())
 }
 
+/// A streaming decode of a media file into mono s16 at a target rate: the
+/// same packet-by-packet chain as [`decode_to_mono_s16`], exposed one shaped
+/// block at a time so a consumer can process audio without ever holding the
+/// whole file. The concatenation of all blocks is exactly the batch result.
+pub struct MonoS16Stream {
+    stream: AudioStream,
+    shaper: Option<Shaper>,
+    out_rate: u32,
+    flushed: bool,
+}
+
+impl MonoS16Stream {
+    /// Opens `path` for streaming decode to mono s16 at `out_rate`.
+    pub fn open(path: &Path, out_rate: u32) -> Result<Self, AudioError> {
+        Ok(Self {
+            stream: AudioStream::open(path)?,
+            shaper: None,
+            out_rate,
+            flushed: false,
+        })
+    }
+
+    /// The track duration in seconds, when the container declares it. A hint
+    /// for progress reporting only — streams may misdeclare or omit it.
+    pub fn duration_hint(&self) -> Option<f64> { self.stream.duration_hint }
+
+    /// The next non-empty block of shaped samples, or `None` at the end
+    /// (after the final resampler flush).
+    pub fn next_block(&mut self) -> Result<Option<Vec<i16>>, AudioError> {
+        while !self.flushed {
+            let Some(buf) = self.stream.next_buf()? else {
+                self.flushed = true;
+                if let Some(shaper) = &mut self.shaper {
+                    let tail = shaper.finish();
+                    if !tail.is_empty() {
+                        return Ok(Some(tail));
+                    }
+                }
+                return Ok(None);
+            };
+            let shaper = match &mut self.shaper {
+                Some(s) => s,
+                None => self.shaper.insert(Shaper::new(
+                    self.stream.rate,
+                    buf.channels(),
+                    self.stream.mask,
+                    buf.format(),
+                    self.out_rate,
+                )?),
+            };
+            let block = shaper.feed(buf);
+            // The resampler may be priming; skip empty output.
+            if !block.is_empty() {
+                return Ok(Some(block));
+            }
+        }
+        Ok(None)
+    }
+}
+
 /// An opened media file: format reader plus the decoder of its default
 /// audio track.
 struct AudioStream {
@@ -188,6 +234,8 @@ struct AudioStream {
     bits: Option<u32>,
     /// Leading frames still to drop (mp4 edit-list priming, §gapless).
     pending_skip: u64,
+    /// Declared track duration in seconds, when the container knows it.
+    duration_hint: Option<f64>,
 }
 
 impl AudioStream {
@@ -220,6 +268,22 @@ impl AudioStream {
         let params = match &track.codec_params {
             Some(CodecParameters::Audio(p)) => p.clone(),
             _ => return Err(AudioError::NoAudioTrack),
+        };
+        // Declared duration, for progress hints: playable frames over the
+        // source rate when known, else the container duration via the
+        // timebase.
+        let duration_hint = match (track.num_frames, params.sample_rate) {
+            (Some(frames), Some(rate)) if rate > 0 => {
+                Some(frames as f64 / f64::from(rate))
+            },
+            _ => match (track.duration, track.time_base) {
+                (Some(duration), Some(tb)) => tb
+                    .calc_time(symphonia::core::units::Timestamp::new(
+                        duration.get() as i64,
+                    ))
+                    .map(|time| time.as_secs_f64()),
+                _ => None,
+            },
         };
         // Gapless trimming is on by default — encoder delay and padding are
         // removed the way the reference demuxer/decoder pair does it.
@@ -271,6 +335,7 @@ impl AudioStream {
             mask,
             bits: params.bits_per_sample,
             pending_skip,
+            duration_hint,
         })
     }
 

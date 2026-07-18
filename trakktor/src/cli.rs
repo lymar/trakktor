@@ -180,6 +180,91 @@ pub(crate) enum AsrCommand {
     /// downloads its checkpoint into the model directory (~/.trakktor by
     /// default; see --model-dir), and later runs reuse it.
     Whisper(WhisperArgs),
+
+    /// Transcribe audio with a GigaAM model.
+    ///
+    /// GigaAM is a family of Conformer acoustic models with character-wise CTC
+    /// decoding — strongest on Russian (`v3_ctc`) and, with the multilingual
+    /// checkpoints, several more languages. The audio is decoded by the
+    /// built-in decoder, split along detected speech into chunks, and each
+    /// chunk transcribed in a single pass. The first use of a model downloads
+    /// its checkpoint into the model directory (~/.trakktor by default; see
+    /// --model-dir), and later runs reuse it.
+    Gigaam(GigaamArgs),
+}
+
+/// Flags of `asr gigaam`.
+#[derive(Args)]
+pub(crate) struct GigaamArgs {
+    /// Path to the audio file to transcribe.
+    #[arg(value_name = "audio")]
+    pub(crate) audio: PathBuf,
+
+    /// Model: a published name, downloaded on first use, or a path to a
+    /// checkpoint `.ckpt` file. Names: v3_ctc (Russian, lowercase, no
+    /// punctuation), v3_e2e_ctc (Russian with punctuation and capitalization),
+    /// multilingual_ctc, multilingual_large_ctc (the largest, most accurate).
+    /// Larger models are slower.
+    #[arg(long, default_value = "v3_ctc", value_name = "name|file")]
+    pub(crate) model: String,
+
+    /// Timestamp granularity of the output.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = TimestampsArg::Segment,
+        value_name = "granularity"
+    )]
+    pub(crate) timestamps: TimestampsArg,
+
+    /// Compute device. `metal` needs a build with the `metal` feature enabled
+    /// and is only available on macOS.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = DeviceArg::Cpu,
+        value_name = "device"
+    )]
+    pub(crate) device: DeviceArg,
+
+    /// Compute precision. `f16` (the default) uses about half the memory and
+    /// is faster on GPU, matching how the reference runs on GPU; `f32` runs in
+    /// full precision for reproducible results, at twice the memory.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = PrecisionArg::F16,
+        value_name = "precision"
+    )]
+    pub(crate) precision: PrecisionArg,
+
+    /// Audio decoder. `builtin` (the default) is pure Rust and needs no
+    /// external tools; `ffmpeg` shells out to an installed `ffmpeg` and adds
+    /// input formats the built-in decoder does not cover, such as opus, wma,
+    /// and amr.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = AudioDecoderArg::Builtin,
+        value_name = "decoder"
+    )]
+    pub(crate) audio_decoder: AudioDecoderArg,
+
+    /// Language label to report in the output (a code like `ru`). GigaAM does
+    /// not detect the language; this only annotates the result.
+    #[arg(long, value_name = "lang")]
+    pub(crate) language: Option<String>,
+
+    /// Also write the transcript to files in this format: txt, vtt, srt, tsv,
+    /// json, or `all`. Files are named after the audio and written into
+    /// `--output-dir`; stdout still prints the result as usual.
+    #[arg(long, value_enum, value_name = "format")]
+    pub(crate) output_format: Option<OutputFormatArg>,
+
+    /// Directory for files written by `--output-format`, created if missing
+    /// (default: the current directory).
+    #[arg(long, default_value = ".", value_name = "dir")]
+    pub(crate) output_dir: PathBuf,
 }
 
 /// Flags of `asr whisper`.
@@ -447,6 +532,13 @@ impl PrecisionArg {
         match self {
             PrecisionArg::F16 => trakktor_core::asr::whisper::Precision::F16,
             PrecisionArg::F32 => trakktor_core::asr::whisper::Precision::F32,
+        }
+    }
+
+    pub(crate) fn to_gigaam(self) -> trakktor_core::asr::gigaam::Precision {
+        match self {
+            PrecisionArg::F16 => trakktor_core::asr::gigaam::Precision::F16,
+            PrecisionArg::F32 => trakktor_core::asr::gigaam::Precision::F32,
         }
     }
 
@@ -984,6 +1076,12 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
     match &cli.command {
         Command::Asr { command } => match command {
             AsrCommand::Whisper(args) => crate::asr::run_whisper(
+                args,
+                &global.model_dir()?,
+                global.json(),
+                global.pretty,
+            ),
+            AsrCommand::Gigaam(args) => crate::asr::run_gigaam(
                 args,
                 &global.model_dir()?,
                 global.json(),

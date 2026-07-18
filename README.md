@@ -87,12 +87,17 @@ read-state), `--model-dir <path>` (also `TRAKKTOR_MODEL_DIR`; default
 
 Transcribe (or translate) speech from an audio file. Speech recognition is
 organized as **engines**, each selected as a subcommand with its own model and
-flags; one engine ships today, `whisper`:
+flags. Two engines ship today: `whisper` (many languages; can translate to
+English) and `gigaam` (Conformer/CTC models, strongest on Russian — see the
+`asr gigaam` section below):
 
 ```sh
 trakktor asr whisper talk.mp3            # JSON (default): text + timestamped segments
 trakktor asr whisper talk.mp3 --text     # readable [start --> end] lines
 trakktor asr whisper talk.mp3 --pretty   # indented JSON
+
+trakktor asr gigaam ru.mp3               # GigaAM (Russian by default)
+trakktor asr gigaam ru.mp3 --model multilingual_large_ctc --device metal
 ```
 
 The one required argument is the path to an audio file. It is decoded by a
@@ -380,6 +385,56 @@ trakktor asr whisper talk.mp3 --start 0:15 --end 5:30 \
 # Decode a format the built-in decoder does not cover
 trakktor asr whisper voice.opus --audio-decoder ffmpeg --model small
 ```
+
+### `asr gigaam` — GigaAM engine
+
+[GigaAM](https://github.com/salute-developers/GigaAM) is a family of Conformer
+acoustic models with character-wise CTC decoding — strongest on Russian, and,
+with the multilingual checkpoints, several more languages. It is a faithful port
+of the reference pipeline on the same candle runtime as `whisper`, with the same
+built-in audio decoder and the same output envelope.
+
+```sh
+trakktor asr gigaam ru.mp3                       # Russian (v3_ctc), CPU, JSON
+trakktor asr gigaam ru.mp3 --text                # readable [start --> end] lines
+trakktor asr gigaam ru.mp3 --timestamps word     # per-word timings
+trakktor asr gigaam ru.mp3 \
+  --model multilingual_large_ctc --device metal   # largest model on GPU (f16 by default)
+```
+
+Models (downloaded on first use into `~/.trakktor/asr/gigaam/<name>.ckpt`, or
+pass a path to a local `.ckpt`):
+
+- **`v3_ctc`** (default) — Russian; lowercase text without punctuation.
+- **`v3_e2e_ctc`** — Russian **with punctuation and capitalization** (end-to-end
+  model with text normalization — numbers as digits, sentence casing).
+- **`multilingual_ctc`** — multiple languages (220M).
+- **`multilingual_large_ctc`** — the largest, most accurate multilingual model
+  (600M).
+
+The plain CTC models emit normalized lowercase text without punctuation (their
+alphabet has none); use `v3_e2e_ctc` when you need readable, punctuated
+Russian:
+
+```sh
+trakktor asr gigaam ru.mp3 --model v3_e2e_ctc --device metal --text
+```
+
+Unlike Whisper's autoregressive decoder, GigaAM's CTC decoding is a single
+encoder pass per chunk followed by an argmax — there is no per-token generation
+loop, so the GPU stays busy through a chunk. Audio longer than ~25 seconds is
+split along detected speech (voice-activity detection) into chunks, each
+transcribed independently and stitched back onto the original timeline. Chunk
+boundaries are placed by dynamic programming over the pauses between speech —
+the longer a pause, the likelier the cut lands there — so segments tend to fall
+on sentence boundaries while staying near the target length.
+
+The whole pipeline is **streaming**: the file is decoded block by block,
+speech detection runs incrementally, and each chunk is transcribed — and its
+audio released — as soon as its boundaries are settled. Memory stays bounded
+by a few minutes of audio regardless of the recording length, so multi-hour
+files transcribe in constant memory. GigaAM does not detect the language;
+`--language <code>` only annotates the output.
 
 ## `vad` — voice-activity audio editing
 
@@ -690,6 +745,9 @@ Apache-licensed:
 - **`asr whisper`** — [OpenAI Whisper](https://github.com/openai/whisper)
   (MIT), run on [candle](https://github.com/huggingface/candle) (Apache-2.0 OR
   MIT).
+- **`asr gigaam`** — [GigaAM](https://github.com/salute-developers/GigaAM)
+  (MIT): Conformer/CTC acoustic models by the GigaChat team, pipeline ported
+  to the same candle runtime.
 - **`vad`, and `asr --vad`** — [Silero-VAD](https://github.com/snakers4/silero-vad)
   (MIT): the ported speech detector behind both the audio editing commands and
   the transcription preprocessing stage.

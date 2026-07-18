@@ -6,8 +6,12 @@
 //! never change its external `code`.
 
 use trakktor_core::{
-    asr::whisper::WhisperError, audio::AudioError, feed::FeedError,
-    http::HttpError, skill::SkillError, structify::StructifyError,
+    asr::{gigaam::GigaamError, whisper::WhisperError},
+    audio::AudioError,
+    feed::FeedError,
+    http::HttpError,
+    skill::SkillError,
+    structify::StructifyError,
     vad::VadError,
 };
 
@@ -16,6 +20,8 @@ use trakktor_core::{
 pub enum CliError {
     /// An error from the `asr` feature.
     Asr(WhisperError),
+    /// An error from the GigaAM engine.
+    Gigaam(GigaamError),
     /// An error from voice-activity detection (the model).
     Vad(VadError),
     /// An error from decoding or encoding audio (the `vad` feature).
@@ -34,6 +40,7 @@ impl CliError {
     pub fn code(&self) -> &'static str {
         match self {
             CliError::Asr(err) => asr_code(err),
+            CliError::Gigaam(err) => gigaam_code(err),
             CliError::Vad(_) => "vad_failed",
             CliError::Audio(err) => audio_code(err),
             CliError::Feed(err) => feed_code(err),
@@ -47,6 +54,7 @@ impl std::fmt::Display for CliError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CliError::Asr(err) => write!(f, "{err}"),
+            CliError::Gigaam(err) => write!(f, "{err}"),
             CliError::Vad(err) => write!(f, "{err}"),
             CliError::Audio(err) => write!(f, "{err}"),
             CliError::Feed(err) => write!(f, "{err}"),
@@ -58,6 +66,10 @@ impl std::fmt::Display for CliError {
 
 impl From<WhisperError> for CliError {
     fn from(err: WhisperError) -> Self { CliError::Asr(err) }
+}
+
+impl From<GigaamError> for CliError {
+    fn from(err: GigaamError) -> Self { CliError::Gigaam(err) }
 }
 
 impl From<VadError> for CliError {
@@ -91,6 +103,21 @@ fn asr_code(err: &WhisperError) -> &'static str {
         WhisperError::InvalidOptions(_) => "invalid_options",
         WhisperError::Io(_) => "io_error",
         WhisperError::HomeDirUnknown => "no_home_dir",
+    }
+}
+
+/// Maps a [`GigaamError`] to its stable `code`.
+fn gigaam_code(err: &GigaamError) -> &'static str {
+    match err {
+        GigaamError::AudioDecode(_) => "audio_decode_failed",
+        GigaamError::InvalidModel(_) | GigaamError::ModelDownload(_) => {
+            "model_unavailable"
+        },
+        GigaamError::InvalidOptions(_) => "invalid_options",
+        GigaamError::UnsupportedLanguage(_) => "unsupported_language",
+        GigaamError::Vad(_) => "vad_failed",
+        GigaamError::Io(_) => "io_error",
+        GigaamError::HomeDirUnknown => "no_home_dir",
     }
 }
 

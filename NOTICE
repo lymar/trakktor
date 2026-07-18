@@ -22,6 +22,15 @@ OpenAI Whisper — MIT License
   weights are downloaded from Hugging Face at runtime and are not redistributed
   in this repository.
 
+GigaAM — MIT License
+  Copyright (c) 2024 GigaChat Team
+  https://github.com/salute-developers/GigaAM
+  The `asr gigaam` engine ports the GigaAM pipeline (Conformer acoustic models
+  with CTC decoding). The per-model feature-geometry configs embedded in the
+  binary (trakktor_core/src/asr/gigaam/assets/) are derived from the GigaAM
+  checkpoints. Model checkpoints are downloaded from the official CDN at
+  runtime and are not redistributed in this repository.
+
 Silero-VAD — MIT License
   Copyright (c) 2020-present Silero Team
   https://github.com/snakers4/silero-vad

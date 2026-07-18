@@ -43,12 +43,15 @@ fn format_timestamp_vtt_and_srt_markers() {
 
 #[test]
 fn txt_is_one_trimmed_segment_per_line() {
-    assert_eq!(render_txt(&sample()), "Hello world.\nSecond one.\n");
+    assert_eq!(
+        render_txt(&sample().segments),
+        "Hello world.\nSecond one.\n"
+    );
 }
 
 #[test]
 fn vtt_has_header_and_cues() {
-    let vtt = render_vtt(&sample());
+    let vtt = render_vtt(&sample().segments);
     assert!(vtt.starts_with("WEBVTT\n\n"));
     assert!(vtt.contains("00:00.000 --> 00:02.500\nHello world.\n\n"));
     assert!(vtt.contains("00:02.500 --> 01:01:01.750\nSecond one.\n\n"));
@@ -56,7 +59,7 @@ fn vtt_has_header_and_cues() {
 
 #[test]
 fn srt_numbers_cues_from_one() {
-    let srt = render_srt(&sample());
+    let srt = render_srt(&sample().segments);
     assert!(
         srt.starts_with("1\n00:00:00,000 --> 00:00:02,500\nHello world.\n\n")
     );
@@ -65,7 +68,7 @@ fn srt_numbers_cues_from_one() {
 
 #[test]
 fn tsv_uses_integer_milliseconds() {
-    let tsv = render_tsv(&sample());
+    let tsv = render_tsv(&sample().segments);
     assert!(tsv.starts_with("start\tend\ttext\n"));
     assert!(tsv.contains("0\t2500\tHello world.\n"));
     assert!(tsv.contains("2500\t3661750\tSecond one.\n"));
@@ -77,8 +80,8 @@ fn subtitle_text_neutralizes_arrows() {
         segments: vec![seg(0, 0.0, 1.0, "a --> b")],
         ..sample()
     };
-    assert!(render_srt(&t).contains("a -> b"));
-    assert!(!render_srt(&t).contains("a --> b"));
+    assert!(render_srt(&t.segments).contains("a -> b"));
+    assert!(!render_srt(&t.segments).contains("a --> b"));
 }
 
 #[test]

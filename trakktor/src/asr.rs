@@ -14,7 +14,10 @@ use trakktor_core::{
 
 use crate::{cli::WhisperArgs, error::CliError, output};
 
+mod gigaam;
 mod writers;
+
+pub(crate) use gigaam::run_gigaam;
 
 /// Runs one transcription end to end: resolve (and if needed download) the
 /// model, load it, decode the audio, transcribe, and print the result.

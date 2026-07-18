@@ -20,7 +20,8 @@ mod rematrix;
 mod resample;
 
 pub use decode::{
-    DecodedAudio, decode_file, decode_to_mono_f32, decode_to_mono_s16,
+    DecodedAudio, MonoS16Stream, decode_file, decode_to_mono_f32,
+    decode_to_mono_s16,
 };
 pub use error::AudioError;
 pub use pipeline::SampleFormat;

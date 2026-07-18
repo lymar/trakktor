@@ -11,11 +11,35 @@ use std::{
 };
 
 use trakktor_core::{
-    asr::whisper::{Transcription, WhisperError},
+    asr::{
+        gigaam,
+        whisper::{Transcription, WhisperError},
+    },
     vad::SpeechSegment,
 };
 
 use crate::cli::OutputFormatArg;
+
+/// A segment as the text subtitle writers see it: a time span and its text.
+/// Implemented by every engine's segment type so the txt/vtt/srt/tsv renderers
+/// are shared.
+trait CueSegment {
+    fn start(&self) -> f64;
+    fn end(&self) -> f64;
+    fn text(&self) -> &str;
+}
+
+impl CueSegment for trakktor_core::asr::whisper::Segment {
+    fn start(&self) -> f64 { self.start }
+    fn end(&self) -> f64 { self.end }
+    fn text(&self) -> &str { &self.text }
+}
+
+impl CueSegment for gigaam::Segment {
+    fn start(&self) -> f64 { self.start }
+    fn end(&self) -> f64 { self.end }
+    fn text(&self) -> &str { &self.text }
+}
 
 /// The formats [`OutputFormatArg::All`] expands to, in a stable order.
 const ALL_FORMATS: [OutputFormatArg; 5] = [
@@ -74,10 +98,10 @@ fn render(
     vad_speech: Option<&[SpeechSegment]>,
 ) -> (&'static str, String) {
     match format {
-        OutputFormatArg::Txt => ("txt", render_txt(transcription)),
-        OutputFormatArg::Vtt => ("vtt", render_vtt(transcription)),
-        OutputFormatArg::Srt => ("srt", render_srt(transcription)),
-        OutputFormatArg::Tsv => ("tsv", render_tsv(transcription)),
+        OutputFormatArg::Txt => ("txt", render_txt(&transcription.segments)),
+        OutputFormatArg::Vtt => ("vtt", render_vtt(&transcription.segments)),
+        OutputFormatArg::Srt => ("srt", render_srt(&transcription.segments)),
+        OutputFormatArg::Tsv => ("tsv", render_tsv(&transcription.segments)),
         OutputFormatArg::Json => (
             "json",
             render_json(transcription, model, with_words, vad_speech),
@@ -87,22 +111,88 @@ fn render(
     }
 }
 
+/// Writes a GigaAM transcript in the requested format(s) into `output_dir`.
+/// Same file layout as [`write_outputs`]; the JSON form is GigaAM's envelope.
+pub fn write_gigaam_outputs(
+    transcription: &gigaam::Transcription,
+    audio_path: &Path,
+    format: OutputFormatArg,
+    output_dir: &Path,
+    with_words: bool,
+) -> Result<Vec<PathBuf>, WhisperError> {
+    let stem = audio_path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "transcript".to_string());
+
+    fs::create_dir_all(output_dir).map_err(|e| {
+        WhisperError::Io(format!("{}: {e}", output_dir.display()))
+    })?;
+
+    let formats: &[OutputFormatArg] = match format {
+        OutputFormatArg::All => &ALL_FORMATS,
+        ref single => std::slice::from_ref(single),
+    };
+
+    let mut written = Vec::with_capacity(formats.len());
+    for &format in formats {
+        let (extension, content) = match format {
+            OutputFormatArg::Txt => {
+                ("txt", render_txt(&transcription.segments))
+            },
+            OutputFormatArg::Vtt => {
+                ("vtt", render_vtt(&transcription.segments))
+            },
+            OutputFormatArg::Srt => {
+                ("srt", render_srt(&transcription.segments))
+            },
+            OutputFormatArg::Tsv => {
+                ("tsv", render_tsv(&transcription.segments))
+            },
+            OutputFormatArg::Json => {
+                let value = crate::output::gigaam_transcription_to_json(
+                    transcription,
+                    audio_path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("gigaam"),
+                    None,
+                    true,
+                    with_words,
+                );
+                (
+                    "json",
+                    serde_json::to_string(&value)
+                        .expect("serializing a serde_json::Value never fails"),
+                )
+            },
+            OutputFormatArg::All => unreachable!("all is expanded"),
+        };
+        let path = output_dir.join(format!("{stem}.{extension}"));
+        fs::write(&path, content).map_err(|e| {
+            WhisperError::Io(format!("{}: {e}", path.display()))
+        })?;
+        written.push(path);
+    }
+    Ok(written)
+}
+
 /// Plain text: one trimmed segment per line.
-fn render_txt(transcription: &Transcription) -> String {
+fn render_txt<S: CueSegment>(segments: &[S]) -> String {
     let mut out = String::new();
-    for segment in &transcription.segments {
-        out.push_str(segment.text.trim());
+    for segment in segments {
+        out.push_str(segment.text().trim());
         out.push('\n');
     }
     out
 }
 
 /// WebVTT: a `WEBVTT` header then one cue per segment.
-fn render_vtt(transcription: &Transcription) -> String {
+fn render_vtt<S: CueSegment>(segments: &[S]) -> String {
     let mut out = String::from("WEBVTT\n\n");
-    for segment in &transcription.segments {
-        let start = format_timestamp(segment.start, false, '.');
-        let end = format_timestamp(segment.end, false, '.');
+    for segment in segments {
+        let start = format_timestamp(segment.start(), false, '.');
+        let end = format_timestamp(segment.end(), false, '.');
         out.push_str(&format!("{start} --> {end}\n{}\n\n", cue_text(segment)));
     }
     out
@@ -110,11 +200,11 @@ fn render_vtt(transcription: &Transcription) -> String {
 
 /// SubRip (SRT): numbered cues with comma decimal marks and hours always
 /// present.
-fn render_srt(transcription: &Transcription) -> String {
+fn render_srt<S: CueSegment>(segments: &[S]) -> String {
     let mut out = String::new();
-    for (index, segment) in transcription.segments.iter().enumerate() {
-        let start = format_timestamp(segment.start, true, ',');
-        let end = format_timestamp(segment.end, true, ',');
+    for (index, segment) in segments.iter().enumerate() {
+        let start = format_timestamp(segment.start(), true, ',');
+        let end = format_timestamp(segment.end(), true, ',');
         out.push_str(&format!(
             "{}\n{start} --> {end}\n{}\n\n",
             index + 1,
@@ -125,12 +215,12 @@ fn render_srt(transcription: &Transcription) -> String {
 }
 
 /// TSV: a header then `start<TAB>end<TAB>text`, times as integer milliseconds.
-fn render_tsv(transcription: &Transcription) -> String {
+fn render_tsv<S: CueSegment>(segments: &[S]) -> String {
     let mut out = String::from("start\tend\ttext\n");
-    for segment in &transcription.segments {
-        let start = (segment.start * 1000.0).round() as i64;
-        let end = (segment.end * 1000.0).round() as i64;
-        let text = segment.text.trim().replace('\t', " ");
+    for segment in segments {
+        let start = (segment.start() * 1000.0).round() as i64;
+        let end = (segment.end() * 1000.0).round() as i64;
+        let text = segment.text().trim().replace('\t', " ");
         out.push_str(&format!("{start}\t{end}\t{text}\n"));
     }
     out
@@ -156,8 +246,8 @@ fn render_json(
 
 /// Segment text for a subtitle cue: trimmed, with any `-->` neutralized so it
 /// cannot be mistaken for a cue-timing arrow.
-fn cue_text(segment: &trakktor_core::asr::whisper::Segment) -> String {
-    segment.text.trim().replace("-->", "->")
+fn cue_text<S: CueSegment>(segment: &S) -> String {
+    segment.text().trim().replace("-->", "->")
 }
 
 /// Formats `seconds` as `[HH:]MM:SS<marker>mmm`, rounding to whole

@@ -8,7 +8,13 @@ rust-version.workspace = true
 license.workspace = true
 
 [features]
-default = ["whisper-runtime", "audio", "vad", "structify-runtime"]
+default = [
+    "whisper-runtime",
+    "gigaam-runtime",
+    "audio",
+    "vad",
+    "structify-runtime",
+]
 # Built-in audio decoding (symphonia), the sample-rate/channel conversion
 # pipeline, and the WAV/FLAC encoders. Off the default set the crate builds
 # without media support.
@@ -16,6 +22,9 @@ audio = ["dep:symphonia", "dep:hound", "dep:flacenc"]
 # The candle-backed Whisper runtime. Off the default set this crate builds
 # without the ML stack (feeds/skill only).
 whisper-runtime = ["dep:candle-core", "dep:candle-nn", "dep:serde_json"]
+# The candle-backed GigaAM runtime (Conformer encoder + CTC/RNN-T heads). Off
+# the default set this crate builds without the GigaAM stack.
+gigaam-runtime = ["dep:candle-core", "dep:candle-nn", "dep:serde_json", "dep:md-5"]
 # Silero voice-activity detection: an engine-independent speech-preprocessing
 # stage over ASR. Needs candle (the model runs on the CPU). Off the default set
 # the crate builds without VAD.
@@ -32,6 +41,9 @@ structify-runtime = [
 # GPU acceleration for the Whisper runtime.
 whisper-metal = ["whisper-runtime", "candle-core/metal", "candle-nn/metal"]
 whisper-cuda = ["whisper-runtime", "candle-core/cuda", "candle-nn/cuda"]
+# GPU acceleration for the GigaAM runtime.
+gigaam-metal = ["gigaam-runtime", "candle-core/metal", "candle-nn/metal"]
+gigaam-cuda = ["gigaam-runtime", "candle-core/cuda", "candle-nn/cuda"]
 # GPU acceleration for the structify runtime.
 structify-metal = ["structify-runtime", "candle-core/metal", "candle-nn/metal"]
 structify-cuda = ["structify-runtime", "candle-core/cuda", "candle-nn/cuda"]
@@ -49,6 +61,7 @@ feedparser-rs.workspace = true
 flacenc = { workspace = true, optional = true }
 flate2.workspace = true
 hound = { workspace = true, optional = true }
+md-5 = { workspace = true, optional = true }
 rand.workspace = true
 realfft.workspace = true
 reqwest.workspace = true

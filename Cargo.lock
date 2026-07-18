@@ -4002,6 +4002,7 @@ dependencies = [
  "flacenc",
  "flate2",
  "hound",
+ "md-5",
  "rand 0.9.4",
  "realfft",
  "reqwest",

@@ -29,8 +29,10 @@ pub mod segment;
 pub use collapse::{Collapsed, TimeMapping};
 pub use edit::{EditOptions, Keep};
 pub use error::VadError;
-pub use model::Vad;
-pub use segment::{SpeechSegment, VadOptions, speech_timestamps};
+pub use model::{Vad, VadStreamState};
+pub use segment::{
+    SpeechDetector, SpeechSegment, VadOptions, speech_timestamps,
+};
 
 /// Audio sample rate the model expects, in Hz. The engine input is always
 /// 16 kHz mono, so the 8 kHz Silero path is out of scope.

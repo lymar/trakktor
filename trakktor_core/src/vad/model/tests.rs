@@ -45,6 +45,48 @@ fn dump_probs_for_parity() {
 }
 
 #[test]
+fn streamed_pushes_match_batch_exactly() {
+    // Feeding the same signal in odd-sized blocks must give bit-identical
+    // probabilities: streaming buffers windows into the same encoder-chunk
+    // batches as the whole-buffer path.
+    let vad = Vad::load().unwrap();
+    // ~3.2 s of a deterministic signal with structure (chirp + noise-ish).
+    let audio: Vec<f32> = (0..51_000)
+        .map(|n| {
+            let t = n as f32 / 16_000.0;
+            (t * (200.0 + 40.0 * t) * std::f32::consts::TAU).sin() * 0.25 +
+                ((n as f32 * 12.9898).sin() * 43758.547).fract() * 0.02
+        })
+        .collect();
+    let batch = vad.probabilities(&audio).unwrap();
+
+    let mut state = VadStreamState::new();
+    let mut streamed = Vec::new();
+    // Deliberately awkward block sizes, none aligned to the 512 window.
+    let mut pos = 0;
+    for (i, step) in [1usize, 511, 513, 7, 4096, 100_000]
+        .iter()
+        .cycle()
+        .enumerate()
+    {
+        if pos >= audio.len() {
+            break;
+        }
+        let end = (pos + step + i % 3).min(audio.len());
+        streamed.extend(vad.stream_push(&mut state, &audio[pos..end]).unwrap());
+        pos = end;
+    }
+    streamed.extend(vad.stream_finish(&mut state).unwrap());
+
+    assert_eq!(streamed.len(), batch.len());
+    let identical = streamed
+        .iter()
+        .zip(&batch)
+        .all(|(a, b)| a.to_bits() == b.to_bits());
+    assert!(identical, "streamed probabilities must be bit-identical");
+}
+
+#[test]
 fn a_tone_is_more_speechlike_than_silence() {
     // Not a speech detector test — just that the network responds to signal, a
     // cheap guard against a dead/zeroed forward pass.
