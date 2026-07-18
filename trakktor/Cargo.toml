@@ -8,8 +8,8 @@ rust-version.workspace = true
 license.workspace = true
 
 [features]
-# GPU acceleration on macOS for `asr` (`--device metal`).
-metal = ["trakktor_core/whisper-metal"]
+# GPU acceleration on macOS for `asr` and `text structify` (`--device metal`).
+metal = ["trakktor_core/whisper-metal", "trakktor_core/structify-metal"]
 
 [[bin]]
 name = "trakktor"

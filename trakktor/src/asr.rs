@@ -478,8 +478,9 @@ fn clock(seconds: f64) -> String {
 }
 
 /// A download progress reporter: percentages on stderr when it is a
-/// terminal, one line per file otherwise.
-fn download_progress() -> impl FnMut(&str, u64, Option<u64>) {
+/// terminal, one line per file otherwise. Shared with other commands that
+/// download model weights.
+pub(crate) fn download_progress() -> impl FnMut(&str, u64, Option<u64>) {
     let interactive = std::io::stderr().is_terminal();
     let mut announced: Option<String> = None;
     let mut last_percent: u64 = u64::MAX;

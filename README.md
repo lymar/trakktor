@@ -1,8 +1,8 @@
 # trakktor
 
 `trakktor` is a predictable, automation-friendly Rust CLI toolbox for coding
-agents (Claude Code, OpenCode, etc.): speech-to-text, feeds, and more —
-machine-readable output, stable flags, and meaningful exit codes.
+agents (Claude Code, OpenCode, etc.): speech-to-text, feeds, text structuring,
+and more — machine-readable output, stable flags, and meaningful exit codes.
 
 ## Install
 
@@ -29,8 +29,8 @@ cd trakktor
 cargo install --locked --path trakktor
 ```
 
-For GPU-accelerated speech recognition on macOS, add `--features metal` to
-either install command; see the `asr` section below.
+For GPU acceleration on macOS (speech recognition and text structuring), add
+`--features metal` to either install command; see the `asr` section below.
 
 Verify, then remove if needed:
 
@@ -380,6 +380,107 @@ trakktor asr whisper talk.mp3 --start 0:15 --end 5:30 \
 trakktor asr whisper voice.opus --audio-decoder ffmpeg --model small
 ```
 
+## `text` — structure text
+
+Text-processing operations. One ships today, `structify`.
+
+### `text structify` — split text into paragraphs
+
+Turn an unstructured wall of text — for example a speech transcript whose line
+breaks fall on engine segments rather than meaning — into readable paragraphs,
+fully offline:
+
+```sh
+trakktor text structify transcript.txt            # JSON (default): model + paragraphs
+trakktor text structify transcript.txt --text     # paragraphs separated by blank lines
+trakktor text structify transcript.txt --pretty   # indented JSON
+```
+
+The one required argument is the path to a UTF-8 text file. Its existing line
+breaks are collapsed first (a transcript's segment breaks are not paragraph
+breaks), then a local **SaT** (Segment any Text) model — an XLM-RoBERTa network
+that scores each position for a boundary — re-groups the text into paragraphs.
+It is multilingual, Russian and English included.
+
+### Models
+
+```
+--model <name|dir>      # default: sat-12l-no-limited-lookahead
+```
+
+Pass a **published name** — downloaded on first use into
+`~/.trakktor/text/structify/<name>/` and reused on later runs — or a **path** to
+a local checkpoint directory (one containing `config.json`). The shared XLM-R
+tokenizer is downloaded once alongside. As with `asr`, weights live under the
+**model directory** (`--model-dir` / `TRAKKTOR_MODEL_DIR`; default `~/.trakktor`),
+not the per-project `--work-dir`.
+
+Two families, differing in what they cut on:
+
+- **`sat-1l-no-limited-lookahead`, `sat-3l-…`, `sat-6l-…`, `sat-9l-…`,
+  `sat-12l-… (the default)`** score **paragraph** breaks and yield coarse,
+  reader-style paragraphs. **Depth matters here:** shallow models give a weakly
+  calibrated paragraph signal (`sat-3l` at the default `--threshold 0.5` barely
+  splits at all, and has no clean paragraph threshold), so `sat-12l` is the
+  default — it produces good paragraphs at `0.5`. Smaller ones are faster but
+  need a lower `--threshold` and segment less cleanly. A higher `--threshold`
+  gives fewer, larger paragraphs.
+- **`sat-1l-sm`, `sat-3l-sm`, `sat-6l-sm`, `sat-9l-sm`, `sat-12l-sm`** score
+  finer **sentence** breaks — roughly one unit per sentence, and smaller/faster.
+  Use these when you want sentence-level segmentation.
+
+```sh
+# Sentence-level splitting instead of paragraphs
+trakktor text structify transcript.txt --model sat-3l-sm --text
+```
+
+### Device and precision
+
+```
+--device cpu|metal      # default: cpu
+--precision f16|f32     # default: f16
+```
+
+`--device metal` runs on the macOS GPU and needs a build with the `metal`
+feature (as for `asr`); without it, `--device metal` is rejected. `--precision
+f16` (the default) uses about half the memory and is faster; `f32` computes in
+full precision for reproducible results.
+
+### Segmentation controls
+
+```
+--threshold 0.5   # paragraph-boundary probability cutoff (0..=1); higher = fewer, longer paragraphs
+--stride 256      # window step in tokens; a smaller stride overlaps more (steadier, slower)
+--batch-size 32   # windows per forward batch — the main lever on GPU utilization
+```
+
+### Output shape
+
+The default output is a single JSON object: the `model` and a `paragraphs`
+array. Each paragraph carries its character range `start`/`end` (code points
+into the whitespace-normalized text) and its `text`:
+
+```json
+{
+  "model": "sat-12l-no-limited-lookahead",
+  "paragraphs": [
+    { "start": 0, "end": 137, "text": "…" },
+    { "start": 137, "end": 402, "text": "…" }
+  ]
+}
+```
+
+`--text` instead prints the paragraphs separated by a blank line.
+
+```sh
+# Paragraphs on the GPU (the default model), indented JSON
+trakktor text structify transcript.txt --device metal --pretty
+
+# From speech to paragraphs: transcribe, then structure
+trakktor asr whisper talk.mp3 --timestamps none --text > transcript.txt
+trakktor text structify transcript.txt --text
+```
+
 ## `feed` — RSS / Atom / JSON Feed
 
 ### Discover feeds on a page
@@ -470,3 +571,20 @@ show`, so it never goes stale between releases. An existing `SKILL.md` is left
 untouched unless `--force` is given. By default the result is a single JSON
 object `{ "path": "…", "status": "written" | "skipped" }`; `--text` prints it as
 lines.
+
+## Acknowledgments
+
+trakktor ports and builds on several open-source projects, all MIT- or
+Apache-licensed:
+
+- **`asr whisper`** — [OpenAI Whisper](https://github.com/openai/whisper)
+  (MIT), run on [candle](https://github.com/huggingface/candle) (Apache-2.0 OR
+  MIT); the `--vad` stage ports [Silero-VAD](https://github.com/snakers4/silero-vad)
+  (MIT).
+- **`text structify`** — [SaT / wtpsplit](https://github.com/segment-any-text/wtpsplit)
+  (MIT; Frohmann et al., *Segment Any Text*, EMNLP 2024), with the
+  [XLM-RoBERTa](https://huggingface.co/FacebookAI/xlm-roberta-base) (MIT)
+  tokenizer. Please cite the SaT paper if you use these models.
+
+See [`NOTICE`](NOTICE) for the full third-party attributions and license
+notices.

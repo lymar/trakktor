@@ -1,0 +1,99 @@
+trakktor — THIRD-PARTY NOTICES
+==============================
+
+trakktor itself is licensed under MIT OR Apache-2.0 (see Cargo.toml). It
+reuses the third-party works listed below; their licenses and copyright
+notices are reproduced or referenced here as those licenses require.
+
+Keep this file in sync when adding or changing a third-party dependency
+(see CLAUDE.md, "Third-party attribution").
+
+
+-------------------------------------------------------------------------------
+1. Ported implementations, embedded assets, and models
+-------------------------------------------------------------------------------
+
+OpenAI Whisper — MIT License
+  Copyright (c) 2022 OpenAI
+  https://github.com/openai/whisper
+  The `asr whisper` engine ports the Whisper transcription pipeline. The mel
+  filterbanks and byte-pair-encoding vocabularies embedded in the binary
+  (trakktor_core/src/asr/whisper/assets/) are taken from Whisper. Whisper model
+  weights are downloaded from Hugging Face at runtime and are not redistributed
+  in this repository.
+
+Silero-VAD — MIT License
+  Copyright (c) 2020-present Silero Team
+  https://github.com/snakers4/silero-vad
+  The voice-activity-detection stage ports the Silero-VAD v5 model and its
+  `get_speech_timestamps` algorithm. The model weights
+  (trakktor_core/src/asr/vad/assets/silero_vad_16k.safetensors, ~1.24 MB) are
+  embedded in the binary.
+
+whisper.cpp / ggml — MIT License
+  Copyright (c) 2023-2026 The ggml authors
+  https://github.com/ggerganov/whisper.cpp
+  The approach for feeding detected speech into transcription (a dense
+  speech-only buffer with timestamp remapping) follows whisper.cpp.
+
+SaT / wtpsplit — MIT License
+  Copyright (c) 2024 Benjamin Minixhofer, Markus Frohmann, Igor Sterner
+  https://github.com/segment-any-text/wtpsplit
+  The `text structify` models and inference pipeline are ported from SaT
+  ("Segment Any Text: A Universal Approach for Robust, Efficient and Adaptable
+  Sentence Segmentation"; Frohmann, Sterner, Vulić, Minixhofer, Schedl,
+  EMNLP 2024). Please cite that paper if you use these models. The `sat-*`
+  model weights (MIT, https://huggingface.co/segment-any-text) are downloaded
+  at runtime and are not redistributed in this repository.
+
+candle / candle-transformers — Apache-2.0 OR MIT License
+  Copyright (c) The candle authors (Hugging Face)
+  https://github.com/huggingface/candle
+  The vendored neural-network implementations — the Whisper and XLM-RoBERTa
+  forward passes — are adapted from candle-transformers. candle is also the
+  runtime that executes them.
+
+XLM-RoBERTa (FacebookAI/xlm-roberta-base) — MIT License
+  https://huggingface.co/FacebookAI/xlm-roberta-base
+  Used as the tokenizer for `text structify` (its tokenizer.json is downloaded
+  at runtime) and as the base model of the SaT checkpoints.
+
+
+-------------------------------------------------------------------------------
+2. Rust crate dependencies
+-------------------------------------------------------------------------------
+
+trakktor builds on numerous Rust crates (declared in Cargo.toml, pinned in
+Cargo.lock), predominantly under the MIT and/or Apache-2.0 licenses. Each crate
+remains under its own license; Cargo.lock is the authoritative list of the
+exact versions in use. When distributing compiled binaries, generate the full
+set of dependency license texts with a tool such as `cargo about` or
+`cargo bundle-licenses`.
+
+
+-------------------------------------------------------------------------------
+3. License texts
+-------------------------------------------------------------------------------
+
+MIT License (applies to the MIT-licensed works listed in section 1)
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+Apache License 2.0 (candle, at your option): see
+https://www.apache.org/licenses/LICENSE-2.0

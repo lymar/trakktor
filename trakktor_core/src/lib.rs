@@ -10,3 +10,5 @@ pub mod audio;
 pub mod feed;
 pub mod http;
 pub mod skill;
+#[cfg(feature = "structify-runtime")]
+pub mod structify;

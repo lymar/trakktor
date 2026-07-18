@@ -1,0 +1,81 @@
+//! `text structify`: flag mapping, model resolution, and the segmentation run.
+
+use std::path::Path;
+
+use trakktor_core::structify::{
+    self, SatRuntime, Structifier, StructifyError, StructifyOptions,
+    XlmrTokenizer,
+};
+
+use crate::{cli::StructifyArgs, error::CliError};
+
+/// Runs one structuring end to end: read the text, resolve (and if needed
+/// download) the model and tokenizer, load them, segment into paragraphs, and
+/// print the result.
+pub(crate) fn run_structify(
+    args: &StructifyArgs,
+    model_dir: &Path,
+    json: bool,
+    pretty: bool,
+) -> Result<(), CliError> {
+    // Read and normalize the input first, so a bad path fails before any
+    // download or model load.
+    let raw = std::fs::read_to_string(&args.input).map_err(|e| {
+        StructifyError::Io(format!("{}: {e}", args.input.display()))
+    })?;
+    let text = structify::normalize(&raw);
+
+    let resolved = structify::resolve_model(
+        model_dir,
+        &args.model,
+        &mut crate::asr::download_progress(),
+    )?;
+    let tokenizer_path = structify::resolve_tokenizer(
+        model_dir,
+        &mut crate::asr::download_progress(),
+    )?;
+
+    let precision = args.precision.to_structify();
+    let runtime = match args.device {
+        crate::cli::DeviceArg::Cpu => {
+            SatRuntime::load_cpu(&resolved.dir, precision)?
+        },
+        crate::cli::DeviceArg::Metal => load_metal(&resolved.dir, precision)?,
+    };
+    let tokenizer = XlmrTokenizer::load(&tokenizer_path)?;
+    let structifier = Structifier::new(runtime, tokenizer);
+
+    let options = StructifyOptions {
+        threshold: args.threshold,
+        stride: args.stride,
+        batch_size: args.batch_size,
+        weighting: structify::Weighting::Uniform,
+    };
+    let paragraphs = structifier.paragraphs(&text, &options)?;
+
+    crate::output::print_structify(&args.model, &paragraphs, json, pretty);
+    Ok(())
+}
+
+/// Loads the model on Metal (builds with the `metal` feature).
+#[cfg(feature = "metal")]
+fn load_metal(
+    model_dir: &Path,
+    precision: structify::Precision,
+) -> Result<SatRuntime, CliError> {
+    Ok(SatRuntime::load_metal(model_dir, precision)?)
+}
+
+/// Without the `metal` feature, `--device metal` is a validation error.
+#[cfg(not(feature = "metal"))]
+fn load_metal(
+    _model_dir: &Path,
+    _precision: structify::Precision,
+) -> Result<SatRuntime, CliError> {
+    Err(StructifyError::InvalidModel(
+        "this build has no Metal support; install or build trakktor with the \
+         `metal` feature"
+            .into(),
+    )
+    .into())
+}

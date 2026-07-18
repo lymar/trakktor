@@ -8,5 +8,6 @@ mod cli;
 mod error;
 mod output;
 mod skill;
+mod structify;
 
 fn main() { std::process::exit(cli::run()); }

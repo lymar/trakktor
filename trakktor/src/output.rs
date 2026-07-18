@@ -18,6 +18,7 @@ use trakktor_core::{
         Publication,
     },
     skill::WriteOutcome,
+    structify::Paragraph,
 };
 
 use crate::{cli::TimestampsArg, error::CliError};
@@ -154,6 +155,43 @@ fn insert_f64(object: &mut Map<String, Value>, key: &str, value: f64) {
     if let Some(number) = serde_json::Number::from_f64(value) {
         object.insert(key.to_string(), Value::Number(number));
     }
+}
+
+// ---------------------------------------------------------------------------
+// text structify
+// ---------------------------------------------------------------------------
+
+/// Prints the paragraphs of a structify run. JSON: an object with the `model`
+/// and a `paragraphs` array, each `{ start, end, text }` where `start`/`end`
+/// are character offsets into the normalized text. Text: the paragraphs
+/// separated by a blank line.
+pub fn print_structify(
+    model: &str,
+    paragraphs: &[Paragraph],
+    json: bool,
+    pretty: bool,
+) {
+    if json {
+        let array: Vec<Value> = paragraphs
+            .iter()
+            .map(|paragraph| {
+                json!({
+                    "start": paragraph.start,
+                    "end": paragraph.end,
+                    "text": paragraph.text,
+                })
+            })
+            .collect();
+        print_json(&json!({ "model": model, "paragraphs": array }), pretty);
+        return;
+    }
+
+    let joined = paragraphs
+        .iter()
+        .map(|paragraph| paragraph.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    println!("{joined}");
 }
 
 // ---------------------------------------------------------------------------

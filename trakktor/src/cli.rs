@@ -25,10 +25,11 @@ const DEFAULT_WORK_DIR: &str = ".trakktor";
 const DEFAULT_MODEL_DIR_NAME: &str = ".trakktor";
 
 /// A predictable, automation-friendly CLI toolbox for coding agents (Claude
-/// Code, OpenCode, etc.): speech-to-text, feeds, and more — machine-readable
-/// output, stable flags, and meaningful exit codes. Reach for it when a task
-/// needs one of these helpers, such as fetching a feed's unread items or
-/// transcribing an audio file to timestamped text.
+/// Code, OpenCode, etc.): speech-to-text, feeds, text structuring, and more —
+/// machine-readable output, stable flags, and meaningful exit codes. Reach for
+/// it when a task needs one of these helpers, such as fetching a feed's unread
+/// items, transcribing an audio file to timestamped text, or splitting a
+/// transcript into readable paragraphs.
 ///
 /// Output is JSON by default (`--pretty` indents it); pass `--text` for
 /// human-readable text. Results go to stdout, errors to stderr. Exit codes are
@@ -112,6 +113,17 @@ enum Command {
     Asr {
         #[command(subcommand)]
         command: AsrCommand,
+    },
+
+    /// Structure and transform text.
+    ///
+    /// A group of text-processing operations. The first, `structify`, turns an
+    /// unstructured wall of text — for example a speech transcript whose line
+    /// breaks fall on segments rather than meaning — into readable paragraphs
+    /// with a local model, fully offline.
+    Text {
+        #[command(subcommand)]
+        command: TextCommand,
     },
 
     /// Work with RSS/Atom/JSON feeds: discover, read, and track read state.
@@ -421,6 +433,13 @@ impl PrecisionArg {
             PrecisionArg::F32 => trakktor_core::asr::whisper::Precision::F32,
         }
     }
+
+    pub(crate) fn to_structify(self) -> trakktor_core::structify::Precision {
+        match self {
+            PrecisionArg::F16 => trakktor_core::structify::Precision::F16,
+            PrecisionArg::F32 => trakktor_core::structify::Precision::F32,
+        }
+    }
 }
 
 /// The `--task` value of `asr whisper`.
@@ -530,6 +549,82 @@ where
             .map(|parsed| OrNone(Some(parsed)))
             .map_err(|e| format!("expected a value or `none`: {e}"))
     }
+}
+
+#[derive(Subcommand)]
+pub(crate) enum TextCommand {
+    /// Split text into paragraphs.
+    ///
+    /// Reads a UTF-8 text file, collapses its existing line breaks — a
+    /// transcript's segment breaks are not paragraph breaks — and re-groups it
+    /// into logical paragraphs with a local SaT (Segment any Text) model: an
+    /// XLM-RoBERTa network that scores each position for a paragraph boundary.
+    /// The first use of a model downloads it into the model directory
+    /// (~/.trakktor by default; see --model-dir), and later runs reuse it,
+    /// fully offline. A higher --threshold yields fewer, larger paragraphs;
+    /// pass --model sat-3l-sm for finer, sentence-level splitting instead.
+    /// Output is JSON by default — the model and a list of paragraphs, each
+    /// with its character range and text; pass --text for the paragraphs
+    /// separated by blank lines. Multilingual, including Russian and English.
+    Structify(StructifyArgs),
+}
+
+/// Flags of `text structify`.
+#[derive(Args)]
+pub(crate) struct StructifyArgs {
+    /// Path to the UTF-8 text file to structure.
+    #[arg(value_name = "input")]
+    pub(crate) input: PathBuf,
+
+    /// Model: a published name, downloaded on first use, or a path to a
+    /// checkpoint directory. The `-no-limited-lookahead` models (sat-1l,
+    /// sat-3l, sat-6l, sat-9l, sat-12l [default]) score paragraph breaks —
+    /// reader-style paragraphs. Depth matters: shallow models give a weakly
+    /// calibrated paragraph signal, so sat-12l is the default; smaller ones
+    /// are faster but need a lower --threshold and segment less cleanly.
+    /// The `-sm` models (sat-1l-sm … sat-12l-sm) score finer sentence
+    /// breaks instead.
+    #[arg(
+        long,
+        default_value = "sat-12l-no-limited-lookahead",
+        value_name = "name|dir"
+    )]
+    pub(crate) model: String,
+
+    /// Compute device. `metal` needs a build with the `metal` feature enabled
+    /// and is only available on macOS.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = DeviceArg::Cpu,
+        value_name = "device"
+    )]
+    pub(crate) device: DeviceArg,
+
+    /// Compute precision. `f16` (the default) uses about half the memory and
+    /// is faster; `f32` runs in full precision for reproducible results,
+    /// at twice the memory.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = PrecisionArg::F16,
+        value_name = "precision"
+    )]
+    pub(crate) precision: PrecisionArg,
+
+    /// Paragraph-boundary probability threshold in 0..=1; higher yields fewer,
+    /// longer paragraphs.
+    #[arg(long, default_value_t = 0.5, value_name = "float")]
+    pub(crate) threshold: f32,
+
+    /// Window step in tokens. A smaller stride overlaps windows more —
+    /// steadier boundaries, more compute.
+    #[arg(long, default_value_t = 256, value_name = "int")]
+    pub(crate) stride: usize,
+
+    /// Windows per forward batch — the main lever on GPU utilization.
+    #[arg(long, default_value_t = 32, value_name = "int")]
+    pub(crate) batch_size: usize,
 }
 
 #[derive(Subcommand)]
@@ -658,6 +753,14 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
     match &cli.command {
         Command::Asr { command } => match command {
             AsrCommand::Whisper(args) => crate::asr::run_whisper(
+                args,
+                &global.model_dir()?,
+                global.json(),
+                global.pretty,
+            ),
+        },
+        Command::Text { command } => match command {
+            TextCommand::Structify(args) => crate::structify::run_structify(
                 args,
                 &global.model_dir()?,
                 global.json(),

@@ -50,4 +50,10 @@ symphonia = { version = "0.6", features = [
 ] }
 thiserror = "2"
 tiktoken-rs = { version = "0.12", default-features = false }
+# XLM-RoBERTa tokenizer for `text structify` (SaT). `fancy-regex` (pure Rust)
+# stands in for the default `onig` C dependency; the XLM-R tokenizer uses a
+# Metaspace pre-tokenizer, so the regex engine is only a compile-time need.
+tokenizers = { version = "0.22", default-features = false, features = [
+    "fancy-regex",
+] }
 url = "2"

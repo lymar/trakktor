@@ -10,6 +10,7 @@ use trakktor_core::{
     feed::FeedError,
     http::HttpError,
     skill::SkillError,
+    structify::StructifyError,
 };
 
 /// Any runtime/validation error surfaced by a command (exit code 1).
@@ -23,6 +24,8 @@ pub enum CliError {
     Feed(FeedError),
     /// An error from the `skill` feature.
     Skill(SkillError),
+    /// An error from the `text structify` feature.
+    Structify(StructifyError),
 }
 
 impl CliError {
@@ -34,6 +37,7 @@ impl CliError {
             CliError::Vad(_) => "vad_failed",
             CliError::Feed(err) => feed_code(err),
             CliError::Skill(err) => skill_code(err),
+            CliError::Structify(err) => structify_code(err),
         }
     }
 }
@@ -45,6 +49,7 @@ impl std::fmt::Display for CliError {
             CliError::Vad(err) => write!(f, "{err}"),
             CliError::Feed(err) => write!(f, "{err}"),
             CliError::Skill(err) => write!(f, "{err}"),
+            CliError::Structify(err) => write!(f, "{err}"),
         }
     }
 }
@@ -63,6 +68,10 @@ impl From<FeedError> for CliError {
 
 impl From<SkillError> for CliError {
     fn from(err: SkillError) -> Self { CliError::Skill(err) }
+}
+
+impl From<StructifyError> for CliError {
+    fn from(err: StructifyError) -> Self { CliError::Structify(err) }
 }
 
 /// Maps a [`WhisperError`] to its stable `code`.
@@ -102,5 +111,16 @@ fn skill_code(err: &SkillError) -> &'static str {
         SkillError::HomeDirUnknown => "no_home_dir",
         SkillError::AgentDirMissing(_) => "agent_dir_missing",
         SkillError::Io(_) => "io_error",
+    }
+}
+
+/// Maps a [`StructifyError`] to its stable `code`.
+fn structify_code(err: &StructifyError) -> &'static str {
+    match err {
+        StructifyError::InvalidModel(_) |
+        StructifyError::ModelDownload(_) |
+        StructifyError::Tokenizer(_) => "model_unavailable",
+        StructifyError::Io(_) => "io_error",
+        StructifyError::HomeDirUnknown => "no_home_dir",
     }
 }

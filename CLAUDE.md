@@ -107,6 +107,24 @@ published separately). Rationale: `../trakktor_project/docs/adr/0002-cargo-works
   --full` reference lists a new command automatically, but it does **not** make
   the skill discoverable for it — that is what the trigger `description` is for.
 
+## Third-party attribution
+
+trakktor reuses third-party work — **ported/vendored implementations** (e.g. a
+model or algorithm reimplemented from a reference), **embedded or downloaded
+assets and model weights**, and **crate dependencies**. The root **`NOTICE`**
+file records these with their license, copyright holder, and how trakktor uses
+them.
+
+**Keep `NOTICE` in sync in the same change** whenever you add or change such a
+dependency: a new ported implementation, a newly embedded asset, a model that is
+downloaded at runtime, or a crate whose license requires attribution. Preserve
+each work's copyright and permission notice as its license (MIT, Apache-2.0,
+etc.) requires. Attribute ported/adapted code at its source too, in the module
+`//!` doc-comment (name the upstream project and its license) — but **not** in
+clap `///` doc-comments, which are agent-facing (see the leak rule above). When
+a feature has a user-facing home, add a short credit to the `README`
+(`## Acknowledgments`) and, for academic models that request it, the citation.
+
 ## Rust module and test layout
 
 - **No `mod.rs`, ever.** Every module is a single file named after the module

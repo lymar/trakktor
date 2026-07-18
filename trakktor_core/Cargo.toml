@@ -8,7 +8,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [features]
-default = ["whisper-runtime", "audio", "vad"]
+default = ["whisper-runtime", "audio", "vad", "structify-runtime"]
 # Built-in audio decoding (symphonia) and the sample-rate/channel conversion
 # pipeline. Off the default set the crate builds without media support.
 audio = ["dep:symphonia"]
@@ -19,9 +19,21 @@ whisper-runtime = ["dep:candle-core", "dep:candle-nn", "dep:serde_json"]
 # stage over ASR. Needs candle (the model runs on the CPU). Off the default set
 # the crate builds without VAD.
 vad = ["dep:candle-core", "dep:candle-nn"]
+# The candle-backed SaT (XLM-RoBERTa) runtime for `text structify`: text
+# structuring into paragraphs. Needs candle and the XLM-R tokenizer. Off the
+# default set the crate builds without it.
+structify-runtime = [
+    "dep:candle-core",
+    "dep:candle-nn",
+    "dep:serde_json",
+    "dep:tokenizers",
+]
 # GPU acceleration for the Whisper runtime.
 whisper-metal = ["whisper-runtime", "candle-core/metal", "candle-nn/metal"]
 whisper-cuda = ["whisper-runtime", "candle-core/cuda", "candle-nn/cuda"]
+# GPU acceleration for the structify runtime.
+structify-metal = ["structify-runtime", "candle-core/metal", "candle-nn/metal"]
+structify-cuda = ["structify-runtime", "candle-core/cuda", "candle-nn/cuda"]
 
 [dependencies]
 base64.workspace = true
@@ -43,6 +55,7 @@ serde_json = { workspace = true, optional = true }
 symphonia = { workspace = true, optional = true }
 thiserror.workspace = true
 tiktoken-rs.workspace = true
+tokenizers = { workspace = true, optional = true }
 url.workspace = true
 
 [dev-dependencies]
