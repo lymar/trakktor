@@ -7,7 +7,7 @@ members = ["trakktor", "trakktor_core"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.92"
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
@@ -16,6 +16,15 @@ trakktor_core = { path = "trakktor_core" }
 # Shared third-party dependencies, declared once for every workspace member.
 base64 = "0.22"
 blake3 = "1"
+# The alternative GigaAM runtime: ndarray on the CPU, wgpu with MSL-compiled
+# kernels on Metal, with operator fusion and autotuning.
+burn = { version = "0.21", default-features = false, features = [
+    "std",
+    "ndarray",
+    "metal",
+    "fusion",
+    "autotune",
+] }
 candle-core = "0.11"
 candle-nn = "0.11"
 chrono = { version = "0.4", default-features = false, features = ["std"] }

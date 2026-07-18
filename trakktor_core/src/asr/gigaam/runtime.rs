@@ -1,8 +1,12 @@
-//! The candle-backed GigaAM runtime.
+//! The GigaAM runtime seam and its candle implementation.
 //!
-//! Loads a checkpoint (`.ckpt`, a PyTorch/Lightning archive) and runs the
-//! Conformer encoder and CTC / RNN-T heads on [candle](candle_core). Devices:
-//! CPU always; Metal behind the `gigaam-metal` cargo feature.
+//! [`CtcModel`] is the narrow interface the rest of the engine sees: a loaded
+//! model turns one chunk's log-mel features into per-frame CTC argmax labels.
+//! [`GigaamModel`] implements it on [candle](candle_core), loading a
+//! checkpoint (`.ckpt`, a PyTorch/Lightning archive) and running the Conformer
+//! encoder and CTC head. Devices: CPU always; Metal behind the `gigaam-metal`
+//! cargo feature. An alternative burn-backed implementation lives in
+//! `runtime_burn` (the `gigaam-burn` cargo feature).
 
 #[cfg(test)]
 mod bench;
@@ -23,8 +27,25 @@ use super::{
 };
 
 /// Maps any backend failure onto the engine's model error.
-fn model_err(context: &str, e: impl std::fmt::Display) -> GigaamError {
+pub(crate) fn model_err(
+    context: &str,
+    e: impl std::fmt::Display,
+) -> GigaamError {
     GigaamError::InvalidModel(format!("{context}: {e}"))
+}
+
+/// A loaded CTC model behind a runtime-agnostic seam: everything transcription
+/// needs is the feature extractor matching the model's mel geometry and the
+/// map from one chunk's log-mel features to per-frame argmax class labels.
+/// The rest of the pipeline (speech segmentation, CTC collapse, tokenization,
+/// timestamps) is shared across runtimes.
+pub trait CtcModel {
+    /// The feature extractor.
+    fn feature(&self) -> &FeatureExtractor;
+
+    /// Runs one chunk's log-mel features through the encoder and the CTC head,
+    /// returning the argmax class label of every encoder frame (`T'` labels).
+    fn ctc_labels(&self, mel: &Mel) -> Result<Vec<u32>, GigaamError>;
 }
 
 /// Compute precision of the runtime.
@@ -53,8 +74,9 @@ impl Precision {
 }
 
 /// Names of the checkpoint's feature-extractor buffers.
-const FB_KEY: &str = "preprocessor.featurizer.0.mel_scale.fb";
-const WINDOW_KEY: &str = "preprocessor.featurizer.0.spectrogram.window";
+pub(crate) const FB_KEY: &str = "preprocessor.featurizer.0.mel_scale.fb";
+pub(crate) const WINDOW_KEY: &str =
+    "preprocessor.featurizer.0.spectrogram.window";
 
 /// A loaded GigaAM CTC model: feature extractor, Conformer encoder, and CTC
 /// head, all on one device at one precision.
@@ -149,6 +171,14 @@ impl GigaamModel {
     /// The compute device.
     pub fn device(&self) -> &Device { &self.device }
 
+    /// Argmax class labels over encoder frames, read back once as `u32` ids.
+    fn argmax_labels(&self, logits: &Tensor) -> Result<Vec<u32>, GigaamError> {
+        logits
+            .argmax(candle_core::D::Minus1)
+            .and_then(|t| t.to_vec1::<u32>())
+            .map_err(|e| model_err("argmax", e))
+    }
+
     /// Runs the encoder over a single chunk's log-mel features, returning the
     /// encoded output `[T', d_model]`.
     pub fn encode(&self, mel: &Mel) -> Result<Tensor, GigaamError> {
@@ -180,19 +210,39 @@ impl GigaamModel {
     }
 }
 
+impl CtcModel for GigaamModel {
+    fn feature(&self) -> &FeatureExtractor { &self.feature }
+
+    fn ctc_labels(&self, mel: &Mel) -> Result<Vec<u32>, GigaamError> {
+        let encoded = self.encode(mel)?;
+        let logits = self.ctc_logits(&encoded)?;
+        self.argmax_labels(&logits)
+    }
+}
+
 /// Reads a checkpoint tensor as a flat f32 vector.
 fn tensor_to_f32_vec(
     map: &HashMap<String, Tensor>,
     key: &str,
 ) -> Result<Vec<f32>, GigaamError> {
+    Ok(tensor_to_f32_parts(map, key)?.0)
+}
+
+/// Reads a checkpoint tensor as a flat f32 vector plus its shape — the
+/// runtime-neutral form other backends build their tensors from.
+pub(crate) fn tensor_to_f32_parts(
+    map: &HashMap<String, Tensor>,
+    key: &str,
+) -> Result<(Vec<f32>, Vec<usize>), GigaamError> {
     let tensor = map
         .get(key)
         .ok_or_else(|| model_err("checkpoint", format!("missing `{key}`")))?;
-    tensor
+    let values = tensor
         .to_dtype(DType::F32)
         .and_then(|t| t.flatten_all())
         .and_then(|t| t.to_vec1::<f32>())
-        .map_err(|e| model_err(key, e))
+        .map_err(|e| model_err(key, e))?;
+    Ok((values, tensor.dims().to_vec()))
 }
 
 /// Reads the tensors under a checkpoint's `state_dict` into name/tensor pairs

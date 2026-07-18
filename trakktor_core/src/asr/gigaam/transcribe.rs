@@ -10,7 +10,7 @@ use super::{
     constants::SAMPLE_RATE,
     decode::{Word, decode_chunk, frames_to_words},
     error::GigaamError,
-    runtime::GigaamModel,
+    runtime::CtcModel,
     tokenizer::Tokenizer,
 };
 
@@ -56,16 +56,14 @@ pub(crate) struct ChunkResult {
 /// Runs one chunk through feature extraction, the encoder, the CTC head, and
 /// greedy decoding.
 pub(crate) fn transcribe_chunk(
-    model: &GigaamModel,
+    model: &dyn CtcModel,
     tokenizer: &Tokenizer,
     chunk: &[f32],
     options: &TranscribeOptions,
 ) -> Result<ChunkResult, GigaamError> {
     let mel = model.feature().log_mel(chunk);
-    let encoded = model.encode(&mel)?; // [T', d_model]
-    let enc_len = encoded.dims()[0];
-    let logits = model.ctc_logits(&encoded)?; // [T', num_classes]
-    let labels = argmax_rows(&logits)?;
+    let labels = model.ctc_labels(&mel)?; // [T'] argmax class ids
+    let enc_len = labels.len();
 
     let decoded = decode_chunk(tokenizer, &labels, enc_len);
     let words = if options.word_timestamps {
@@ -83,13 +81,4 @@ pub(crate) fn transcribe_chunk(
         text: decoded.text,
         words,
     })
-}
-
-/// Argmax over the last dim of a `[T, C]` logits tensor, on the device, read
-/// back once as `u32` class ids.
-fn argmax_rows(logits: &candle_core::Tensor) -> Result<Vec<u32>, GigaamError> {
-    logits
-        .argmax(candle_core::D::Minus1)
-        .and_then(|t| t.to_vec1::<u32>())
-        .map_err(|e| GigaamError::InvalidModel(format!("argmax: {e}")))
 }

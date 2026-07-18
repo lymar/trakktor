@@ -394,6 +394,16 @@ with the multilingual checkpoints, several more languages. It is a faithful port
 of the reference pipeline on the same candle runtime as `whisper`, with the same
 built-in audio decoder and the same output envelope.
 
+An alternative [burn](https://github.com/tracel-ai/burn) runtime is available
+behind the `burn` build feature and selected per run with `--runtime burn`
+(candle stays the default and needs nothing extra). Both runtimes produce the
+same transcription — byte-identical in f32 on our test material; f16 runs may
+swap the odd word, as with any half-precision kernel change — and on Metal
+their speed is on par. The very first burn run on a machine is a few times slower
+while it autotunes its GPU kernels; the tuning result is cached and later runs
+are full speed. The burn CPU backend computes in f32 only, so combine
+`--runtime burn` on the CPU with `--precision f32`.
+
 ```sh
 trakktor asr gigaam ru.mp3                       # Russian (v3_ctc), CPU, JSON
 trakktor asr gigaam ru.mp3 --text                # readable [start --> end] lines
@@ -747,7 +757,8 @@ Apache-licensed:
   MIT).
 - **`asr gigaam`** — [GigaAM](https://github.com/salute-developers/GigaAM)
   (MIT): Conformer/CTC acoustic models by the GigaChat team, pipeline ported
-  to the same candle runtime.
+  to the same candle runtime, with an optional alternative runtime on
+  [burn](https://github.com/tracel-ai/burn) (Apache-2.0 OR MIT).
 - **`vad`, and `asr --vad`** — [Silero-VAD](https://github.com/snakers4/silero-vad)
   (MIT): the ported speech detector behind both the audio editing commands and
   the transcription preprocessing stage.

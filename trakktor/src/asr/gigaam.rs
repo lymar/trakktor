@@ -35,16 +35,25 @@ pub(crate) fn run_gigaam(
         &mut download_progress(),
     )?;
     let precision = args.precision.to_gigaam();
-    let model = match args.device {
-        crate::cli::DeviceArg::Cpu => gigaam::GigaamModel::load_ctc_cpu(
-            &resolved.ckpt,
-            resolved.config.encoder,
-            resolved.config.mel,
-            resolved.config.num_classes,
-            precision,
-        )?,
-        crate::cli::DeviceArg::Metal => {
-            load_metal(&resolved.ckpt, &resolved.config, precision)?
+    let model: Box<dyn gigaam::CtcModel> = match args.runtime {
+        crate::cli::RuntimeArg::Candle => match args.device {
+            crate::cli::DeviceArg::Cpu => {
+                Box::new(gigaam::GigaamModel::load_ctc_cpu(
+                    &resolved.ckpt,
+                    resolved.config.encoder,
+                    resolved.config.mel,
+                    resolved.config.num_classes,
+                    precision,
+                )?)
+            },
+            crate::cli::DeviceArg::Metal => Box::new(load_metal(
+                &resolved.ckpt,
+                &resolved.config,
+                precision,
+            )?),
+        },
+        crate::cli::RuntimeArg::Burn => {
+            load_burn(&resolved.ckpt, &resolved.config, args.device, precision)?
         },
     };
     let tokenizer = resolved.config.tokenizer.build();
@@ -61,10 +70,10 @@ pub(crate) fn run_gigaam(
 
     let transcription = match args.audio_decoder {
         crate::cli::AudioDecoderArg::Builtin => {
-            run_builtin(args, &model, &tokenizer, options, &mut report)?
+            run_builtin(args, &*model, &tokenizer, options, &mut report)?
         },
         crate::cli::AudioDecoderArg::Ffmpeg => {
-            run_ffmpeg(args, &model, &tokenizer, options, &mut report)?
+            run_ffmpeg(args, &*model, &tokenizer, options, &mut report)?
         },
     };
 
@@ -106,7 +115,7 @@ pub(crate) fn run_gigaam(
 /// Streams the built-in decoder's blocks through a transcription session.
 fn run_builtin(
     args: &GigaamArgs,
-    model: &gigaam::GigaamModel,
+    model: &dyn gigaam::CtcModel,
     tokenizer: &gigaam::Tokenizer,
     options: TranscribeOptions,
     report: &mut dyn FnMut(TranscribeProgress),
@@ -135,7 +144,7 @@ fn run_builtin(
 /// transcription session (formats the built-in decoder does not cover).
 fn run_ffmpeg(
     args: &GigaamArgs,
-    model: &gigaam::GigaamModel,
+    model: &dyn gigaam::CtcModel,
     tokenizer: &gigaam::Tokenizer,
     options: TranscribeOptions,
     report: &mut dyn FnMut(TranscribeProgress),
@@ -242,6 +251,44 @@ fn load_metal(
     Err(CliError::from(GigaamError::InvalidOptions(
         "this build has no Metal support; install or build trakktor with the \
          `metal` feature"
+            .into(),
+    )))
+}
+
+/// Loads a model on the burn runtime (builds with the `burn` feature); the
+/// burn Metal backend is independent of the candle `metal` feature.
+#[cfg(feature = "burn")]
+fn load_burn(
+    ckpt: &Path,
+    config: &gigaam::ModelConfig,
+    device: crate::cli::DeviceArg,
+    precision: gigaam::Precision,
+) -> Result<Box<dyn gigaam::CtcModel>, CliError> {
+    use trakktor_core::asr::gigaam::runtime_burn;
+    let load = match device {
+        crate::cli::DeviceArg::Cpu => runtime_burn::load_ctc_cpu,
+        crate::cli::DeviceArg::Metal => runtime_burn::load_ctc_metal,
+    };
+    Ok(load(
+        ckpt,
+        config.encoder,
+        config.mel,
+        config.num_classes,
+        precision,
+    )?)
+}
+
+/// Without the `burn` feature, `--runtime burn` is a validation error.
+#[cfg(not(feature = "burn"))]
+fn load_burn(
+    _ckpt: &Path,
+    _config: &gigaam::ModelConfig,
+    _device: crate::cli::DeviceArg,
+    _precision: gigaam::Precision,
+) -> Result<Box<dyn gigaam::CtcModel>, CliError> {
+    Err(CliError::from(GigaamError::InvalidOptions(
+        "this build has no burn runtime; install or build trakktor with the \
+         `burn` feature"
             .into(),
     )))
 }

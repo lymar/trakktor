@@ -2,8 +2,10 @@
 //!
 //! A faithful port of the reference GigaAM pipeline (Sber's Conformer-based
 //! acoustic models): log-mel feature extraction, the Conformer encoder, and
-//! CTC / RNN-T greedy decoding. The runtime is [candle](candle_core), with
-//! Metal acceleration behind a cargo feature.
+//! CTC / RNN-T greedy decoding. The primary runtime is
+//! [candle](candle_core), with Metal acceleration behind a cargo feature; an
+//! alternative burn runtime is available behind the `gigaam-burn` feature and
+//! selected at run time through the [`CtcModel`] seam.
 //!
 //! Like the [`whisper`](super::whisper) engine, this module depends only on
 //! external crates and standard-library facilities, with no ties to the rest of
@@ -19,6 +21,8 @@ pub mod error;
 pub mod feature;
 #[cfg(feature = "gigaam-runtime")]
 pub mod runtime;
+#[cfg(feature = "gigaam-burn")]
+pub mod runtime_burn;
 pub mod segment;
 #[cfg(all(feature = "gigaam-runtime", feature = "vad"))]
 pub mod stream;
@@ -36,7 +40,9 @@ pub use download::{ResolvedModel, resolve_model};
 pub use error::GigaamError;
 pub use feature::{FeatureExtractor, Mel, MelConfig};
 #[cfg(feature = "gigaam-runtime")]
-pub use runtime::{GigaamModel, Precision};
+pub use runtime::{CtcModel, GigaamModel, Precision};
+#[cfg(feature = "gigaam-burn")]
+pub use runtime_burn::GigaamBurnModel;
 pub use segment::Interval;
 #[cfg(all(feature = "gigaam-runtime", feature = "vad"))]
 pub use stream::{StreamTranscriber, transcribe, transcribe_with_progress};

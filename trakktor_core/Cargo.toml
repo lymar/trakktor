@@ -25,6 +25,10 @@ whisper-runtime = ["dep:candle-core", "dep:candle-nn", "dep:serde_json"]
 # The candle-backed GigaAM runtime (Conformer encoder + CTC/RNN-T heads). Off
 # the default set this crate builds without the GigaAM stack.
 gigaam-runtime = ["dep:candle-core", "dep:candle-nn", "dep:serde_json", "dep:md-5"]
+# The burn-backed alternative GigaAM runtime, selectable at run time next to
+# the candle one. Builds on top of the candle runtime (shared checkpoint
+# reader and model plumbing).
+gigaam-burn = ["gigaam-runtime", "dep:burn"]
 # Silero voice-activity detection: an engine-independent speech-preprocessing
 # stage over ASR. Needs candle (the model runs on the CPU). Off the default set
 # the crate builds without VAD.
@@ -51,6 +55,7 @@ structify-cuda = ["structify-runtime", "candle-core/cuda", "candle-nn/cuda"]
 [dependencies]
 base64.workspace = true
 blake3.workspace = true
+burn = { workspace = true, optional = true }
 candle-core = { workspace = true, optional = true }
 candle-nn = { workspace = true, optional = true }
 chrono.workspace = true
