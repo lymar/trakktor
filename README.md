@@ -86,10 +86,13 @@ read-state), `--model-dir <path>` (also `TRAKKTOR_MODEL_DIR`; default
 ## `asr` — speech recognition
 
 Transcribe (or translate) speech from an audio file. Speech recognition is
-organized as **engines**, each selected as a subcommand with its own model and
-flags. Two engines ship today: `whisper` (many languages; can translate to
-English) and `gigaam` (Conformer/CTC models, strongest on Russian — see the
-`asr gigaam` section below):
+organized as **engines**, each selected as a subcommand with its own models and
+flags. Two engines ship today, each documented in its own section below:
+
+- [**`asr whisper`**](#asr-whisper--whisper-engine) — Whisper models: many
+  languages with autodetection; can translate to English.
+- [**`asr gigaam`**](#asr-gigaam--gigaam-engine) — GigaAM Conformer/CTC
+  models: strongest on Russian; fast single-pass decoding.
 
 ```sh
 trakktor asr whisper talk.mp3            # JSON (default): text + timestamped segments
@@ -100,65 +103,17 @@ trakktor asr gigaam ru.mp3               # GigaAM (Russian by default)
 trakktor asr gigaam ru.mp3 --model multilingual_large_ctc --device metal
 ```
 
+What the engines share is documented once, right below: audio input, model
+storage, device and precision, and the output shape and files. Each engine's
+own models and flags live in its section.
+
+### Audio input
+
 The one required argument is the path to an audio file. It is decoded by a
 **built-in decoder** — no ffmpeg or other external tool is needed — then
 internally downmixed to mono and resampled to 16 kHz. Supported inputs: mp3,
 aac (LC), vorbis, flac, alac, and raw PCM, held in wav, aiff, caf, ogg, mp4, or
-mkv containers. Formats beyond that set are reachable with `--audio-decoder
-ffmpeg` (see [Input decoder](#input-decoder)).
-
-Transcription runs window by window (30 seconds each) with a temperature-fallback
-policy that guards against repetition loops, closely following Whisper's own
-decoding behavior.
-
-### Models
-
-```
---model <name|dir>      # default: tiny
-```
-
-Pass a **published name** — downloaded on first use into the model directory
-(`~/.trakktor/asr/whisper/<name>/` by default) and reused on later runs — or a
-**path** to a local checkpoint directory (one containing `config.json`).
-First-run download progress is printed to stderr.
-
-Model weights are large and **shared across projects**: they live under the
-**model directory** — `~/.trakktor` by default — *not* in the per-project
-`--work-dir`. Override it with `--model-dir <path>` or `TRAKKTOR_MODEL_DIR`
-(precedence: flag > env > `~/.trakktor`). To reuse weights already downloaded
-elsewhere, point it at that root — e.g. `TRAKKTOR_MODEL_DIR=/data/models` looks
-for `/data/models/asr/whisper/<name>/`.
-
-Names, smallest to largest (larger is slower but more accurate):
-
-- **Multilingual:** `tiny`, `base`, `small`, `medium`, `large-v1`, `large-v2`,
-  `large-v3` (alias `large`), `large-v3-turbo` (alias `turbo`).
-- **English-only:** `tiny.en`, `base.en`, `small.en`, `medium.en` — slightly
-  better on English audio.
-
-### Device and precision
-
-```
---device cpu|metal      # default: cpu
---precision f16|f32     # default: f16
-```
-
-- **`--device metal`** runs on the macOS GPU and is several times faster than
-  the CPU on a typical clip. It needs a build with the `metal` feature:
-
-  ```sh
-  cargo install --locked --git https://github.com/lymar/trakktor.git \
-    --features metal trakktor
-  ```
-
-  Without that feature, `--device metal` is rejected.
-
-- **`--precision f16`** (the default) uses about half the memory and is faster;
-  **`--precision f32`** computes in full precision for reproducible results, at
-  twice the weight memory. f16 is what keeps the large models within reach on a
-  16 GB machine.
-
-### Input decoder
+mkv containers.
 
 ```
 --audio-decoder builtin|ffmpeg   # default: builtin
@@ -176,71 +131,44 @@ trakktor asr whisper voice.opus --audio-decoder ffmpeg
 It requires `ffmpeg` on your `PATH`; without it the command fails with a clear
 error. The default build never needs ffmpeg.
 
-### Language and task
+### Model storage
+
+Models are downloaded **on first use** and reused on later runs; first-run
+download progress is printed to stderr. The weights are large and **shared
+across projects**: they live under the **model directory** — `~/.trakktor` by
+default — *not* in the per-project `--work-dir`, each engine under its own
+path (`asr/whisper/<name>/`, `asr/gigaam/<name>.ckpt`). Override the root with
+`--model-dir <path>` or `TRAKKTOR_MODEL_DIR` (precedence: flag > env >
+`~/.trakktor`); to reuse weights already downloaded elsewhere, point it at
+that root — e.g. `TRAKKTOR_MODEL_DIR=/data/models` looks for
+`/data/models/asr/whisper/<name>/`.
+
+Which models exist, and what `--model` accepts, is each engine's own — see its
+section.
+
+### Device and precision
 
 ```
---language <code|name>        # e.g. en, ru, or russian; autodetected if omitted
---task transcribe|translate   # default: transcribe
+--device cpu|metal      # default: cpu
+--precision f16|f32     # default: f16
 ```
 
-With no `--language`, the language is detected from the first 30 seconds.
-`--task translate` renders the speech as English instead of transcribing it in
-the source language.
+- **`--device metal`** runs on the macOS GPU and is several times faster than
+  the CPU on a typical clip. It needs a build with the `metal` feature:
 
-### Clipping: transcribe only part of the audio
+  ```sh
+  cargo install --locked --git https://github.com/lymar/trakktor.git \
+    --features metal trakktor
+  ```
 
-```
---start <time>      # begin at this offset (default: the beginning)
---end <time>        # stop at this offset (default: the end)
-```
+  Without that feature, `--device metal` is rejected. (GigaAM's alternative
+  burn runtime is the exception — it ships its own Metal backend; see the
+  `asr gigaam` section.)
 
-`--start`/`--end` limit transcription to a time range. Each accepts a plain
-number of seconds or a `[[HH:]MM:]SS[.mmm]` clock, to millisecond precision, and
-either flag works on its own:
-
-```sh
-trakktor asr whisper talk.mp3 --start 0:15 --end 5:30   # from 0:15 to 5:30
-trakktor asr whisper talk.mp3 --start 90                # from 1:30 to the end
-trakktor asr whisper talk.mp3 --end 1:02:03.250         # from the start to 1:02:03.250
-```
-
-They are a convenience over `--clip-timestamps` and cannot be combined with it;
-use `--clip-timestamps` directly to transcribe several ranges at once.
-
-### Voice-activity detection (VAD)
-
-`--vad` runs Silero voice-activity detection first and transcribes only the
-speech, dropping silence, music, and noise. It is the direct remedy for
-Whisper's tendency to hallucinate and loop over long non-speech stretches, and
-it is faster on sparse audio. Off by default; the model is built in (nothing to
-download) and runs on the CPU, so `--device metal` still accelerates the
-transcription itself.
-
-```sh
-trakktor asr whisper interview.mp3 --vad
-```
-
-The detected speech is glued into one dense buffer, transcribed in a single
-pass, and the timestamps are then mapped back to the original timeline — so the
-output stays on the source clock while non-speech is never sent to the model.
-
-Detection is tunable (shown with the reference defaults):
-
-```
---vad-threshold 0.5                 # speech-probability cutoff (0..=1)
---vad-min-speech-duration-ms 250    # drop shorter detections
---vad-min-silence-duration-ms 100   # a shorter pause won't split a segment
---vad-speech-pad-ms 30              # padding kept around each speech span
---vad-max-speech-duration-s none    # force-split longer speech (none = never)
-```
-
-`--vad` combines with `--start`/`--end` (detect speech within that range) but
-not with `--clip-timestamps`. When VAD is active the JSON result gains a
-top-level `vad` block listing the detected speech spans (original timeline):
-
-```json
-"vad": { "speech": [ { "start": 0.48, "end": 12.3 } ] }
-```
+- **`--precision f16`** (the default) uses about half the memory and is faster;
+  **`--precision f32`** computes in full precision for reproducible results, at
+  twice the weight memory. f16 is what keeps the large models within reach on a
+  16 GB machine.
 
 ### Timestamps and output shape
 
@@ -249,15 +177,18 @@ top-level `vad` block listing the detected speech spans (original timeline):
 ```
 
 - `segment` — per-segment start/end times (the default).
-- `word` — segment times plus per-word timings, from an extra alignment pass
-  (slower).
+- `word` — segment times plus per-word timings. Whisper derives them with an
+  extra alignment pass (slower); GigaAM reads them off its CTC frames at no
+  extra cost.
 - `none` — text only, no segment list.
 
-The default output is a single JSON object: the transcript `text`, the detected
-or given `language`, the audio `duration` (seconds), the `engine`, and — unless
-`--timestamps none` — a `segments` array. Each segment carries its `id`,
-`start`, `end`, `text`, engine-specific quality signals under `whisper`, and
-(with `--timestamps word`) a `words` array:
+The default output is a single JSON object: the transcript `text`, the
+`language` (whisper detects it when omitted; gigaam only reports one when
+`--language` is given), the audio `duration` (seconds), the `engine`, and —
+unless `--timestamps none` — a `segments` array. Each segment carries its
+`id`, `start`, `end`, `text`, and (with `--timestamps word`) a `words` array;
+whisper segments also carry decoder quality signals under `whisper`. A whisper
+result:
 
 ```json
 {
@@ -283,7 +214,7 @@ or given `language`, the audio `duration` (seconds), the `engine`, and — unles
 ```
 
 With `--timestamps word`, each segment also gets a `words` array of
-`{ start, end, word, probability }`:
+`{ start, end, word, probability }` (GigaAM words have no `probability`):
 
 ```json
 "words": [
@@ -294,9 +225,11 @@ With `--timestamps word`, each segment also gets a `words` array of
 The `whisper` block is diagnostic: `avg_logprob` (average token
 log-probability — confidence), `compression_ratio` (zlib ratio; high means
 repetitive), `no_speech_prob`, and the `temperature` the accepted result was
-decoded at. `--text` instead prints one right-aligned `[start --> end] text`
-line per segment (or just the transcript with `--timestamps none`), and errors
-follow the usual `{ "error": { "code", "message" } }` contract.
+decoded at. GigaAM's CTC decoding has no counterpart signals, so its segments
+carry no such block. `--text` instead prints one right-aligned
+`[start --> end] text` line per segment (or just the transcript with
+`--timestamps none`), and errors follow the usual
+`{ "error": { "code", "message" } }` contract.
 
 While a long file decodes, a live progress line — audio position, percent,
 elapsed, and a rough estimate of the time remaining — is written to **stderr**,
@@ -334,7 +267,99 @@ trakktor asr whisper talk.mp3 --output-format srt
 trakktor asr whisper talk.mp3 --output-format all --output-dir subs
 ```
 
-### Decoding controls
+### `asr whisper` — Whisper engine
+
+[Whisper](https://github.com/openai/whisper) is the most versatile engine:
+many languages, language autodetection, and optional translation into English.
+Transcription runs window by window (30 seconds each) with a
+temperature-fallback policy that guards against repetition loops, closely
+following Whisper's own decoding behavior.
+
+#### Models
+
+```
+--model <name|dir>      # default: tiny
+```
+
+Pass a **published name** — downloaded on first use into the model directory
+(`~/.trakktor/asr/whisper/<name>/` by default; see
+[Model storage](#model-storage)) — or a **path** to a local checkpoint
+directory (one containing `config.json`).
+
+Names, smallest to largest (larger is slower but more accurate):
+
+- **Multilingual:** `tiny`, `base`, `small`, `medium`, `large-v1`, `large-v2`,
+  `large-v3` (alias `large`), `large-v3-turbo` (alias `turbo`).
+- **English-only:** `tiny.en`, `base.en`, `small.en`, `medium.en` — slightly
+  better on English audio.
+
+#### Language and task
+
+```
+--language <code|name>        # e.g. en, ru, or russian; autodetected if omitted
+--task transcribe|translate   # default: transcribe
+```
+
+With no `--language`, the language is detected from the first 30 seconds.
+`--task translate` renders the speech as English instead of transcribing it in
+the source language.
+
+#### Clipping: transcribe only part of the audio
+
+```
+--start <time>      # begin at this offset (default: the beginning)
+--end <time>        # stop at this offset (default: the end)
+```
+
+`--start`/`--end` limit transcription to a time range. Each accepts a plain
+number of seconds or a `[[HH:]MM:]SS[.mmm]` clock, to millisecond precision, and
+either flag works on its own:
+
+```sh
+trakktor asr whisper talk.mp3 --start 0:15 --end 5:30   # from 0:15 to 5:30
+trakktor asr whisper talk.mp3 --start 90                # from 1:30 to the end
+trakktor asr whisper talk.mp3 --end 1:02:03.250         # from the start to 1:02:03.250
+```
+
+They are a convenience over `--clip-timestamps` and cannot be combined with it;
+use `--clip-timestamps` directly to transcribe several ranges at once.
+
+#### Voice-activity detection (VAD)
+
+`--vad` runs Silero voice-activity detection first and transcribes only the
+speech, dropping silence, music, and noise. It is the direct remedy for
+Whisper's tendency to hallucinate and loop over long non-speech stretches, and
+it is faster on sparse audio. Off by default; the model is built in (nothing to
+download) and runs on the CPU, so `--device metal` still accelerates the
+transcription itself.
+
+```sh
+trakktor asr whisper interview.mp3 --vad
+```
+
+The detected speech is glued into one dense buffer, transcribed in a single
+pass, and the timestamps are then mapped back to the original timeline — so the
+output stays on the source clock while non-speech is never sent to the model.
+
+Detection is tunable (shown with the reference defaults):
+
+```
+--vad-threshold 0.5                 # speech-probability cutoff (0..=1)
+--vad-min-speech-duration-ms 250    # drop shorter detections
+--vad-min-silence-duration-ms 100   # a shorter pause won't split a segment
+--vad-speech-pad-ms 30              # padding kept around each speech span
+--vad-max-speech-duration-s none    # force-split longer speech (none = never)
+```
+
+`--vad` combines with `--start`/`--end` (detect speech within that range) but
+not with `--clip-timestamps`. When VAD is active the JSON result gains a
+top-level `vad` block listing the detected speech spans (original timeline):
+
+```json
+"vad": { "speech": [ { "start": 0.48, "end": 12.3 } ] }
+```
+
+#### Decoding controls
 
 The decoding defaults mirror the reference behavior and rarely need touching;
 every flag below has a sensible default. Run `trakktor asr whisper --help` for
@@ -363,7 +388,7 @@ the complete list with defaults and exact value formats. In brief:
   detects speech and skips non-speech before transcribing; see the VAD section
   above.
 
-### Examples
+#### Examples
 
 ```sh
 # Russian interview, best model on the GPU, word-level timings, indented JSON
@@ -390,13 +415,18 @@ trakktor asr whisper voice.opus --audio-decoder ffmpeg --model small
 
 [GigaAM](https://github.com/salute-developers/GigaAM) is a family of Conformer
 acoustic models with character-wise CTC decoding — strongest on Russian, and,
-with the multilingual checkpoints, several more languages. It is a faithful port
-of the reference pipeline on the same candle runtime as `whisper`, with the same
-built-in audio decoder and the same output envelope.
+with the multilingual checkpoints, several more languages. It is a faithful
+port of the reference pipeline on the same candle runtime as `whisper`, and
+all the shared behavior above — audio input, model storage, device and
+precision, output — applies as-is. The engine has no decoding knobs, no
+clipping, and no `--vad` flag: CTC decoding has nothing to tune, and speech
+detection is already built into its chunking (below). GigaAM does not detect
+the language; `--language <code>` only annotates the output.
 
 An alternative [burn](https://github.com/tracel-ai/burn) runtime is available
 behind the `burn` build feature and selected per run with `--runtime burn`
-(candle stays the default and needs nothing extra). Both runtimes produce the
+(candle stays the default and needs nothing extra; burn brings its own Metal
+backend, independent of the `metal` feature). Both runtimes produce the
 same transcription — byte-identical in f32 on our test material; f16 runs may
 swap the odd word, as with any half-precision kernel change — and on Metal
 their speed is on par. The very first burn run on a machine is a few times slower
@@ -443,8 +473,7 @@ The whole pipeline is **streaming**: the file is decoded block by block,
 speech detection runs incrementally, and each chunk is transcribed — and its
 audio released — as soon as its boundaries are settled. Memory stays bounded
 by a few minutes of audio regardless of the recording length, so multi-hour
-files transcribe in constant memory. GigaAM does not detect the language;
-`--language <code>` only annotates the output.
+files transcribe in constant memory.
 
 ## `vad` — voice-activity audio editing
 
