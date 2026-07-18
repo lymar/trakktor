@@ -30,6 +30,9 @@ mod edit_list;
 pub struct DecodedAudio {
     rate: u32,
     channel_mask: Option<u64>,
+    /// The source bit depth the container declared, when known. Used to tell a
+    /// 24-bit stream (which rides in `s32 << 8`) from a true 32-bit one.
+    source_bits: Option<u32>,
     samples: NativeBuf,
 }
 
@@ -45,6 +48,56 @@ impl DecodedAudio {
 
     /// The native sample format the decoder produced.
     pub fn format(&self) -> SampleFormat { self.samples.format() }
+
+    /// Whether the samples are floating point (lossy decoders decode to f32).
+    pub fn is_float(&self) -> bool {
+        matches!(self.samples.format(), SampleFormat::F32 | SampleFormat::F64)
+    }
+
+    /// The meaningful bit depth of a sample: 8/16/24/32 for integer PCM, 32/64
+    /// for float. A 24-bit stream reports 24 even though it rides in `s32`.
+    pub fn bits_per_sample(&self) -> u32 {
+        match self.samples.format() {
+            SampleFormat::U8 => 8,
+            SampleFormat::S16 => 16,
+            SampleFormat::S32 => match self.source_bits {
+                Some(bits) if bits <= 24 => 24,
+                _ => 32,
+            },
+            SampleFormat::F32 => 32,
+            SampleFormat::F64 => 64,
+        }
+    }
+
+    /// The stream duration in seconds (frames / sample rate).
+    pub fn duration_seconds(&self) -> f64 {
+        self.frames() as f64 / f64::from(self.rate)
+    }
+
+    /// The planar native samples, for in-crate editing and encoding.
+    pub(crate) fn samples(&self) -> &NativeBuf { &self.samples }
+
+    /// The channel-position mask, when the container declared one.
+    pub(crate) fn channel_mask(&self) -> Option<u64> { self.channel_mask }
+
+    /// The declared source bit depth, when known.
+    pub(crate) fn source_bits(&self) -> Option<u32> { self.source_bits }
+
+    /// Rebuilds a stream from parts (used by the editor to return a cut buffer
+    /// with the same rate/layout/format as the original).
+    pub(crate) fn from_parts(
+        rate: u32,
+        channel_mask: Option<u64>,
+        source_bits: Option<u32>,
+        samples: NativeBuf,
+    ) -> Self {
+        Self {
+            rate,
+            channel_mask,
+            source_bits,
+            samples,
+        }
+    }
 
     /// Shapes the audio into mono s16 at `out_rate` — the numeric equivalent
     /// of the classic `ffmpeg -f s16le -ac 1 -ar <rate>` chain.
@@ -75,6 +128,7 @@ pub fn decode_file(path: &Path) -> Result<DecodedAudio, AudioError> {
     Ok(DecodedAudio {
         rate: stream.rate,
         channel_mask: stream.mask,
+        source_bits: stream.bits,
         samples: samples.unwrap_or_else(|| {
             NativeBuf::S16(vec![Vec::new(); stream.channels])
         }),
@@ -107,6 +161,19 @@ pub fn decode_to_mono_s16(
         out.extend(shaper.finish());
     }
     Ok(out)
+}
+
+/// Decodes and shapes a media file into mono f32 in `[-1, 1)` at `out_rate` —
+/// the shape voice-activity detection consumes. Streams packet by packet, then
+/// scales the mono s16 the same way the reference `load_audio` does.
+pub fn decode_to_mono_f32(
+    path: &Path,
+    out_rate: u32,
+) -> Result<Vec<f32>, AudioError> {
+    Ok(decode_to_mono_s16(path, out_rate)?
+        .into_iter()
+        .map(|sample| f32::from(sample) / 32768.0)
+        .collect())
 }
 
 /// An opened media file: format reader plus the decoder of its default

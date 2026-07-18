@@ -8,9 +8,9 @@
 //!
 //! Alongside the engines, the domain has engine-independent preprocessing that
 //! works on any engine's 16 kHz mono PCM input; the first such stage is
-//! voice-activity detection ([`vad`]), which finds speech and drops non-speech
-//! before transcription.
+//! voice-activity detection ([`crate::vad`]), which finds speech and drops
+//! non-speech before transcription. The detector lives in the shared
+//! [`crate::vad`] module (it is not ASR-specific), and this domain uses it as a
+//! preprocessing stage.
 
-#[cfg(feature = "vad")]
-pub mod vad;
 pub mod whisper;

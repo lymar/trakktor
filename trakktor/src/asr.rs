@@ -5,11 +5,11 @@ use std::{
     path::Path,
 };
 
-use trakktor_core::asr::{
-    vad::{self, SpeechSegment, VadOptions},
-    whisper::{
+use trakktor_core::{
+    asr::whisper::{
         self, AudioDecoder, TranscribeOptions, WhisperError, alignment_heads,
     },
+    vad::{self, SpeechSegment, VadOptions},
 };
 
 use crate::{cli::WhisperArgs, error::CliError, output};

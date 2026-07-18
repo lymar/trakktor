@@ -10,9 +10,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use trakktor_core::asr::{
+use trakktor_core::{
+    asr::whisper::{Transcription, WhisperError},
     vad::SpeechSegment,
-    whisper::{Transcription, WhisperError},
 };
 
 use crate::cli::OutputFormatArg;

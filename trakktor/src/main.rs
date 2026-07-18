@@ -9,5 +9,6 @@ mod error;
 mod output;
 mod skill;
 mod structify;
+mod vad;
 
 fn main() { std::process::exit(cli::run()); }

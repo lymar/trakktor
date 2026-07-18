@@ -25,9 +25,10 @@ OpenAI Whisper — MIT License
 Silero-VAD — MIT License
   Copyright (c) 2020-present Silero Team
   https://github.com/snakers4/silero-vad
-  The voice-activity-detection stage ports the Silero-VAD v5 model and its
+  Voice-activity detection — the `vad` audio-editing commands and the `asr`
+  preprocessing stage (`--vad`) — ports the Silero-VAD v5 model and its
   `get_speech_timestamps` algorithm. The model weights
-  (trakktor_core/src/asr/vad/assets/silero_vad_16k.safetensors, ~1.24 MB) are
+  (trakktor_core/src/vad/assets/silero_vad_16k.safetensors, ~1.24 MB) are
   embedded in the binary.
 
 whisper.cpp / ggml — MIT License

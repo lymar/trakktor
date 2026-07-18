@@ -25,10 +25,11 @@ const DEFAULT_WORK_DIR: &str = ".trakktor";
 const DEFAULT_MODEL_DIR_NAME: &str = ".trakktor";
 
 /// A predictable, automation-friendly CLI toolbox for coding agents (Claude
-/// Code, OpenCode, etc.): speech-to-text, feeds, text structuring, and more —
-/// machine-readable output, stable flags, and meaningful exit codes. Reach for
-/// it when a task needs one of these helpers, such as fetching a feed's unread
-/// items, transcribing an audio file to timestamped text, or splitting a
+/// Code, OpenCode, etc.): speech-to-text, voice-activity audio editing, feeds,
+/// text structuring, and more — machine-readable output, stable flags, and
+/// meaningful exit codes. Reach for it when a task needs one of these helpers,
+/// such as fetching a feed's unread items, transcribing an audio file to
+/// timestamped text, cutting the silence out of a recording, or splitting a
 /// transcript into readable paragraphs.
 ///
 /// Output is JSON by default (`--pretty` indents it); pass `--text` for
@@ -113,6 +114,21 @@ enum Command {
     Asr {
         #[command(subcommand)]
         command: AsrCommand,
+    },
+
+    /// Edit audio by voice-activity detection: report, cut, or split on speech.
+    ///
+    /// Silero voice-activity detection finds the speech in an audio file, and a
+    /// subcommand acts on it: `timeline` reports the speech spans as JSON,
+    /// `cut` writes a new file with non-speech removed (or kept, with `--keep
+    /// non-speech`), and `split` writes one file per detected span. Cutting
+    /// works on the decoded original at full quality — its own sample rate,
+    /// channels, and bit depth, not the 16 kHz mono the detector uses — so
+    /// nothing is downsampled. Output is WAV by default, or FLAC with `--format
+    /// flac`. Detection is tunable directly or through `--preset`.
+    Vad {
+        #[command(subcommand)]
+        command: VadCommand,
     },
 
     /// Structure and transform text.
@@ -628,6 +644,213 @@ pub(crate) struct StructifyArgs {
 }
 
 #[derive(Subcommand)]
+pub(crate) enum VadCommand {
+    /// Report the detected speech spans as JSON, without writing any audio.
+    ///
+    /// Prints the speech intervals (seconds, on the original timeline) and
+    /// summary statistics — how much of the file is speech versus silence, and
+    /// the longest pause. A safe, side-effect-free way to inspect a file.
+    Timeline(VadTimelineArgs),
+
+    /// Write a new audio file with non-speech removed (or kept).
+    ///
+    /// Concatenates the detected speech into one file, dropping silence, music,
+    /// and noise; `--keep non-speech` inverts it (keep the non-speech, drop the
+    /// speech). The output copies the decoded original at full quality — its
+    /// own sample rate, channels, and bit depth — with a short fade at each
+    /// join so edits do not click. With `--max-silence-ms`, long pauses are
+    /// shortened to that length instead of being removed.
+    Cut(VadCutArgs),
+
+    /// Write one file per detected speech span (one clip per utterance).
+    ///
+    /// Splits the recording on silence into many files, each holding a single
+    /// span, dropping any shorter than `--min-duration-ms`. `--keep non-speech`
+    /// splits out the non-speech spans instead. Like `cut`, every clip is the
+    /// full-quality original.
+    Split(VadSplitArgs),
+}
+
+/// The audio input and detection options shared by every `vad` subcommand.
+#[derive(Args)]
+pub(crate) struct VadDetectArgs {
+    /// Path to the audio file.
+    #[arg(value_name = "audio")]
+    pub(crate) audio: PathBuf,
+
+    /// Base defaults that the individual detection and shaping flags below
+    /// override: `tight` removes silence aggressively (canonical Silero);
+    /// `asr` bridges long pauses to keep speech in large chunks, like a
+    /// transcription front-end; `natural` keeps more breathing room.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = PresetArg::Tight,
+        value_name = "preset"
+    )]
+    pub(crate) preset: PresetArg,
+
+    /// Speech-probability threshold in 0..=1; higher detects less speech.
+    /// Defaults to the value from `--preset`.
+    #[arg(long, value_name = "float")]
+    pub(crate) threshold: Option<f32>,
+
+    /// Drop detected speech shorter than this many milliseconds. Defaults to
+    /// the value from `--preset`.
+    #[arg(long, value_name = "ms")]
+    pub(crate) min_speech_duration_ms: Option<u32>,
+
+    /// A silence shorter than this many milliseconds does not split a speech
+    /// span — brief pauses are bridged. Defaults to the value from `--preset`.
+    #[arg(long, value_name = "ms")]
+    pub(crate) min_silence_duration_ms: Option<u32>,
+
+    /// Padding added to each side of a detected speech span, in milliseconds.
+    /// Defaults to the value from `--preset`.
+    #[arg(long, value_name = "ms")]
+    pub(crate) speech_pad_ms: Option<u32>,
+
+    /// Force-split speech longer than this many seconds; omit to never split.
+    #[arg(long, value_name = "float")]
+    pub(crate) max_speech_duration_s: Option<f64>,
+
+    /// Work only within this window — a start offset in seconds or a
+    /// `[[HH:]MM:]SS[.mmm]` clock. Cutting, splitting, and inversion all stay
+    /// inside `[start, end]`. Used alone, the window runs to the end of the
+    /// audio.
+    #[arg(long, value_name = "time")]
+    pub(crate) start: Option<Timecode>,
+
+    /// End of the working window, in the same format as `--start`. Used alone,
+    /// the window starts at the beginning of the audio.
+    #[arg(long, value_name = "time")]
+    pub(crate) end: Option<Timecode>,
+}
+
+/// The shaping and output options shared by `vad cut` and `vad split`.
+#[derive(Args)]
+pub(crate) struct VadShapeArgs {
+    /// Which side of the speech/non-speech split to keep in the output.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = KeepArg::Speech,
+        value_name = "what"
+    )]
+    pub(crate) keep: KeepArg,
+
+    /// Output audio format. With the built-in encoder: `wav` (reproduces any
+    /// source exactly) or `flac` (smaller, lossless, integer sources up to
+    /// 24-bit). With `--audio-encoder ffmpeg`, any format ffmpeg writes by
+    /// extension — for example mp3, aac, m4a, opus, or ogg.
+    #[arg(long, default_value = "wav", value_name = "format")]
+    pub(crate) format: String,
+
+    /// Encoder for the output. `builtin` (the default) is pure Rust and writes
+    /// wav/flac with no external tools; `ffmpeg` shells out to an installed
+    /// `ffmpeg` and writes the many formats it supports (mp3, aac, opus, m4a,
+    /// …). The samples are re-encoded, so cuts stay sample-accurate.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = AudioEncoderArg::Builtin,
+        value_name = "encoder"
+    )]
+    pub(crate) audio_encoder: AudioEncoderArg,
+
+    /// Target bitrate for lossy ffmpeg formats, such as `192k` or `320k` (sets
+    /// ffmpeg's `-b:a`). Only affects `--audio-encoder ffmpeg`; omit for
+    /// ffmpeg's own default.
+    #[arg(long, value_name = "rate")]
+    pub(crate) bitrate: Option<String>,
+
+    /// Directory for the written file(s), created if missing.
+    #[arg(long, default_value = ".", value_name = "dir")]
+    pub(crate) output_dir: PathBuf,
+
+    /// Linear fade at each cut boundary, in milliseconds, to avoid clicks.
+    /// Defaults to the value from `--preset`.
+    #[arg(long, value_name = "ms")]
+    pub(crate) fade_ms: Option<u32>,
+
+    /// Merge kept spans separated by a gap smaller than this many
+    /// milliseconds. Defaults to the value from `--preset`.
+    #[arg(long, value_name = "ms")]
+    pub(crate) merge_gap_ms: Option<u32>,
+
+    /// Extra audio kept on each side of a span, in milliseconds — added to the
+    /// detector's own padding. Defaults to the value from `--preset`.
+    #[arg(long, value_name = "ms")]
+    pub(crate) margin_ms: Option<u32>,
+}
+
+/// Flags of `vad timeline`.
+#[derive(Args)]
+pub(crate) struct VadTimelineArgs {
+    #[command(flatten)]
+    pub(crate) detect: VadDetectArgs,
+}
+
+/// Flags of `vad cut`.
+#[derive(Args)]
+pub(crate) struct VadCutArgs {
+    #[command(flatten)]
+    pub(crate) detect: VadDetectArgs,
+
+    #[command(flatten)]
+    pub(crate) shape: VadShapeArgs,
+
+    /// Keep at most this much of each pause instead of removing it — collapse
+    /// long silences to a fixed gap rather than cutting them out. Omit to
+    /// remove non-speech entirely. Applies only with `--keep speech`.
+    #[arg(long, value_name = "ms")]
+    pub(crate) max_silence_ms: Option<u32>,
+}
+
+/// Flags of `vad split`.
+#[derive(Args)]
+pub(crate) struct VadSplitArgs {
+    #[command(flatten)]
+    pub(crate) detect: VadDetectArgs,
+
+    #[command(flatten)]
+    pub(crate) shape: VadShapeArgs,
+
+    /// Drop clips shorter than this many milliseconds.
+    #[arg(long, default_value_t = 0, value_name = "ms")]
+    pub(crate) min_duration_ms: u32,
+}
+
+/// The `--keep` value of `vad cut`/`vad split`.
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum KeepArg {
+    /// Keep speech, drop non-speech (the default).
+    Speech,
+    /// Keep non-speech, drop speech (the inversion).
+    NonSpeech,
+}
+
+/// The `--audio-encoder` value of `vad cut`/`vad split`.
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum AudioEncoderArg {
+    /// Built-in pure-Rust encoder (the default): writes wav or flac.
+    Builtin,
+    /// An external `ffmpeg` process; writes many more formats (mp3, aac, …).
+    Ffmpeg,
+}
+
+/// The `--preset` value of `vad`.
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum PresetArg {
+    /// Aggressive silence removal, canonical Silero (the default).
+    Tight,
+    /// Bridge long pauses, keeping speech in large chunks (an ASR front-end).
+    Asr,
+    /// Keep more breathing room around speech.
+    Natural,
+}
+
+#[derive(Subcommand)]
 enum FeedCommand {
     /// Find the feeds declared on a web page.
     Discover {
@@ -731,6 +954,14 @@ impl TargetArg {
     }
 }
 
+/// Reports a usage error (exit code 2) in clap's own style — used for value
+/// conflicts clap cannot express declaratively, like `--end` before `--start`.
+pub(crate) fn usage_error(message: &str) -> ! {
+    Cli::command()
+        .error(ErrorKind::ValueValidation, message)
+        .exit()
+}
+
 /// Parses arguments and runs the requested command.
 ///
 /// Returns the process exit code: 0 on success, 1 on a runtime/validation
@@ -758,6 +989,17 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                 global.json(),
                 global.pretty,
             ),
+        },
+        Command::Vad { command } => match command {
+            VadCommand::Timeline(args) => {
+                crate::vad::run_timeline(args, global.json(), global.pretty)
+            },
+            VadCommand::Cut(args) => {
+                crate::vad::run_cut(args, global.json(), global.pretty)
+            },
+            VadCommand::Split(args) => {
+                crate::vad::run_split(args, global.json(), global.pretty)
+            },
         },
         Command::Text { command } => match command {
             TextCommand::Structify(args) => crate::structify::run_structify(

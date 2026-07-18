@@ -25,18 +25,18 @@ const STUB_DESCRIPTION: &str =
     "Use {name}, a predictable, automation-friendly CLI toolbox for coding \
      agents, for helper tasks over web feeds, audio, and text. Feeds: \
      discover the RSS/Atom/JSON feeds a page declares, read a feed's latest \
-     entries as structured JSON, and track which entries have already been \
-     seen. Speech: transcribe (or translate to English) an audio file with a \
-     local Whisper model, returning the text with word- or segment-level \
-     timestamps, optionally using voice-activity detection to skip silence, \
-     music, and noise. Text: split an unstructured wall of text — such as a \
-     speech transcript whose line breaks fall on segments rather than meaning \
-     — into readable paragraphs with a local model, offline and multilingual. \
-     Reach for it whenever a task involves an RSS/Atom/JSON feed, a blog or \
-     news feed URL, subscribing to or polling a site for new posts, catching \
-     up on what is new since last time, turning speech from an audio file \
-     (mp3, wav, m4a, flac, and more) into a transcript or captions, or \
-     restructuring a raw transcript or run-on text into paragraphs.";
+     entries as structured JSON, and track what has been seen. Speech: \
+     transcribe (or translate to English) an audio file with a local Whisper \
+     model, returning text with word- or segment-level timestamps. Audio \
+     editing: with voice-activity detection, report a speech/silence \
+     timeline, cut silence out of a recording, or split it into one clip per \
+     utterance. Text: split an unstructured wall of text, such as a raw \
+     transcript, into readable paragraphs with a local model, offline and \
+     multilingual. Reach for it whenever a task involves an RSS/Atom/JSON \
+     feed or blog/news URL, polling a site for new posts, turning speech from \
+     an audio file (mp3, wav, m4a, flac, and more) into a transcript or \
+     captions, removing dead air from a recording or splitting it on pauses, \
+     or restructuring a transcript into paragraphs.";
 
 /// Renders the agent-facing guide (`trakktor skill show`).
 ///

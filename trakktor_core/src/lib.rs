@@ -12,3 +12,5 @@ pub mod http;
 pub mod skill;
 #[cfg(feature = "structify-runtime")]
 pub mod structify;
+#[cfg(feature = "vad")]
+pub mod vad;

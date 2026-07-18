@@ -1,29 +1,33 @@
 //! Voice-activity detection (VAD) with Silero-VAD.
 //!
-//! An engine-independent preprocessing stage for ASR: it finds the speech in a
-//! 16 kHz mono signal and drops non-speech (silence, music, noise) before the
-//! audio reaches a transcription engine. Removing non-speech is the direct
-//! remedy for the failure mode Whisper is most prone to — hallucinating and
-//! looping over long non-speech stretches — and it is faster and yields
-//! cleaner segment boundaries.
+//! Finds the speech in a 16 kHz mono signal and reports it as segments, so
+//! non-speech (silence, music, noise) can be dropped. It is a shared building
+//! block used two ways: as an ASR preprocessing stage (removing non-speech is
+//! the direct remedy for the failure mode Whisper is most prone to —
+//! hallucinating and looping over long non-speech stretches — and it is faster
+//! and yields cleaner segment boundaries), and as the basis of standalone audio
+//! editing (cutting silence, splitting into clips, reporting a speech
+//! timeline).
 //!
-//! The stage is a faithful port of the original Silero-VAD v5: the [`model`]
+//! The detector is a faithful port of the original Silero-VAD v5: the [`model`]
 //! reproduces the network op for op, and [`segment`] reproduces the canonical
 //! `get_speech_timestamps` state machine. The model is tiny and runs on the
-//! CPU. The detected speech is fed into an engine by collapsing it into a dense
-//! speech buffer with a time map back to the original timeline; that reusable
-//! half lives in [`collapse`].
+//! CPU. For the ASR use, detected speech is fed into an engine by collapsing it
+//! into a dense speech buffer with a time map back to the original timeline;
+//! that reusable half lives in [`collapse`].
 //!
 //! The module depends only on candle and the standard library, with no ties to
-//! any particular engine.
+//! any particular engine or feature.
 
 mod assets;
 pub mod collapse;
+pub mod edit;
 mod error;
 pub mod model;
 pub mod segment;
 
 pub use collapse::{Collapsed, TimeMapping};
+pub use edit::{EditOptions, Keep};
 pub use error::VadError;
 pub use model::Vad;
 pub use segment::{SpeechSegment, VadOptions, speech_timestamps};

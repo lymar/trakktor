@@ -9,9 +9,10 @@ license.workspace = true
 
 [features]
 default = ["whisper-runtime", "audio", "vad", "structify-runtime"]
-# Built-in audio decoding (symphonia) and the sample-rate/channel conversion
-# pipeline. Off the default set the crate builds without media support.
-audio = ["dep:symphonia"]
+# Built-in audio decoding (symphonia), the sample-rate/channel conversion
+# pipeline, and the WAV/FLAC encoders. Off the default set the crate builds
+# without media support.
+audio = ["dep:symphonia", "dep:hound", "dep:flacenc"]
 # The candle-backed Whisper runtime. Off the default set this crate builds
 # without the ML stack (feeds/skill only).
 whisper-runtime = ["dep:candle-core", "dep:candle-nn", "dep:serde_json"]
@@ -45,7 +46,9 @@ chrono.workspace = true
 # the skill — the single source of truth for commands/flags.
 clap.workspace = true
 feedparser-rs.workspace = true
+flacenc = { workspace = true, optional = true }
 flate2.workspace = true
+hound = { workspace = true, optional = true }
 rand.workspace = true
 realfft.workspace = true
 reqwest.workspace = true

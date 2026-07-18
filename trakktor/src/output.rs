@@ -5,20 +5,18 @@
 //! text, lists are one record per line with tab-separated fields and composite
 //! values collapsed onto one line.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
 use trakktor_core::{
-    asr::{
-        vad::SpeechSegment,
-        whisper::{Segment, Transcription, Word},
-    },
+    asr::whisper::{Segment, Transcription, Word},
     feed::{
         Author, ContentBlock, DiscoveredFeed, Field, MarkReadSummary,
         Publication,
     },
     skill::WriteOutcome,
     structify::Paragraph,
+    vad::{Keep, SpeechSegment},
 };
 
 use crate::{cli::TimestampsArg, error::CliError};
@@ -154,6 +152,191 @@ fn word_to_json(word: &Word) -> Value {
 fn insert_f64(object: &mut Map<String, Value>, key: &str, value: f64) {
     if let Some(number) = serde_json::Number::from_f64(value) {
         object.insert(key.to_string(), Value::Number(number));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// vad timeline / cut / split
+// ---------------------------------------------------------------------------
+
+/// One written clip from `vad split`, for output rendering.
+pub struct VadClip {
+    /// The written file.
+    pub path: PathBuf,
+    /// Clip start on the original timeline, seconds.
+    pub start: f64,
+    /// Clip end on the original timeline, seconds.
+    pub end: f64,
+    /// Clip duration, seconds.
+    pub duration: f64,
+}
+
+/// Prints the detected speech timeline (`vad timeline`). JSON: `duration`, a
+/// `speech` array of `{start,end}` spans, and a `stats` object (segment count,
+/// speech/silence seconds, speech ratio, longest pause). Text: one
+/// tab-separated `start<TAB>end` per span.
+pub fn print_vad_timeline(
+    speech: &[SpeechSegment],
+    window: (f64, f64),
+    show_window: bool,
+    json: bool,
+    pretty: bool,
+) {
+    if json {
+        let (start, end) = window;
+        let duration = (end - start).max(0.0);
+        let (speech_seconds, longest_pause) = speech_stats(speech, window);
+        let silence = (duration - speech_seconds).max(0.0);
+        let ratio = if duration > 0.0 {
+            speech_seconds / duration
+        } else {
+            0.0
+        };
+        let mut stats = Map::new();
+        stats.insert("segments".into(), Value::from(speech.len() as u64));
+        insert_f64(&mut stats, "speech_seconds", speech_seconds);
+        insert_f64(&mut stats, "silence_seconds", silence);
+        insert_f64(&mut stats, "speech_ratio", ratio);
+        insert_f64(&mut stats, "longest_pause_seconds", longest_pause);
+
+        let mut object = Map::new();
+        insert_f64(&mut object, "duration", duration);
+        // With a `--start`/`--end` window, report its bounds so absolute span
+        // times stay unambiguous.
+        if show_window {
+            let mut bounds = Map::new();
+            insert_f64(&mut bounds, "start", start);
+            insert_f64(&mut bounds, "end", end);
+            object.insert("window".into(), Value::Object(bounds));
+        }
+        object.insert("speech".into(), Value::Array(spans_to_json(speech)));
+        object.insert("stats".into(), Value::Object(stats));
+        print_json(&Value::Object(object), pretty);
+        return;
+    }
+    for segment in speech {
+        println!("{:.3}\t{:.3}", segment.start, segment.end);
+    }
+}
+
+/// Prints the result of `vad cut`. JSON: the written `output` path (omitted
+/// when nothing was written), `format`, `kept`, the number of kept `segments`,
+/// and the source and output durations. Text: the written path, if any.
+#[allow(clippy::too_many_arguments)]
+pub fn print_vad_cut(
+    output: Option<&Path>,
+    output_duration: f64,
+    source_duration: f64,
+    keep: Keep,
+    segments: usize,
+    format: &str,
+    json: bool,
+    pretty: bool,
+) {
+    if json {
+        let mut object = Map::new();
+        if let Some(path) = output {
+            object.insert(
+                "output".into(),
+                Value::String(path.display().to_string()),
+            );
+        }
+        object.insert("format".into(), Value::String(format.to_string()));
+        object
+            .insert("kept".into(), Value::String(keep_word(keep).to_string()));
+        object.insert("segments".into(), Value::from(segments as u64));
+        insert_f64(&mut object, "source_duration", source_duration);
+        insert_f64(&mut object, "output_duration", output_duration);
+        print_json(&Value::Object(object), pretty);
+        return;
+    }
+    if let Some(path) = output {
+        println!("{}", path.display());
+    }
+}
+
+/// Prints the result of `vad split`. JSON: `output_dir`, `format`, `kept`, the
+/// clip `count`, and a `clips` array of `{path,index,start,end,duration}`.
+/// Text: one written path per line.
+pub fn print_vad_split(
+    dir: &Path,
+    clips: &[VadClip],
+    keep: Keep,
+    format: &str,
+    json: bool,
+    pretty: bool,
+) {
+    if json {
+        let array: Vec<Value> = clips
+            .iter()
+            .enumerate()
+            .map(|(index, clip)| {
+                let mut object = Map::new();
+                object.insert(
+                    "path".into(),
+                    Value::String(clip.path.display().to_string()),
+                );
+                object.insert("index".into(), Value::from(index as u64 + 1));
+                insert_f64(&mut object, "start", clip.start);
+                insert_f64(&mut object, "end", clip.end);
+                insert_f64(&mut object, "duration", clip.duration);
+                Value::Object(object)
+            })
+            .collect();
+        let mut object = Map::new();
+        object.insert(
+            "output_dir".into(),
+            Value::String(dir.display().to_string()),
+        );
+        object.insert("format".into(), Value::String(format.to_string()));
+        object
+            .insert("kept".into(), Value::String(keep_word(keep).to_string()));
+        object.insert("count".into(), Value::from(clips.len() as u64));
+        object.insert("clips".into(), Value::Array(array));
+        print_json(&Value::Object(object), pretty);
+        return;
+    }
+    for clip in clips {
+        println!("{}", clip.path.display());
+    }
+}
+
+/// `speech` spans as an array of `{start,end}` JSON objects.
+fn spans_to_json(speech: &[SpeechSegment]) -> Vec<Value> {
+    speech
+        .iter()
+        .map(|segment| {
+            let mut object = Map::new();
+            insert_f64(&mut object, "start", segment.start);
+            insert_f64(&mut object, "end", segment.end);
+            Value::Object(object)
+        })
+        .collect()
+}
+
+/// Total speech seconds and the longest pause (leading, internal, or trailing)
+/// within the window. Spans are clipped to the window so windowed stats are
+/// correct even if a span straddles an edge.
+fn speech_stats(speech: &[SpeechSegment], window: (f64, f64)) -> (f64, f64) {
+    let (start, end) = window;
+    let speech_seconds: f64 = speech
+        .iter()
+        .map(|s| (s.end.min(end) - s.start.max(start)).max(0.0))
+        .sum();
+    let mut longest_pause = 0.0f64;
+    let mut cursor = start;
+    for segment in speech {
+        longest_pause = longest_pause.max(segment.start.min(end) - cursor);
+        cursor = cursor.max(segment.end.min(end));
+    }
+    longest_pause = longest_pause.max(end - cursor);
+    (speech_seconds, longest_pause.max(0.0))
+}
+
+fn keep_word(keep: Keep) -> &'static str {
+    match keep {
+        Keep::Speech => "speech",
+        Keep::NonSpeech => "non-speech",
     }
 }
 
