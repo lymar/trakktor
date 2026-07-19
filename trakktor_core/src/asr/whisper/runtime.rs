@@ -24,7 +24,10 @@ use super::{
 };
 
 /// Maps any backend failure onto the engine's model error.
-fn model_err(context: &str, e: impl std::fmt::Display) -> WhisperError {
+pub(super) fn model_err(
+    context: &str,
+    e: impl std::fmt::Display,
+) -> WhisperError {
     WhisperError::InvalidModel(format!("{context}: {e}"))
 }
 
@@ -146,7 +149,7 @@ impl CandleRuntime {
 }
 
 /// Reads the model geometry from the checkpoint's `config.json`.
-fn parse_config(raw: &str) -> Result<ModelDims, WhisperError> {
+pub(super) fn parse_config(raw: &str) -> Result<ModelDims, WhisperError> {
     let value: serde_json::Value =
         serde_json::from_str(raw).map_err(|e| model_err("config.json", e))?;
     let field = |name: &str| -> Result<usize, WhisperError> {

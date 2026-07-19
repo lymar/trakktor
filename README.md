@@ -161,14 +161,39 @@ section.
     --features metal trakktor
   ```
 
-  Without that feature, `--device metal` is rejected. (GigaAM's alternative
-  burn runtime is the exception — it ships its own Metal backend; see the
-  `asr gigaam` section.)
+  Without that feature, `--device metal` is rejected. (The alternative burn
+  runtime is the exception — it ships its own Metal backend; see below.)
 
 - **`--precision f16`** (the default) uses about half the memory and is faster;
   **`--precision f32`** computes in full precision for reproducible results, at
   twice the weight memory. f16 is what keeps the large models within reach on a
   16 GB machine.
+
+### Runtime
+
+```
+--runtime candle|burn   # default: candle
+```
+
+Both engines execute their network on the [candle](https://github.com/huggingface/candle)
+runtime by default. An alternative [burn](https://github.com/tracel-ai/burn)
+runtime is available behind the `burn` build feature and selected per run with
+`--runtime burn` (candle needs nothing extra; burn brings its own Metal
+backend, independent of the `metal` feature). Both runtimes produce the same
+transcription — byte-identical in f32 on our test material; f16 runs may swap
+the odd word, as with any half-precision kernel change (and since Whisper
+conditions each window on the previous text, on a long recording one swapped
+word can ripple into locally different, equally valid phrasing downstream).
+On Metal the two runtimes are close: burn measured moderately faster than
+candle for Whisper `large-v3` at a lower memory peak, and on par for GigaAM.
+(One known exception: candle degrades on Metal with `--precision f32` on
+Whisper `large-v3` — for full precision on the GPU use `--runtime burn`,
+which handles it correctly.) The very first burn run on a machine is a few
+times slower while it autotunes its GPU kernels; the tuning result is cached
+and later runs are full speed. The burn CPU backend computes in f32 only, so
+combine `--runtime burn` on the CPU with `--precision f32` — and expect it to
+be several times slower than candle there (its CPU matmuls do not
+parallelize the way candle's do); the burn runtime is aimed at Metal.
 
 ### Timestamps and output shape
 
@@ -423,16 +448,8 @@ clipping, and no `--vad` flag: CTC decoding has nothing to tune, and speech
 detection is already built into its chunking (below). GigaAM does not detect
 the language; `--language <code>` only annotates the output.
 
-An alternative [burn](https://github.com/tracel-ai/burn) runtime is available
-behind the `burn` build feature and selected per run with `--runtime burn`
-(candle stays the default and needs nothing extra; burn brings its own Metal
-backend, independent of the `metal` feature). Both runtimes produce the
-same transcription — byte-identical in f32 on our test material; f16 runs may
-swap the odd word, as with any half-precision kernel change — and on Metal
-their speed is on par. The very first burn run on a machine is a few times slower
-while it autotunes its GPU kernels; the tuning result is cached and later runs
-are full speed. The burn CPU backend computes in f32 only, so combine
-`--runtime burn` on the CPU with `--precision f32`.
+The shared `--runtime` flag applies too: `--runtime burn` runs the same
+network on the alternative burn runtime (see the Runtime section above).
 
 ```sh
 trakktor asr gigaam ru.mp3                       # Russian (v3_ctc), CPU, JSON
@@ -783,11 +800,11 @@ Apache-licensed:
 
 - **`asr whisper`** — [OpenAI Whisper](https://github.com/openai/whisper)
   (MIT), run on [candle](https://github.com/huggingface/candle) (Apache-2.0 OR
-  MIT).
+  MIT), with an optional alternative runtime on
+  [burn](https://github.com/tracel-ai/burn) (Apache-2.0 OR MIT).
 - **`asr gigaam`** — [GigaAM](https://github.com/salute-developers/GigaAM)
   (MIT): Conformer/CTC acoustic models by the GigaChat team, pipeline ported
-  to the same candle runtime, with an optional alternative runtime on
-  [burn](https://github.com/tracel-ai/burn) (Apache-2.0 OR MIT).
+  to the same candle runtime, with the same optional burn runtime.
 - **`vad`, and `asr --vad`** — [Silero-VAD](https://github.com/snakers4/silero-vad)
   (MIT): the ported speech detector behind both the audio editing commands and
   the transcription preprocessing stage.

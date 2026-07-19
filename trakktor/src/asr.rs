@@ -7,7 +7,8 @@ use std::{
 
 use trakktor_core::{
     asr::whisper::{
-        self, AudioDecoder, TranscribeOptions, WhisperError, alignment_heads,
+        self, AudioDecoder, ForwardProvider, TranscribeOptions, WhisperError,
+        alignment_heads,
     },
     vad::{self, SpeechSegment, VadOptions},
 };
@@ -52,27 +53,6 @@ pub(crate) fn run_whisper(
         &mut download_progress(),
     )?;
     let precision = args.precision.to_core();
-    let mut runtime = match args.device {
-        crate::cli::DeviceArg::Cpu => {
-            whisper::CandleRuntime::load_cpu(&resolved.dir, precision)?
-        },
-        crate::cli::DeviceArg::Metal => load_metal(&resolved.dir, precision)?,
-    };
-    eprintln!("decoding audio...");
-    let audio = decode_audio(args)?;
-
-    // Optional VAD: detect speech, then restrict to the `--start`/`--end`
-    // range if one was given.
-    let vad_speech: Option<Vec<SpeechSegment>> = if args.vad {
-        eprintln!("detecting speech...");
-        let mut speech = vad::detect_speech(&audio, &vad_options(args))?;
-        if let Some((lo, hi)) = vad_range {
-            speech = intersect_speech(&speech, lo, hi);
-        }
-        Some(speech)
-    } else {
-        None
-    };
 
     let options = TranscribeOptions {
         temperature,
@@ -104,6 +84,59 @@ pub(crate) fn run_whisper(
             .name
             .and_then(alignment_heads)
             .map(<[(usize, usize)]>::to_vec),
+    };
+
+    match args.runtime {
+        crate::cli::RuntimeArg::Candle => {
+            let runtime = match args.device {
+                crate::cli::DeviceArg::Cpu => {
+                    whisper::CandleRuntime::load_cpu(&resolved.dir, precision)?
+                },
+                crate::cli::DeviceArg::Metal => {
+                    load_metal(&resolved.dir, precision)?
+                },
+            };
+            transcribe_and_output(
+                runtime, args, options, vad_range, json, pretty,
+            )
+        },
+        crate::cli::RuntimeArg::Burn => run_burn(
+            args,
+            &resolved.dir,
+            precision,
+            options,
+            vad_range,
+            json,
+            pretty,
+        ),
+    }
+}
+
+/// Decodes the audio, optionally detects speech, runs the transcription on
+/// the loaded runtime, and prints (and optionally writes) the result. The
+/// runtime-agnostic tail of `run_whisper`.
+fn transcribe_and_output<P: ForwardProvider>(
+    mut runtime: P,
+    args: &WhisperArgs,
+    options: TranscribeOptions,
+    vad_range: Option<(f64, f64)>,
+    json: bool,
+    pretty: bool,
+) -> Result<(), CliError> {
+    eprintln!("decoding audio...");
+    let audio = decode_audio(args)?;
+
+    // Optional VAD: detect speech, then restrict to the `--start`/`--end`
+    // range if one was given.
+    let vad_speech: Option<Vec<SpeechSegment>> = if args.vad {
+        eprintln!("detecting speech...");
+        let mut speech = vad::detect_speech(&audio, &vad_options(args))?;
+        if let Some((lo, hi)) = vad_range {
+            speech = intersect_speech(&speech, lo, hi);
+        }
+        Some(speech)
+    } else {
+        None
     };
 
     // With VAD, collapse the detected speech into a dense buffer, transcribed
@@ -304,6 +337,49 @@ fn load_metal(
     Err(WhisperError::InvalidOptions(
         "this build has no Metal support; install or build trakktor with the \
          `metal` feature"
+            .into(),
+    )
+    .into())
+}
+
+/// Runs the transcription on the burn runtime (builds with the `burn`
+/// feature); the burn Metal backend is independent of the candle `metal`
+/// feature.
+#[cfg(feature = "burn")]
+fn run_burn(
+    args: &WhisperArgs,
+    model_dir: &Path,
+    precision: whisper::Precision,
+    options: TranscribeOptions,
+    vad_range: Option<(f64, f64)>,
+    json: bool,
+    pretty: bool,
+) -> Result<(), CliError> {
+    let runtime = match args.device {
+        crate::cli::DeviceArg::Cpu => {
+            whisper::BurnRuntime::load_cpu(model_dir, precision)?
+        },
+        crate::cli::DeviceArg::Metal => {
+            whisper::BurnRuntime::load_metal(model_dir, precision)?
+        },
+    };
+    transcribe_and_output(runtime, args, options, vad_range, json, pretty)
+}
+
+/// Without the `burn` feature, `--runtime burn` is a validation error.
+#[cfg(not(feature = "burn"))]
+fn run_burn(
+    _args: &WhisperArgs,
+    _model_dir: &Path,
+    _precision: whisper::Precision,
+    _options: TranscribeOptions,
+    _vad_range: Option<(f64, f64)>,
+    _json: bool,
+    _pretty: bool,
+) -> Result<(), CliError> {
+    Err(WhisperError::InvalidOptions(
+        "this build has no burn runtime; install or build trakktor with the \
+         `burn` feature"
             .into(),
     )
     .into())

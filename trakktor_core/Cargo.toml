@@ -22,6 +22,10 @@ audio = ["dep:symphonia", "dep:hound", "dep:flacenc"]
 # The candle-backed Whisper runtime. Off the default set this crate builds
 # without the ML stack (feeds/skill only).
 whisper-runtime = ["dep:candle-core", "dep:candle-nn", "dep:serde_json"]
+# The burn-backed alternative Whisper runtime, selectable at run time next to
+# the candle one. Builds on top of the candle runtime (shared checkpoint
+# reader and model plumbing).
+whisper-burn = ["whisper-runtime", "dep:burn"]
 # The candle-backed GigaAM runtime (Conformer encoder + CTC/RNN-T heads). Off
 # the default set this crate builds without the GigaAM stack.
 gigaam-runtime = ["dep:candle-core", "dep:candle-nn", "dep:serde_json", "dep:md-5"]

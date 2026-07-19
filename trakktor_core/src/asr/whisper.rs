@@ -19,6 +19,8 @@ pub mod feature;
 pub mod model;
 #[cfg(feature = "whisper-runtime")]
 pub mod runtime;
+#[cfg(feature = "whisper-burn")]
+pub mod runtime_burn;
 #[cfg(test)]
 mod testing;
 pub mod timing;
@@ -38,6 +40,8 @@ pub use feature::{Mel, MelBands, MelWindow, log_mel_spectrogram};
 pub use model::{CrossQk, ForwardProvider, Logits, ModelDims, alignment_heads};
 #[cfg(feature = "whisper-runtime")]
 pub use runtime::{CandleRuntime, Precision};
+#[cfg(feature = "whisper-burn")]
+pub use runtime_burn::BurnRuntime;
 pub use timing::Word;
 pub use tokenizer::{Task, TokenId, Tokenizer};
 pub use transcribe::{

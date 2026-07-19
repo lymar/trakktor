@@ -320,8 +320,20 @@ pub(crate) struct WhisperArgs {
     #[arg(long, default_value = "tiny", value_name = "name|dir")]
     pub(crate) model: String,
 
-    /// Compute device. `metal` needs a build with the `metal` feature
-    /// enabled and is only available on macOS.
+    /// Inference runtime executing the model. Both produce the same
+    /// transcription; `burn` needs a build with the `burn` feature enabled,
+    /// and on the CPU computes in f32 only.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = RuntimeArg::Candle,
+        value_name = "runtime"
+    )]
+    pub(crate) runtime: RuntimeArg,
+
+    /// Compute device. `metal` needs a build with the `metal` feature (for
+    /// the candle runtime) or the `burn` feature (for the burn runtime)
+    /// enabled, and is only available on macOS.
     #[arg(
         long,
         value_enum,
@@ -530,7 +542,7 @@ pub(crate) enum DeviceArg {
     Metal,
 }
 
-/// The `--runtime` value of `asr gigaam`.
+/// The `--runtime` value of the `asr` engines.
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum RuntimeArg {
     /// The candle runtime (the default).
