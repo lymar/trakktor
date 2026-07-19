@@ -114,6 +114,52 @@ pub fn stitch(
     acc
 }
 
+/// Runs `forward_batch` over all windows of the token stream and stitches the
+/// overlaps — the runtime-independent driver of the batched window forward,
+/// shared by every backend.
+///
+/// Each window is `[cls] + ids[start..end] + [sep]`; since the block size is
+/// [`block_size`], every window is full and needs no padding. Windows run in
+/// batches of `batch_size`: `forward_batch(buffer, n_batch, seq_len)` receives
+/// one batch's windows flattened row-major into `buffer` and returns, per
+/// window, the logits of its `seq_len − 2` real tokens (`CLS`/`SEP` already
+/// dropped). Overlaps are averaged with the `weighting` profile; the result is
+/// one boundary logit per token (`ids.len()` values).
+pub fn windowed_logits<E>(
+    ids: &[u32],
+    cls_id: u32,
+    sep_id: u32,
+    stride: usize,
+    batch_size: usize,
+    weighting: Weighting,
+    mut forward_batch: impl FnMut(&[u32], usize, usize) -> Result<Vec<Vec<f32>>, E>,
+) -> Result<Vec<f32>, E> {
+    let n_tokens = ids.len();
+    if n_tokens == 0 {
+        return Ok(Vec::new());
+    }
+    let block = block_size(n_tokens);
+    let windows = plan_windows(n_tokens, stride);
+    let seq_len = block + 2;
+    let batch_size = batch_size.max(1);
+
+    let mut per_window: Vec<Vec<f32>> = Vec::with_capacity(windows.len());
+    let mut buffer =
+        Vec::with_capacity(batch_size.min(windows.len()) * seq_len);
+    for batch in windows.chunks(batch_size) {
+        buffer.clear();
+        for window in batch {
+            buffer.push(cls_id);
+            buffer.extend_from_slice(&ids[window.start..window.end]);
+            buffer.push(sep_id);
+        }
+        per_window.extend(forward_batch(&buffer, batch.len(), seq_len)?);
+    }
+
+    let weights = weights(block, weighting);
+    Ok(stitch(n_tokens, &windows, &per_window, &weights))
+}
+
 /// The logistic sigmoid in f32 (the reference upcasts to f32 for precision).
 #[must_use]
 pub fn sigmoid(x: f32) -> f32 { 1.0 / (1.0 + (-x).exp()) }

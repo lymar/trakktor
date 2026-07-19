@@ -3,8 +3,8 @@
 use std::path::Path;
 
 use trakktor_core::structify::{
-    self, SatRuntime, Structifier, StructifyError, StructifyOptions,
-    XlmrTokenizer,
+    self, BoundaryModel, SatRuntime, Structifier, StructifyError,
+    StructifyOptions, XlmrTokenizer,
 };
 
 use crate::{cli::StructifyArgs, error::CliError};
@@ -36,11 +36,18 @@ pub(crate) fn run_structify(
     )?;
 
     let precision = args.precision.to_structify();
-    let runtime = match args.device {
-        crate::cli::DeviceArg::Cpu => {
-            SatRuntime::load_cpu(&resolved.dir, precision)?
+    let runtime: Box<dyn BoundaryModel> = match args.runtime {
+        crate::cli::RuntimeArg::Candle => match args.device {
+            crate::cli::DeviceArg::Cpu => {
+                Box::new(SatRuntime::load_cpu(&resolved.dir, precision)?)
+            },
+            crate::cli::DeviceArg::Metal => {
+                Box::new(load_metal(&resolved.dir, precision)?)
+            },
         },
-        crate::cli::DeviceArg::Metal => load_metal(&resolved.dir, precision)?,
+        crate::cli::RuntimeArg::Burn => {
+            load_burn(&resolved.dir, args.device, precision)?
+        },
     };
     let tokenizer = XlmrTokenizer::load(&tokenizer_path)?;
     let structifier = Structifier::new(runtime, tokenizer);
@@ -72,10 +79,44 @@ fn load_metal(
     _model_dir: &Path,
     _precision: structify::Precision,
 ) -> Result<SatRuntime, CliError> {
-    Err(StructifyError::InvalidModel(
+    Err(StructifyError::InvalidOptions(
         "this build has no Metal support; install or build trakktor with the \
          `metal` feature"
             .into(),
     )
     .into())
+}
+
+/// Loads the model on the burn runtime (builds with the `burn` feature); the
+/// burn Metal backend is independent of the candle `metal` feature.
+#[cfg(feature = "burn")]
+fn load_burn(
+    model_dir: &Path,
+    device: crate::cli::DeviceArg,
+    precision: structify::Precision,
+) -> Result<Box<dyn BoundaryModel>, CliError> {
+    use trakktor_core::structify::SatBurnRuntime;
+    let runtime = match device {
+        crate::cli::DeviceArg::Cpu => {
+            SatBurnRuntime::load_cpu(model_dir, precision)?
+        },
+        crate::cli::DeviceArg::Metal => {
+            SatBurnRuntime::load_metal(model_dir, precision)?
+        },
+    };
+    Ok(Box::new(runtime))
+}
+
+/// Without the `burn` feature, `--runtime burn` is a validation error.
+#[cfg(not(feature = "burn"))]
+fn load_burn(
+    _model_dir: &Path,
+    _device: crate::cli::DeviceArg,
+    _precision: structify::Precision,
+) -> Result<Box<dyn BoundaryModel>, CliError> {
+    Err(CliError::from(StructifyError::InvalidOptions(
+        "this build has no burn runtime; install or build trakktor with the \
+         `burn` feature"
+            .into(),
+    )))
 }

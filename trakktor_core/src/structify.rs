@@ -27,6 +27,8 @@
 pub mod download;
 mod error;
 pub mod runtime;
+#[cfg(feature = "structify-burn")]
+pub mod runtime_burn;
 pub mod segment;
 mod tokenizer;
 
@@ -34,7 +36,9 @@ pub use download::{
     KNOWN_MODELS, ResolvedModel, resolve_model, resolve_tokenizer,
 };
 pub use error::StructifyError;
-pub use runtime::{Precision, SatRuntime};
+pub use runtime::{BoundaryModel, Precision, SatRuntime};
+#[cfg(feature = "structify-burn")]
+pub use runtime_burn::SatBurnRuntime;
 pub use segment::Weighting;
 pub use tokenizer::XlmrTokenizer;
 
@@ -89,22 +93,22 @@ pub struct StructifyOutput {
     pub paragraphs: Vec<Paragraph>,
 }
 
-/// A loaded structifier: the candle runtime plus the XLM-R tokenizer.
+/// A loaded structifier: a boundary model on either runtime plus the XLM-R
+/// tokenizer.
 pub struct Structifier {
-    runtime: SatRuntime,
+    runtime: Box<dyn BoundaryModel>,
     tokenizer: XlmrTokenizer,
 }
 
 impl Structifier {
     /// Bundles a loaded runtime and tokenizer.
     #[must_use]
-    pub fn new(runtime: SatRuntime, tokenizer: XlmrTokenizer) -> Self {
+    pub fn new(
+        runtime: Box<dyn BoundaryModel>,
+        tokenizer: XlmrTokenizer,
+    ) -> Self {
         Self { runtime, tokenizer }
     }
-
-    /// The runtime, e.g. to inspect its device.
-    #[must_use]
-    pub fn runtime(&self) -> &SatRuntime { &self.runtime }
 
     /// Segments already-[`normalize`]d text into paragraphs.
     ///

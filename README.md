@@ -655,9 +655,10 @@ Two families, differing in what they cut on:
 trakktor text structify transcript.txt --model sat-3l-sm --text
 ```
 
-### Device and precision
+### Runtime, device, and precision
 
 ```
+--runtime candle|burn   # default: candle
 --device cpu|metal      # default: cpu
 --precision f16|f32     # default: f16
 ```
@@ -666,6 +667,11 @@ trakktor text structify transcript.txt --model sat-3l-sm --text
 feature (as for `asr`); without it, `--device metal` is rejected. `--precision
 f16` (the default) uses about half the memory and is faster; `f32` computes in
 full precision for reproducible results.
+
+The shared `--runtime` flag applies too: `--runtime burn` runs the same
+network on the alternative burn runtime (see the Runtime section under `asr`
+— the same build feature, backends, and caveats). Both runtimes produce the
+same paragraphs.
 
 ### Segmentation controls
 
@@ -811,7 +817,8 @@ Apache-licensed:
 - **`text structify`** — [SaT / wtpsplit](https://github.com/segment-any-text/wtpsplit)
   (MIT; Frohmann et al., *Segment Any Text*, EMNLP 2024), with the
   [XLM-RoBERTa](https://huggingface.co/FacebookAI/xlm-roberta-base) (MIT)
-  tokenizer. Please cite the SaT paper if you use these models.
+  tokenizer, on the same candle runtime with the same optional burn runtime.
+  Please cite the SaT paper if you use these models.
 
 See [`NOTICE`](NOTICE) for the full third-party attributions and license
 notices.

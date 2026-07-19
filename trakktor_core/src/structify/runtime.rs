@@ -5,7 +5,7 @@
 //! the batched window forward over the vendored network in [`net`]. Devices:
 //! CPU always; Metal and CUDA behind the corresponding cargo features.
 
-mod net;
+pub(super) mod net;
 
 use std::path::Path;
 
@@ -16,8 +16,34 @@ pub use net::NEWLINE_INDEX;
 use super::{error::StructifyError, segment};
 
 /// Maps any backend failure onto the feature's model error.
-fn model_err(context: &str, e: impl std::fmt::Display) -> StructifyError {
+pub(super) fn model_err(
+    context: &str,
+    e: impl std::fmt::Display,
+) -> StructifyError {
     StructifyError::InvalidModel(format!("{context}: {e}"))
+}
+
+/// A loaded SaT network, ready to score token boundaries — the seam behind
+/// which the runtimes (candle, burn) are interchangeable. The windowing,
+/// batching, and overlap stitching around the forward are shared
+/// ([`segment::windowed_logits`]); implementations supply only the batched
+/// window forward.
+pub trait BoundaryModel {
+    /// Runs the model over all windows of the token stream and returns one
+    /// averaged boundary logit per token (`ids.len()` values).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StructifyError`] on a backend failure.
+    fn token_boundary_logits(
+        &self,
+        ids: &[u32],
+        cls_id: u32,
+        sep_id: u32,
+        stride: usize,
+        batch_size: usize,
+        weighting: segment::Weighting,
+    ) -> Result<Vec<f32>, StructifyError>;
 }
 
 /// Compute precision of the runtime.
@@ -145,18 +171,33 @@ impl SatRuntime {
         Self::load(model_dir, device, precision)
     }
 
-    /// Runs the model over all windows of the token stream and returns one
-    /// averaged boundary logit per token (`ids.len()` values).
-    ///
-    /// Each window is `[cls] + ids[start..end] + [sep]`; since the block size
-    /// is `min(n_tokens, MAX_BLOCK)`, every window is full and needs no
-    /// padding. Windows run in batches of `batch_size`; overlaps are
-    /// averaged with the `weighting` profile.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`StructifyError::InvalidModel`] on a backend failure.
-    pub fn token_boundary_logits(
+    /// Forwards one batch of full windows and returns each window's logits
+    /// with the `CLS`/`SEP` positions dropped.
+    fn window_batch_logits(
+        &self,
+        buffer: &[u32],
+        n_batch: usize,
+        seq_len: usize,
+    ) -> Result<Vec<Vec<f32>>, StructifyError> {
+        let input =
+            Tensor::from_vec(buffer.to_vec(), (n_batch, seq_len), &self.device)
+                .map_err(|e| model_err("building input tensor", e))?;
+        let mask = Tensor::ones((n_batch, seq_len), DType::F32, &self.device)
+            .map_err(|e| model_err("building attention mask", e))?;
+        let logits = self
+            .model
+            .forward(&input, &mask)
+            .map_err(|e| model_err("model forward", e))?;
+        // Drop CLS (col 0) and SEP (last col): keep the real tokens.
+        logits
+            .narrow(1, 1, seq_len - 2)
+            .and_then(|t| t.to_vec2::<f32>())
+            .map_err(|e| model_err("reading logits", e))
+    }
+}
+
+impl BoundaryModel for SatRuntime {
+    fn token_boundary_logits(
         &self,
         ids: &[u32],
         cls_id: u32,
@@ -165,50 +206,22 @@ impl SatRuntime {
         batch_size: usize,
         weighting: segment::Weighting,
     ) -> Result<Vec<f32>, StructifyError> {
-        let n_tokens = ids.len();
-        if n_tokens == 0 {
-            return Ok(Vec::new());
-        }
-        let block = segment::block_size(n_tokens);
-        let windows = segment::plan_windows(n_tokens, stride);
-        let seq_len = block + 2;
-        let batch_size = batch_size.max(1);
-
-        let mut per_window: Vec<Vec<f32>> = Vec::with_capacity(windows.len());
-        for batch in windows.chunks(batch_size) {
-            let n_batch = batch.len();
-            let mut buffer = Vec::with_capacity(n_batch * seq_len);
-            for window in batch {
-                buffer.push(cls_id);
-                buffer.extend_from_slice(&ids[window.start..window.end]);
-                buffer.push(sep_id);
-            }
-            let input =
-                Tensor::from_vec(buffer, (n_batch, seq_len), &self.device)
-                    .map_err(|e| model_err("building input tensor", e))?;
-            let mask =
-                Tensor::ones((n_batch, seq_len), DType::F32, &self.device)
-                    .map_err(|e| model_err("building attention mask", e))?;
-            let logits = self
-                .model
-                .forward(&input, &mask)
-                .map_err(|e| model_err("model forward", e))?;
-            // Drop CLS (col 0) and SEP (last col): keep the `block` real
-            // tokens.
-            let rows = logits
-                .narrow(1, 1, block)
-                .and_then(|t| t.to_vec2::<f32>())
-                .map_err(|e| model_err("reading logits", e))?;
-            per_window.extend(rows);
-        }
-
-        let weights = segment::weights(block, weighting);
-        Ok(segment::stitch(n_tokens, &windows, &per_window, &weights))
+        segment::windowed_logits(
+            ids,
+            cls_id,
+            sep_id,
+            stride,
+            batch_size,
+            weighting,
+            |buffer, n_batch, seq_len| {
+                self.window_batch_logits(buffer, n_batch, seq_len)
+            },
+        )
     }
 }
 
 /// Reads the model geometry from the checkpoint's `config.json`.
-fn parse_config(raw: &str) -> Result<net::Config, StructifyError> {
+pub(super) fn parse_config(raw: &str) -> Result<net::Config, StructifyError> {
     let value: serde_json::Value =
         serde_json::from_str(raw).map_err(|e| model_err("config.json", e))?;
     let field = |name: &str| -> Result<usize, StructifyError> {

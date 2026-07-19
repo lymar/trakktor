@@ -14,9 +14,13 @@ metal = [
     "trakktor_core/gigaam-metal",
     "trakktor_core/structify-metal",
 ]
-# The burn runtime for `asr whisper` and `asr gigaam` (`--runtime burn`),
-# with its own CPU and Metal backends.
-burn = ["trakktor_core/whisper-burn", "trakktor_core/gigaam-burn"]
+# The burn runtime for `asr whisper`, `asr gigaam`, and `text structify`
+# (`--runtime burn`), with its own CPU and Metal backends.
+burn = [
+    "trakktor_core/whisper-burn",
+    "trakktor_core/gigaam-burn",
+    "trakktor_core/structify-burn",
+]
 
 [[bin]]
 name = "trakktor"

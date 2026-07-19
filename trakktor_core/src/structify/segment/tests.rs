@@ -131,3 +131,94 @@ fn trim_span_drops_surrounding_whitespace() {
         Span { start: 1, end: 2 }
     );
 }
+
+/// The driver's forward contract: every row is `[cls] + window + [sep]`, rows
+/// arrive batched, and the stitched result equals running `stitch` directly
+/// over the per-window logits.
+#[test]
+fn windowed_logits_frames_batches_and_stitches() {
+    let ids: Vec<u32> = (100..100 + 1500).collect();
+    let (cls, sep, stride, batch_size) = (7u32, 9u32, 256, 2);
+
+    let n_tokens = ids.len();
+    let block = block_size(n_tokens);
+    let windows = plan_windows(n_tokens, stride);
+    assert!(windows.len() > batch_size, "the test should span >1 batch");
+
+    let got = windowed_logits::<()>(
+        &ids,
+        cls,
+        sep,
+        stride,
+        batch_size,
+        Weighting::Hat,
+        |buffer, n_batch, seq_len| {
+            assert_eq!(seq_len, block + 2);
+            assert_eq!(buffer.len(), n_batch * seq_len);
+            assert!(n_batch <= batch_size);
+            Ok(buffer
+                .chunks(seq_len)
+                .map(|row| {
+                    assert_eq!(row[0], cls);
+                    assert_eq!(row[seq_len - 1], sep);
+                    // The logit of each real token is the token id itself.
+                    row[1..seq_len - 1].iter().map(|&t| t as f32).collect()
+                })
+                .collect())
+        },
+    )
+    .unwrap();
+
+    let per_window: Vec<Vec<f32>> = windows
+        .iter()
+        .map(|w| ids[w.start..w.end].iter().map(|&t| t as f32).collect())
+        .collect();
+    let want = stitch(
+        n_tokens,
+        &windows,
+        &per_window,
+        &weights(block, Weighting::Hat),
+    );
+    assert_eq!(got, want);
+}
+
+/// Batch size must not change the result — only how the windows are grouped.
+#[test]
+fn windowed_logits_is_batch_size_invariant() {
+    let ids: Vec<u32> = (0..900).map(|i| i % 251).collect();
+    let forward = |buffer: &[u32], _n: usize, seq_len: usize| {
+        Ok::<_, ()>(
+            buffer
+                .chunks(seq_len)
+                .map(|row| {
+                    row[1..seq_len - 1]
+                        .iter()
+                        .map(|&t| (t as f32).sin())
+                        .collect()
+                })
+                .collect(),
+        )
+    };
+    let one = windowed_logits(&ids, 1, 2, 200, 1, Weighting::Uniform, forward)
+        .unwrap();
+    let many =
+        windowed_logits(&ids, 1, 2, 200, 64, Weighting::Uniform, forward)
+            .unwrap();
+    assert_eq!(one, many);
+}
+
+/// Empty input short-circuits without calling the forward.
+#[test]
+fn windowed_logits_empty_input() {
+    let got = windowed_logits::<()>(
+        &[],
+        1,
+        2,
+        256,
+        32,
+        Weighting::Uniform,
+        |_, _, _| panic!("forward must not run on empty input"),
+    )
+    .unwrap();
+    assert!(got.is_empty());
+}

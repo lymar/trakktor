@@ -23,6 +23,12 @@ pub enum StructifyError {
     #[error("tokenizer unavailable: {0}")]
     Tokenizer(String),
 
+    /// The requested option combination cannot be served by this build or
+    /// backend (`invalid_options`) — e.g. the burn runtime in a build without
+    /// the `burn` feature, or `f16` on the burn CPU backend.
+    #[error("invalid options: {0}")]
+    InvalidOptions(String),
+
     /// Reading the input text failed (`io_error`).
     #[error("failed to read input: {0}")]
     Io(String),

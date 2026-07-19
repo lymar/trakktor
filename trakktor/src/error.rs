@@ -166,6 +166,7 @@ fn structify_code(err: &StructifyError) -> &'static str {
         StructifyError::InvalidModel(_) |
         StructifyError::ModelDownload(_) |
         StructifyError::Tokenizer(_) => "model_unavailable",
+        StructifyError::InvalidOptions(_) => "invalid_options",
         StructifyError::Io(_) => "io_error",
         StructifyError::HomeDirUnknown => "no_home_dir",
     }
