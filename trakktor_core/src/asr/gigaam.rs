@@ -5,7 +5,7 @@
 //! CTC / RNN-T greedy decoding. The primary runtime is
 //! [candle](candle_core), with Metal acceleration behind a cargo feature; an
 //! alternative burn runtime is available behind the `gigaam-burn` feature and
-//! selected at run time through the [`CtcModel`] seam.
+//! selected at run time through the [`AsrModel`] seam.
 //!
 //! Like the [`whisper`](super::whisper) engine, this module depends only on
 //! external crates and standard-library facilities, with no ties to the rest of
@@ -19,6 +19,8 @@ pub mod decode;
 pub mod download;
 pub mod error;
 pub mod feature;
+#[cfg(feature = "gigaam-runtime")]
+pub mod rnnt;
 #[cfg(feature = "gigaam-runtime")]
 pub mod runtime;
 #[cfg(feature = "gigaam-burn")]
@@ -34,13 +36,13 @@ pub mod transcribe;
 pub use config::{
     KNOWN_MODELS, ModelClass, ModelConfig, TokenizerConfig, config_for,
 };
-pub use decode::{Decoded, Word, decode_chunk, frames_to_words};
+pub use decode::{Word, frames_to_words};
 #[cfg(feature = "gigaam-runtime")]
 pub use download::{ResolvedModel, resolve_model};
 pub use error::GigaamError;
 pub use feature::{FeatureExtractor, Mel, MelConfig};
 #[cfg(feature = "gigaam-runtime")]
-pub use runtime::{CtcModel, GigaamModel, Precision};
+pub use runtime::{AsrModel, Emissions, GigaamModel, Precision};
 #[cfg(feature = "gigaam-burn")]
 pub use runtime_burn::GigaamBurnModel;
 pub use segment::Interval;

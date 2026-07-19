@@ -43,6 +43,17 @@ pub enum ModelClass {
     Rnnt,
 }
 
+/// RNN-T head geometry (prediction and joint networks).
+#[derive(Debug, Clone, Copy)]
+pub struct RnntConfig {
+    /// Width of the prediction network (embedding and LSTM hidden size).
+    pub pred_hidden: usize,
+    /// Number of LSTM layers in the prediction network.
+    pub pred_rnn_layers: usize,
+    /// Width of the joint network's hidden layer.
+    pub joint_hidden: usize,
+}
+
 /// Conformer encoder geometry.
 #[derive(Debug, Clone, Copy)]
 pub struct EncoderConfig {
@@ -101,6 +112,8 @@ pub struct ModelConfig {
     pub model_class: ModelClass,
     pub mel: MelConfig,
     pub encoder: EncoderConfig,
+    /// RNN-T head geometry; present exactly for RNN-T models.
+    pub rnnt: Option<RnntConfig>,
     pub tokenizer: TokenizerConfig,
     pub blank_id: u32,
     pub num_classes: usize,
@@ -110,7 +123,9 @@ pub struct ModelConfig {
 /// The published model names this build supports.
 pub const KNOWN_MODELS: &[&str] = &[
     "v3_ctc",
+    "v3_rnnt",
     "v3_e2e_ctc",
+    "v3_e2e_rnnt",
     "multilingual_ctc",
     "multilingual_large_ctc",
 ];
@@ -119,7 +134,9 @@ pub const KNOWN_MODELS: &[&str] = &[
 pub fn config_for(name: &str) -> Option<ModelConfig> {
     let raw = match name {
         "v3_ctc" => include_str!("assets/v3_ctc.json"),
+        "v3_rnnt" => include_str!("assets/v3_rnnt.json"),
         "v3_e2e_ctc" => include_str!("assets/v3_e2e_ctc.json"),
+        "v3_e2e_rnnt" => include_str!("assets/v3_e2e_rnnt.json"),
         "multilingual_ctc" => include_str!("assets/multilingual_ctc.json"),
         "multilingual_large_ctc" => {
             include_str!("assets/multilingual_large_ctc.json")
@@ -192,6 +209,17 @@ fn parse(raw: &str) -> Result<ModelConfig, GigaamError> {
         "rnnt" => ModelClass::Rnnt,
         other => return Err(err(&format!("model_class `{other}`"))),
     };
+    let rnnt = match model_class {
+        ModelClass::Ctc => None,
+        ModelClass::Rnnt => {
+            let rnnt_v = &v["rnnt"];
+            Some(RnntConfig {
+                pred_hidden: u(rnnt_v, "pred_hidden")?,
+                pred_rnn_layers: u(rnnt_v, "pred_rnn_layers")?,
+                joint_hidden: u(rnnt_v, "joint_hidden")?,
+            })
+        },
+    };
 
     let strings = |val: &serde_json::Value,
                    k: &str|
@@ -226,6 +254,7 @@ fn parse(raw: &str) -> Result<ModelConfig, GigaamError> {
         model_class,
         mel,
         encoder,
+        rnnt,
         tokenizer,
         blank_id: u(&v, "blank_id")? as u32,
         num_classes: u(&v, "num_classes")?,

@@ -5,30 +5,7 @@ use std::time::Instant;
 use candle_core::{Device, IndexOp};
 
 use super::{GigaamModel, Precision};
-use crate::asr::gigaam::{
-    config::{Attention, ConvNorm, EncoderConfig, Subsampling},
-    feature::MelConfig,
-};
-
-const V3_ENCODER: EncoderConfig = EncoderConfig {
-    n_mels: 64,
-    d_model: 768,
-    n_layers: 16,
-    n_heads: 16,
-    subsampling: Subsampling::Conv1d,
-    subs_kernel_size: 5,
-    subsampling_factor: 4,
-    conv_kernel_size: 5,
-    conv_norm: ConvNorm::LayerNorm,
-    attention: Attention::Rotary,
-};
-
-const V3_MEL: MelConfig = MelConfig {
-    n_fft: 320,
-    hop_length: 160,
-    n_mels: 64,
-    center: false,
-};
+use crate::asr::gigaam::config::config_for;
 
 fn ckpt(name: &str) -> std::path::PathBuf {
     let home = std::env::var("HOME").expect("HOME");
@@ -50,15 +27,9 @@ fn bench_chunk() {
         _ => Precision::F32,
     };
     println!("device={device:?} precision={precision:?}");
-    let model = GigaamModel::load_ctc(
-        &ckpt("v3_ctc"),
-        V3_ENCODER,
-        V3_MEL,
-        34,
-        device,
-        precision,
-    )
-    .unwrap();
+    let config = config_for("v3_ctc").unwrap();
+    let model =
+        GigaamModel::load(&ckpt("v3_ctc"), &config, device, precision).unwrap();
 
     // A ~22 s chunk of white-ish noise (content does not matter for timing).
     let n = 22 * 16000;

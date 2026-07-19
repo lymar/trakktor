@@ -1,4 +1,4 @@
-use super::{ctc_greedy, decode_chunk, frames_to_words};
+use super::{ctc_greedy, frames_to_words};
 use crate::asr::gigaam::tokenizer::Tokenizer;
 
 /// A tiny vocab: 0=' ', 1='a', 2='b', 3='c'; blank = 4.
@@ -30,9 +30,9 @@ fn collapse_respects_length() {
 fn decode_joins_characters() {
     // "ab c": a b space c
     let labels = [1u32, 2, 0, 3];
-    let decoded = decode_chunk(&tok(), &labels, labels.len());
-    assert_eq!(decoded.text, "ab c");
-    assert_eq!(decoded.token_ids, vec![1, 2, 0, 3]);
+    let (ids, _) = ctc_greedy(&labels, labels.len(), 4);
+    assert_eq!(ids, vec![1, 2, 0, 3]);
+    assert_eq!(tok().decode(&ids), "ab c");
 }
 
 #[test]

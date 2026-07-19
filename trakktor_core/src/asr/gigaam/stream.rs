@@ -29,7 +29,7 @@ use super::{
     constants::{LONGFORM_THRESHOLD_S, SAMPLE_RATE},
     decode::Word,
     error::GigaamError,
-    runtime::CtcModel,
+    runtime::AsrModel,
     segment::{Interval, chunk_boundaries},
     tokenizer::Tokenizer,
     transcribe::{
@@ -137,7 +137,7 @@ impl ChunkPlanner {
 /// A streamed transcription session. Feed PCM with
 /// [`push`](Self::push), then call [`finish`](Self::finish) once.
 pub struct StreamTranscriber<'m> {
-    model: &'m dyn CtcModel,
+    model: &'m dyn AsrModel,
     tokenizer: &'m Tokenizer,
     options: TranscribeOptions,
     /// The declared total duration, when known — progress reporting only.
@@ -166,7 +166,7 @@ impl<'m> StreamTranscriber<'m> {
     ///
     /// Returns [`GigaamError::Vad`] when the VAD model cannot be loaded.
     pub fn new(
-        model: &'m dyn CtcModel,
+        model: &'m dyn AsrModel,
         tokenizer: &'m Tokenizer,
         options: TranscribeOptions,
         total_hint: Option<f64>,
@@ -390,7 +390,7 @@ fn to_interval(seg: SpeechSegment) -> Interval {
 ///
 /// See [`StreamTranscriber::push`].
 pub fn transcribe_with_progress(
-    model: &dyn CtcModel,
+    model: &dyn AsrModel,
     tokenizer: &Tokenizer,
     audio: &[f32],
     options: &TranscribeOptions,
@@ -409,7 +409,7 @@ pub fn transcribe_with_progress(
 ///
 /// See [`StreamTranscriber::push`].
 pub fn transcribe(
-    model: &dyn CtcModel,
+    model: &dyn AsrModel,
     tokenizer: &Tokenizer,
     audio: &[f32],
     options: &TranscribeOptions,

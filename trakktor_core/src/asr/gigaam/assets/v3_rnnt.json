@@ -1,0 +1,71 @@
+{
+  "model_name": "v3_rnnt",
+  "model_class": "rnnt",
+  "mel": {
+    "n_fft": 320,
+    "hop_length": 160,
+    "n_mels": 64,
+    "center": false
+  },
+  "encoder": {
+    "d_model": 768,
+    "n_layers": 16,
+    "n_heads": 16,
+    "subsampling": "conv1d",
+    "subs_kernel_size": 5,
+    "subsampling_factor": 4,
+    "conv_kernel_size": 5,
+    "conv_norm": "layer_norm",
+    "attention": "rotary"
+  },
+  "rnnt": {
+    "pred_hidden": 320,
+    "pred_rnn_layers": 1,
+    "joint_hidden": 320
+  },
+  "tokenizer": {
+    "kind": "charwise",
+    "vocab": [
+      " ",
+      "а",
+      "б",
+      "в",
+      "г",
+      "д",
+      "е",
+      "ж",
+      "з",
+      "и",
+      "й",
+      "к",
+      "л",
+      "м",
+      "н",
+      "о",
+      "п",
+      "р",
+      "с",
+      "т",
+      "у",
+      "ф",
+      "х",
+      "ц",
+      "ч",
+      "ш",
+      "щ",
+      "ъ",
+      "ы",
+      "ь",
+      "э",
+      "ю",
+      "я"
+    ]
+  },
+  "blank_id": 33,
+  "num_classes": 34,
+  "download": {
+    "ckpt": "v3_rnnt.ckpt",
+    "url": "https://cdn.chatwm.opensmodel.sberdevices.ru/GigaAM/v3_rnnt.ckpt",
+    "md5": "0fd2c9a1ff66abd8d32a3a07f7592815"
+  }
+}

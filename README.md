@@ -91,8 +91,8 @@ flags. Two engines ship today, each documented in its own section below:
 
 - [**`asr whisper`**](#asr-whisper--whisper-engine) — Whisper models: many
   languages with autodetection; can translate to English.
-- [**`asr gigaam`**](#asr-gigaam--gigaam-engine) — GigaAM Conformer/CTC
-  models: strongest on Russian; fast single-pass decoding.
+- [**`asr gigaam`**](#asr-gigaam--gigaam-engine) — GigaAM Conformer models
+  (CTC and RNN-T): strongest on Russian; fast single-pass decoding.
 
 ```sh
 trakktor asr whisper talk.mp3            # JSON (default): text + timestamped segments
@@ -189,8 +189,9 @@ candle for Whisper `large-v3` at a lower memory peak, and on par for GigaAM.
 (One known exception: candle degrades on Metal with `--precision f32` on
 Whisper `large-v3` — for full precision on the GPU use `--runtime burn`,
 which handles it correctly.) The very first burn run on a machine is a few
-times slower while it autotunes its GPU kernels; the tuning result is cached
-and later runs are full speed. The burn CPU backend computes in f32 only, so
+times slower while it autotunes its GPU kernels; trakktor announces this on
+stderr when it is about to happen, the tuning result is cached, and later
+runs are full speed. The burn CPU backend computes in f32 only, so
 combine `--runtime burn` on the CPU with `--precision f32` — and expect it to
 be several times slower than candle there (its CPU matmuls do not
 parallelize the way candle's do); the burn runtime is aimed at Metal.
@@ -203,8 +204,8 @@ parallelize the way candle's do); the burn runtime is aimed at Metal.
 
 - `segment` — per-segment start/end times (the default).
 - `word` — segment times plus per-word timings. Whisper derives them with an
-  extra alignment pass (slower); GigaAM reads them off its CTC frames at no
-  extra cost.
+  extra alignment pass (slower); GigaAM reads them off its emission frames at
+  no extra cost.
 - `none` — text only, no segment list.
 
 The default output is a single JSON object: the transcript `text`, the
@@ -250,8 +251,8 @@ With `--timestamps word`, each segment also gets a `words` array of
 The `whisper` block is diagnostic: `avg_logprob` (average token
 log-probability — confidence), `compression_ratio` (zlib ratio; high means
 repetitive), `no_speech_prob`, and the `temperature` the accepted result was
-decoded at. GigaAM's CTC decoding has no counterpart signals, so its segments
-carry no such block. `--text` instead prints one right-aligned
+decoded at. GigaAM's greedy decoding has no counterpart signals, so its
+segments carry no such block. `--text` instead prints one right-aligned
 `[start --> end] text` line per segment (or just the transcript with
 `--timestamps none`), and errors follow the usual
 `{ "error": { "code", "message" } }` contract.
@@ -439,20 +440,20 @@ trakktor asr whisper voice.opus --audio-decoder ffmpeg --model small
 ### `asr gigaam` — GigaAM engine
 
 [GigaAM](https://github.com/salute-developers/GigaAM) is a family of Conformer
-acoustic models with character-wise CTC decoding — strongest on Russian, and,
-with the multilingual checkpoints, several more languages. It is a faithful
-port of the reference pipeline on the same candle runtime as `whisper`, and
-all the shared behavior above — audio input, model storage, device and
-precision, output — applies as-is. The engine has no decoding knobs, no
-clipping, and no `--vad` flag: CTC decoding has nothing to tune, and speech
-detection is already built into its chunking (below). GigaAM does not detect
-the language; `--language <code>` only annotates the output.
+acoustic models with CTC or RNN-T (transducer) decoding — strongest on
+Russian, and, with the multilingual checkpoints, several more languages. It is
+a faithful port of the reference pipeline on the same candle runtime as
+`whisper`, and all the shared behavior above — audio input, model storage,
+device and precision, output — applies as-is. The engine has no decoding
+knobs, no clipping, and no `--vad` flag: greedy decoding has nothing to tune,
+and speech detection is already built into its chunking (below). GigaAM does
+not detect the language; `--language <code>` only annotates the output.
 
 The shared `--runtime` flag applies too: `--runtime burn` runs the same
 network on the alternative burn runtime (see the Runtime section above).
 
 ```sh
-trakktor asr gigaam ru.mp3                       # Russian (v3_ctc), CPU, JSON
+trakktor asr gigaam ru.mp3                       # Russian, punctuated (v3_e2e_ctc), CPU, JSON
 trakktor asr gigaam ru.mp3 --text                # readable [start --> end] lines
 trakktor asr gigaam ru.mp3 --timestamps word     # per-word timings
 trakktor asr gigaam ru.mp3 \
@@ -462,24 +463,32 @@ trakktor asr gigaam ru.mp3 \
 Models (downloaded on first use into `~/.trakktor/asr/gigaam/<name>.ckpt`, or
 pass a path to a local `.ckpt`):
 
-- **`v3_ctc`** (default) — Russian; lowercase text without punctuation.
-- **`v3_e2e_ctc`** — Russian **with punctuation and capitalization** (end-to-end
-  model with text normalization — numbers as digits, sentence casing).
+- **`v3_e2e_ctc`** (default) — Russian **with punctuation and capitalization**
+  (end-to-end model with text normalization — numbers as digits, sentence
+  casing).
+- **`v3_e2e_rnnt`** — punctuated Russian like `v3_e2e_ctc`, with an RNN-T
+  (transducer) decoder; slightly slower.
+- **`v3_ctc`** — Russian; normalized lowercase text without punctuation.
+- **`v3_rnnt`** — Russian; like `v3_ctc` but with an RNN-T (transducer)
+  decoder — usually the most accurate raw text on Russian, slightly slower.
 - **`multilingual_ctc`** — multiple languages (220M).
 - **`multilingual_large_ctc`** — the largest, most accurate multilingual model
   (600M).
 
-The plain CTC models emit normalized lowercase text without punctuation (their
-alphabet has none); use `v3_e2e_ctc` when you need readable, punctuated
-Russian:
+The `v3_e2e_*` models emit readable, punctuated Russian. The plain `v3_ctc`
+and `v3_rnnt` models emit normalized lowercase text without punctuation
+(their alphabet has none) — the usual form for downstream text processing or
+WER evaluation; pick `v3_rnnt` when raw-text accuracy matters most:
 
 ```sh
-trakktor asr gigaam ru.mp3 --model v3_e2e_ctc --device metal --text
+trakktor asr gigaam ru.mp3 --model v3_rnnt --device metal --text
 ```
 
-Unlike Whisper's autoregressive decoder, GigaAM's CTC decoding is a single
-encoder pass per chunk followed by an argmax — there is no per-token generation
-loop, so the GPU stays busy through a chunk. Audio longer than ~25 seconds is
+Unlike Whisper's autoregressive decoder, GigaAM decoding is a single encoder
+pass per chunk followed by one read-back — the CTC models take an argmax over
+frames, and `v3_rnnt` runs its small transducer loop on the CPU from the
+encoder output — so the GPU stays busy through a chunk either way. Audio
+longer than ~25 seconds is
 split along detected speech (voice-activity detection) into chunks, each
 transcribed independently and stitched back onto the original timeline. Chunk
 boundaries are placed by dynamic programming over the pauses between speech —
@@ -809,8 +818,9 @@ Apache-licensed:
   MIT), with an optional alternative runtime on
   [burn](https://github.com/tracel-ai/burn) (Apache-2.0 OR MIT).
 - **`asr gigaam`** — [GigaAM](https://github.com/salute-developers/GigaAM)
-  (MIT): Conformer/CTC acoustic models by the GigaChat team, pipeline ported
-  to the same candle runtime, with the same optional burn runtime.
+  (MIT): Conformer acoustic models (CTC and RNN-T) by the GigaChat team,
+  pipeline ported to the same candle runtime, with the same optional burn
+  runtime.
 - **`vad`, and `asr --vad`** — [Silero-VAD](https://github.com/snakers4/silero-vad)
   (MIT): the ported speech detector behind both the audio editing commands and
   the transcription preprocessing stage.

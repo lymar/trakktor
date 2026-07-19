@@ -43,7 +43,7 @@ def emit(model_name: str):
     enc = cfg.encoder
     dec = model.decoding
     model_class = "ctc" if "ctc" in model_name else ("rnnt" if "rnnt" in model_name else cfg.get("model_class"))
-    assert model_class == "ctc", f"{model_name}: only CTC models supported"
+    assert model_class in ("ctc", "rnnt"), f"{model_name}: unsupported class {model_class}"
 
     out = {
         "model_name": model_name,
@@ -74,6 +74,17 @@ def emit(model_name: str):
             "md5": _MODEL_HASHES[model_name],
         },
     }
+    if model_class == "rnnt":
+        # RNN-T head geometry, placed right after the encoder block.
+        head = cfg.head
+        rnnt = {
+            "pred_hidden": int(head.decoder.pred_hidden),
+            "pred_rnn_layers": int(head.decoder.pred_rnn_layers),
+            "joint_hidden": int(head.joint.joint_hidden),
+        }
+        items = list(out.items())
+        at = [k for k, _ in items].index("encoder") + 1
+        out = dict(items[:at] + [("rnnt", rnnt)] + items[at:])
     ASSETS.mkdir(parents=True, exist_ok=True)
     path = ASSETS / f"{model_name}.json"
     path.write_text(json.dumps(out, ensure_ascii=False, indent=2) + "\n")

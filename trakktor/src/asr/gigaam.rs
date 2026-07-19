@@ -35,14 +35,12 @@ pub(crate) fn run_gigaam(
         &mut download_progress(),
     )?;
     let precision = args.precision.to_gigaam();
-    let model: Box<dyn gigaam::CtcModel> = match args.runtime {
+    let model: Box<dyn gigaam::AsrModel> = match args.runtime {
         crate::cli::RuntimeArg::Candle => match args.device {
             crate::cli::DeviceArg::Cpu => {
-                Box::new(gigaam::GigaamModel::load_ctc_cpu(
+                Box::new(gigaam::GigaamModel::load_cpu(
                     &resolved.ckpt,
-                    resolved.config.encoder,
-                    resolved.config.mel,
-                    resolved.config.num_classes,
+                    &resolved.config,
                     precision,
                 )?)
             },
@@ -115,7 +113,7 @@ pub(crate) fn run_gigaam(
 /// Streams the built-in decoder's blocks through a transcription session.
 fn run_builtin(
     args: &GigaamArgs,
-    model: &dyn gigaam::CtcModel,
+    model: &dyn gigaam::AsrModel,
     tokenizer: &gigaam::Tokenizer,
     options: TranscribeOptions,
     report: &mut dyn FnMut(TranscribeProgress),
@@ -144,7 +142,7 @@ fn run_builtin(
 /// transcription session (formats the built-in decoder does not cover).
 fn run_ffmpeg(
     args: &GigaamArgs,
-    model: &dyn gigaam::CtcModel,
+    model: &dyn gigaam::AsrModel,
     tokenizer: &gigaam::Tokenizer,
     options: TranscribeOptions,
     report: &mut dyn FnMut(TranscribeProgress),
@@ -225,20 +223,14 @@ fn run_ffmpeg(
     Ok(session.finish(report)?)
 }
 
-/// Loads a CTC model on Metal (builds with the `metal` feature).
+/// Loads a model on Metal (builds with the `metal` feature).
 #[cfg(feature = "metal")]
 fn load_metal(
     ckpt: &Path,
     config: &gigaam::ModelConfig,
     precision: gigaam::Precision,
 ) -> Result<gigaam::GigaamModel, CliError> {
-    Ok(gigaam::GigaamModel::load_ctc_metal(
-        ckpt,
-        config.encoder,
-        config.mel,
-        config.num_classes,
-        precision,
-    )?)
+    Ok(gigaam::GigaamModel::load_metal(ckpt, config, precision)?)
 }
 
 /// Without the `metal` feature, `--device metal` is a validation error.
@@ -263,19 +255,16 @@ fn load_burn(
     config: &gigaam::ModelConfig,
     device: crate::cli::DeviceArg,
     precision: gigaam::Precision,
-) -> Result<Box<dyn gigaam::CtcModel>, CliError> {
+) -> Result<Box<dyn gigaam::AsrModel>, CliError> {
     use trakktor_core::asr::gigaam::runtime_burn;
     let load = match device {
-        crate::cli::DeviceArg::Cpu => runtime_burn::load_ctc_cpu,
-        crate::cli::DeviceArg::Metal => runtime_burn::load_ctc_metal,
+        crate::cli::DeviceArg::Cpu => runtime_burn::load_cpu,
+        crate::cli::DeviceArg::Metal => {
+            crate::burn_notice::announce_cold_gpu_start();
+            runtime_burn::load_metal
+        },
     };
-    Ok(load(
-        ckpt,
-        config.encoder,
-        config.mel,
-        config.num_classes,
-        precision,
-    )?)
+    Ok(load(ckpt, config, precision)?)
 }
 
 /// Without the `burn` feature, `--runtime burn` is a validation error.
@@ -285,7 +274,7 @@ fn load_burn(
     _config: &gigaam::ModelConfig,
     _device: crate::cli::DeviceArg,
     _precision: gigaam::Precision,
-) -> Result<Box<dyn gigaam::CtcModel>, CliError> {
+) -> Result<Box<dyn gigaam::AsrModel>, CliError> {
     Err(CliError::from(GigaamError::InvalidOptions(
         "this build has no burn runtime; install or build trakktor with the \
          `burn` feature"

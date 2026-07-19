@@ -97,14 +97,7 @@ fn blockwise_equals_oneshot_and_memory_stays_bounded() {
         .join(".cache/gigaam")
         .join("v3_ctc.ckpt");
     let config = config_for("v3_ctc").unwrap();
-    let model = GigaamModel::load_ctc_cpu(
-        &ckpt,
-        config.encoder,
-        config.mel,
-        config.num_classes,
-        Precision::F32,
-    )
-    .unwrap();
+    let model = GigaamModel::load_cpu(&ckpt, &config, Precision::F32).unwrap();
     let tokenizer = config.tokenizer.build();
 
     // 300 s of the sample: enough to cross the commit horizon.

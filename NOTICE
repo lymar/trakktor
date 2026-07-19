@@ -26,10 +26,10 @@ GigaAM — MIT License
   Copyright (c) 2024 GigaChat Team
   https://github.com/salute-developers/GigaAM
   The `asr gigaam` engine ports the GigaAM pipeline (Conformer acoustic models
-  with CTC decoding). The per-model feature-geometry configs embedded in the
-  binary (trakktor_core/src/asr/gigaam/assets/) are derived from the GigaAM
-  checkpoints. Model checkpoints are downloaded from the official CDN at
-  runtime and are not redistributed in this repository.
+  with CTC and RNN-T decoding). The per-model feature-geometry configs
+  embedded in the binary (trakktor_core/src/asr/gigaam/assets/) are derived
+  from the GigaAM checkpoints. Model checkpoints are downloaded from the
+  official CDN at runtime and are not redistributed in this repository.
 
 Silero-VAD — MIT License
   Copyright (c) 2020-present Silero Team

@@ -183,13 +183,15 @@ pub(crate) enum AsrCommand {
 
     /// Transcribe audio with a GigaAM model.
     ///
-    /// GigaAM is a family of Conformer acoustic models with character-wise CTC
-    /// decoding — strongest on Russian (`v3_ctc`) and, with the multilingual
-    /// checkpoints, several more languages. The audio is decoded by the
-    /// built-in decoder, split along detected speech into chunks, and each
-    /// chunk transcribed in a single pass. The first use of a model downloads
-    /// its checkpoint into the model directory (~/.trakktor by default; see
-    /// --model-dir), and later runs reuse it.
+    /// GigaAM is a family of Conformer acoustic models with CTC or RNN-T
+    /// (transducer) decoding — strongest on Russian and, with the
+    /// multilingual checkpoints, several more languages. The default model
+    /// emits punctuated, capitalized Russian; see --model for the
+    /// alternatives. The audio is decoded by the built-in decoder, split
+    /// along detected speech into chunks, and each chunk transcribed in a
+    /// single pass. The first use of a model downloads its checkpoint into
+    /// the model directory (~/.trakktor by default; see --model-dir), and
+    /// later runs reuse it.
     Gigaam(GigaamArgs),
 }
 
@@ -201,11 +203,14 @@ pub(crate) struct GigaamArgs {
     pub(crate) audio: PathBuf,
 
     /// Model: a published name, downloaded on first use, or a path to a
-    /// checkpoint `.ckpt` file. Names: v3_ctc (Russian, lowercase, no
-    /// punctuation), v3_e2e_ctc (Russian with punctuation and capitalization),
-    /// multilingual_ctc, multilingual_large_ctc (the largest, most accurate).
+    /// checkpoint `.ckpt` file. Names: v3_e2e_ctc (Russian with punctuation
+    /// and capitalization), v3_e2e_rnnt (punctuated Russian with a
+    /// transducer decoder, slightly slower), v3_ctc (Russian, lowercase, no
+    /// punctuation), v3_rnnt (like v3_ctc but with a transducer decoder —
+    /// usually the most accurate raw text on Russian, slightly slower),
+    /// multilingual_ctc, multilingual_large_ctc (the largest multilingual).
     /// Larger models are slower.
-    #[arg(long, default_value = "v3_ctc", value_name = "name|file")]
+    #[arg(long, default_value = "v3_e2e_ctc", value_name = "name|file")]
     pub(crate) model: String,
 
     /// Timestamp granularity of the output.

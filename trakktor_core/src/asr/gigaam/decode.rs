@@ -1,8 +1,9 @@
-//! Greedy decoding of encoder outputs.
+//! CTC greedy collapse and the frame-to-word timestamp mapping.
 //!
 //! CTC greedy decoding collapses the per-frame argmax into a token sequence,
 //! recording the frame each token is emitted at; those frames give word-level
-//! timestamps. (RNN-T greedy decoding is added on top.)
+//! timestamps. The RNN-T greedy decode loop lives with its head in
+//! [`rnnt`](super::rnnt); the word mapping here serves both.
 
 #[cfg(test)]
 mod tests;
@@ -15,15 +16,6 @@ pub struct Word {
     pub text: String,
     pub start: f64,
     pub end: f64,
-}
-
-/// The result of decoding one chunk: the text, the emitted token ids, and the
-/// encoder frame each token was emitted at.
-#[derive(Debug, Clone)]
-pub struct Decoded {
-    pub text: String,
-    pub token_ids: Vec<u32>,
-    pub token_frames: Vec<usize>,
 }
 
 /// CTC greedy collapse over per-frame argmax `labels`: emit a token when it is
@@ -46,22 +38,6 @@ pub fn ctc_greedy(
         prev = Some(label);
     }
     (ids, frames)
-}
-
-/// Decodes one chunk from its argmax labels: collapses, then joins to text.
-pub fn decode_chunk(
-    tokenizer: &Tokenizer,
-    labels: &[u32],
-    length: usize,
-) -> Decoded {
-    let (token_ids, token_frames) =
-        ctc_greedy(labels, length, tokenizer.blank_id());
-    let text = tokenizer.decode(&token_ids);
-    Decoded {
-        text,
-        token_ids,
-        token_frames,
-    }
 }
 
 /// Seconds per encoder frame for a chunk of `n_samples` audio that produced

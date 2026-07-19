@@ -4,6 +4,8 @@
 //! delegate to the library, and format the result.
 
 mod asr;
+#[cfg(feature = "burn")]
+mod burn_notice;
 mod cli;
 mod error;
 mod output;

@@ -360,6 +360,7 @@ fn run_burn(
             whisper::BurnRuntime::load_cpu(model_dir, precision)?
         },
         crate::cli::DeviceArg::Metal => {
+            crate::burn_notice::announce_cold_gpu_start();
             whisper::BurnRuntime::load_metal(model_dir, precision)?
         },
     };

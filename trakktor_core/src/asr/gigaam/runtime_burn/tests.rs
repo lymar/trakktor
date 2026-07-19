@@ -12,10 +12,7 @@ use super::{
     GigaamBurnModel,
     net::{DepthwiseConv1d, LayerNorm},
 };
-use crate::asr::gigaam::{
-    config::{Attention, ConvNorm, EncoderConfig, Subsampling},
-    feature::MelConfig,
-};
+use crate::asr::gigaam::config::config_for;
 
 type B = NdArray<f32>;
 
@@ -142,36 +139,15 @@ fn read_i32(path: &std::path::Path) -> Vec<i32> {
         .collect()
 }
 
-/// v3_ctc geometry.
-const V3_ENCODER: EncoderConfig = EncoderConfig {
-    n_mels: 64,
-    d_model: 768,
-    n_layers: 16,
-    n_heads: 16,
-    subsampling: Subsampling::Conv1d,
-    subs_kernel_size: 5,
-    subsampling_factor: 4,
-    conv_kernel_size: 5,
-    conv_norm: ConvNorm::LayerNorm,
-    attention: Attention::Rotary,
-};
-
-const V3_MEL: MelConfig = MelConfig {
-    n_fft: 320,
-    hop_length: 160,
-    n_mels: 64,
-    center: false,
-};
-
-fn load_v3() -> GigaamBurnModel<B> {
-    GigaamBurnModel::<B>::load_ctc(&ckpt("v3_ctc"), V3_ENCODER, V3_MEL, 34, DEV)
-        .unwrap()
+fn load_burn_cpu(name: &str) -> GigaamBurnModel<B> {
+    let config = config_for(name).unwrap();
+    GigaamBurnModel::<B>::load(&ckpt(name), &config, DEV).unwrap()
 }
 
 #[test]
 #[ignore = "needs ~/.cache/gigaam/v3_ctc.ckpt and tmp/gigaam/v3_ctc dump"]
 fn encoder_and_ctc_match_reference() {
-    let model = load_v3();
+    let model = load_burn_cpu("v3_ctc");
     let dir = golden_dir("v3_ctc");
     let pcm = read_f32(&dir.join("clip_40_12.pcm.bin"));
 
@@ -214,25 +190,11 @@ fn encoder_and_ctc_match_reference() {
 #[test]
 #[ignore = "needs ~/.cache/gigaam/v3_ctc.ckpt and tmp/gigaam/v3_ctc dump"]
 fn ctc_decode_matches_reference() {
-    use crate::asr::gigaam::{
-        decode::{decode_chunk, frames_to_words},
-        runtime::CtcModel,
-        tokenizer::Tokenizer,
-    };
+    use crate::asr::gigaam::{decode::frames_to_words, runtime::AsrModel};
 
-    let model = load_v3();
+    let model = load_burn_cpu("v3_ctc");
+    let tokenizer = config_for("v3_ctc").unwrap().tokenizer.build();
     let dir = golden_dir("v3_ctc");
-    let config: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(dir.join("config.json")).unwrap(),
-    )
-    .unwrap();
-    let vocab: Vec<String> = config["vocab"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|v| v.as_str().unwrap().to_string())
-        .collect();
-    let tokenizer = Tokenizer::charwise(vocab);
     let trace: serde_json::Value = serde_json::from_slice(
         &std::fs::read(dir.join("clip_40_12.trace.json")).unwrap(),
     )
@@ -240,15 +202,10 @@ fn ctc_decode_matches_reference() {
 
     let pcm = read_f32(&dir.join("clip_40_12.pcm.bin"));
     let mel = model.feature.log_mel(&pcm);
-    let labels = model.ctc_labels(&mel).unwrap();
-    let enc_len = labels.len();
+    let emitted = model.emissions(&mel).unwrap();
 
-    let decoded = decode_chunk(&tokenizer, &labels, enc_len);
-    assert_eq!(
-        decoded.text,
-        trace["text"].as_str().unwrap(),
-        "decoded text"
-    );
+    let text = tokenizer.decode(&emitted.token_ids);
+    assert_eq!(text, trace["text"].as_str().unwrap(), "decoded text");
 
     let golden_ids: Vec<u32> = trace["token_ids"]
         .as_array()
@@ -256,13 +213,13 @@ fn ctc_decode_matches_reference() {
         .iter()
         .map(|v| v.as_u64().unwrap() as u32)
         .collect();
-    assert_eq!(decoded.token_ids, golden_ids, "token ids");
+    assert_eq!(emitted.token_ids, golden_ids, "token ids");
 
-    let shift = pcm.len() as f64 / 16000.0 / enc_len as f64;
+    let shift = pcm.len() as f64 / 16000.0 / emitted.enc_frames as f64;
     let words = frames_to_words(
         &tokenizer,
-        &decoded.token_ids,
-        &decoded.token_frames,
+        &emitted.token_ids,
+        &emitted.token_frames,
         shift,
     );
     let golden_words = trace["words"].as_array().unwrap();
@@ -276,19 +233,82 @@ fn ctc_decode_matches_reference() {
 }
 
 #[test]
-#[ignore = "needs ~/.cache/gigaam/v3_ctc.ckpt and tmp/gigaam/v3_ctc dump"]
-fn burn_matches_candle() {
-    use crate::asr::gigaam::runtime::{CtcModel, GigaamModel, Precision};
+#[ignore = "needs ~/.cache/gigaam/v3_rnnt.ckpt and tmp/gigaam/v3_rnnt dump"]
+fn rnnt_decode_matches_reference() {
+    use crate::asr::gigaam::runtime::AsrModel;
 
-    let burn_model = load_v3();
-    let candle_model = GigaamModel::load_ctc_cpu(
-        &ckpt("v3_ctc"),
-        V3_ENCODER,
-        V3_MEL,
-        34,
-        Precision::F32,
+    let model = load_burn_cpu("v3_rnnt");
+    let tokenizer = config_for("v3_rnnt").unwrap().tokenizer.build();
+    let dir = golden_dir("v3_rnnt");
+    let trace: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(dir.join("clip_40_12.trace.json")).unwrap(),
     )
     .unwrap();
+
+    let pcm = read_f32(&dir.join("clip_40_12.pcm.bin"));
+    let mel = model.feature.log_mel(&pcm);
+    let emitted = model.emissions(&mel).unwrap();
+
+    let golden_ids: Vec<u32> = trace["token_ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_u64().unwrap() as u32)
+        .collect();
+    assert_eq!(emitted.token_ids, golden_ids, "token ids");
+    let golden_frames: Vec<usize> = trace["token_frames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_u64().unwrap() as usize)
+        .collect();
+    assert_eq!(emitted.token_frames, golden_frames, "token frames");
+
+    let text = tokenizer.decode(&emitted.token_ids);
+    assert_eq!(text, trace["text"].as_str().unwrap(), "decoded text");
+    println!("burn rnnt text matches: {text:?}");
+}
+
+#[test]
+#[ignore = "needs ~/.cache/gigaam/v3_e2e_rnnt.ckpt and its dump"]
+fn e2e_rnnt_decode_matches_reference_with_punctuation() {
+    use crate::asr::gigaam::runtime::AsrModel;
+
+    let model = load_burn_cpu("v3_e2e_rnnt");
+    let tokenizer = config_for("v3_e2e_rnnt").unwrap().tokenizer.build();
+    let dir = golden_dir("v3_e2e_rnnt");
+    let trace: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(dir.join("clip_40_12.trace.json")).unwrap(),
+    )
+    .unwrap();
+
+    let pcm = read_f32(&dir.join("clip_40_12.pcm.bin"));
+    let mel = model.feature.log_mel(&pcm);
+    let emitted = model.emissions(&mel).unwrap();
+
+    let golden_ids: Vec<u32> = trace["token_ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_u64().unwrap() as u32)
+        .collect();
+    assert_eq!(emitted.token_ids, golden_ids, "token ids");
+
+    let text = tokenizer.decode(&emitted.token_ids);
+    assert_eq!(text, trace["text"].as_str().unwrap(), "e2e rnnt text");
+    println!("burn e2e rnnt text matches: {text:?}");
+}
+
+#[test]
+#[ignore = "needs ~/.cache/gigaam/v3_ctc.ckpt and tmp/gigaam/v3_ctc dump"]
+fn burn_matches_candle() {
+    use crate::asr::gigaam::runtime::{AsrModel, GigaamModel, Precision};
+
+    let burn_model = load_burn_cpu("v3_ctc");
+    let config = config_for("v3_ctc").unwrap();
+    let candle_model =
+        GigaamModel::load_cpu(&ckpt("v3_ctc"), &config, Precision::F32)
+            .unwrap();
 
     let dir = golden_dir("v3_ctc");
     let pcm = read_f32(&dir.join("clip_40_12.pcm.bin"));
@@ -312,8 +332,41 @@ fn burn_matches_candle() {
     println!("burn-vs-candle encoder max abs diff: {enc_diff}");
     assert!(enc_diff < 1e-3, "encoder outputs diverge: {enc_diff}");
 
-    // Per-frame labels must agree exactly.
-    let burn_labels = CtcModel::ctc_labels(&burn_model, &mel).unwrap();
-    let candle_labels = CtcModel::ctc_labels(&candle_model, &mel).unwrap();
-    assert_eq!(burn_labels, candle_labels, "argmax labels");
+    // The emitted tokens must agree exactly.
+    let burn_emitted = burn_model.emissions(&mel).unwrap();
+    let candle_emitted = candle_model.emissions(&mel).unwrap();
+    assert_eq!(
+        burn_emitted.token_ids, candle_emitted.token_ids,
+        "token ids"
+    );
+    assert_eq!(
+        burn_emitted.token_frames, candle_emitted.token_frames,
+        "token frames"
+    );
+}
+
+#[test]
+#[ignore = "needs ~/.cache/gigaam/v3_rnnt.ckpt and tmp/gigaam/v3_rnnt dump"]
+fn burn_matches_candle_rnnt() {
+    use crate::asr::gigaam::runtime::{AsrModel, GigaamModel, Precision};
+
+    let burn_model = load_burn_cpu("v3_rnnt");
+    let config = config_for("v3_rnnt").unwrap();
+    let candle_model =
+        GigaamModel::load_cpu(&ckpt("v3_rnnt"), &config, Precision::F32)
+            .unwrap();
+
+    let pcm = read_f32(&golden_dir("v3_rnnt").join("clip_40_12.pcm.bin"));
+    let mel = burn_model.feature.log_mel(&pcm);
+
+    let burn_emitted = burn_model.emissions(&mel).unwrap();
+    let candle_emitted = candle_model.emissions(&mel).unwrap();
+    assert_eq!(
+        burn_emitted.token_ids, candle_emitted.token_ids,
+        "token ids"
+    );
+    assert_eq!(
+        burn_emitted.token_frames, candle_emitted.token_frames,
+        "token frames"
+    );
 }

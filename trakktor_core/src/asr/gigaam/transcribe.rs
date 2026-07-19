@@ -1,16 +1,17 @@
 //! Per-chunk transcription and the result types.
 //!
-//! One chunk is one encoder forward pass followed by a single argmax read-back
-//! — there is no autoregressive decode loop, so the device stays busy through a
-//! chunk and only synchronizes once at its end. The orchestration over a whole
-//! recording (short single-chunk audio and streamed long-form segmentation)
-//! lives in [`stream`](super::stream).
+//! One chunk is one encoder forward pass with a single device synchronization
+//! at its end — the CTC path reads back per-frame argmax labels, the RNN-T
+//! path reads back the encoder output and runs its sequential decode loop on
+//! the CPU — so the device stays busy through a chunk. The orchestration over
+//! a whole recording (short single-chunk audio and streamed long-form
+//! segmentation) lives in [`stream`](super::stream).
 
 use super::{
     constants::SAMPLE_RATE,
-    decode::{Word, decode_chunk, frames_to_words},
+    decode::{Word, frames_to_words},
     error::GigaamError,
-    runtime::CtcModel,
+    runtime::AsrModel,
     tokenizer::Tokenizer,
 };
 
@@ -53,32 +54,29 @@ pub(crate) struct ChunkResult {
     pub(crate) words: Vec<Word>,
 }
 
-/// Runs one chunk through feature extraction, the encoder, the CTC head, and
-/// greedy decoding.
+/// Runs one chunk through feature extraction, the encoder, the model's head,
+/// and greedy decoding.
 pub(crate) fn transcribe_chunk(
-    model: &dyn CtcModel,
+    model: &dyn AsrModel,
     tokenizer: &Tokenizer,
     chunk: &[f32],
     options: &TranscribeOptions,
 ) -> Result<ChunkResult, GigaamError> {
     let mel = model.feature().log_mel(chunk);
-    let labels = model.ctc_labels(&mel)?; // [T'] argmax class ids
-    let enc_len = labels.len();
+    let emitted = model.emissions(&mel)?;
 
-    let decoded = decode_chunk(tokenizer, &labels, enc_len);
+    let text = tokenizer.decode(&emitted.token_ids);
     let words = if options.word_timestamps {
-        let shift = chunk.len() as f64 / SAMPLE_RATE as f64 / enc_len as f64;
+        let shift =
+            chunk.len() as f64 / SAMPLE_RATE as f64 / emitted.enc_frames as f64;
         frames_to_words(
             tokenizer,
-            &decoded.token_ids,
-            &decoded.token_frames,
+            &emitted.token_ids,
+            &emitted.token_frames,
             shift,
         )
     } else {
         Vec::new()
     };
-    Ok(ChunkResult {
-        text: decoded.text,
-        words,
-    })
+    Ok(ChunkResult { text, words })
 }

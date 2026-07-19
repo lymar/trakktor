@@ -1,9 +1,11 @@
-//! The GigaAM Conformer encoder and decoding heads on candle.
+//! The GigaAM Conformer encoder and CTC head on candle.
 //!
-//! A faithful port of `gigaam.encoder.ConformerEncoder` and the CTC / RNN-T
-//! heads. Geometry (channel width, layer count, subsampling and normalization
+//! A faithful port of `gigaam.encoder.ConformerEncoder` and the CTC head.
+//! Geometry (channel width, layer count, subsampling and normalization
 //! kinds, attention kind) is passed in as [`EncoderConfig`], so one
-//! implementation serves every published checkpoint.
+//! implementation serves every published checkpoint. The RNN-T head is not
+//! here: it always runs on the CPU, shared across runtimes (see
+//! [`rnnt`](crate::asr::gigaam::rnnt)).
 //!
 //! Weight names follow the checkpoint's `state_dict` layout
 //! (`encoder.*`, `head.*`).

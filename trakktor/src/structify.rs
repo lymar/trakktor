@@ -101,6 +101,7 @@ fn load_burn(
             SatBurnRuntime::load_cpu(model_dir, precision)?
         },
         crate::cli::DeviceArg::Metal => {
+            crate::burn_notice::announce_cold_gpu_start();
             SatBurnRuntime::load_metal(model_dir, precision)?
         },
     };
