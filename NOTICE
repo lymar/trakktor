@@ -31,6 +31,36 @@ GigaAM — MIT License
   from the GigaAM checkpoints. Model checkpoints are downloaded from the
   official CDN at runtime and are not redistributed in this repository.
 
+Vosk / Alpha Cephei — Apache-2.0 License
+  Copyright (c) Alpha Cephei Inc.
+  https://alphacephei.com/vosk/
+  The `asr vosk` engine transcribes with the current Vosk model line
+  (Zipformer2 RNN-T transducers). Model files — the icefall ONNX export triple
+  (encoder/decoder/joiner) and the SentencePiece token table — are downloaded
+  from Hugging Face (alphacep/vosk-model-*) at runtime and are not
+  redistributed in this repository.
+
+Zipformer2 / k2-fsa/icefall — Apache-2.0 License
+  Copyright (c) 2021-2024 Xiaomi Corporation
+  https://github.com/k2-fsa/icefall
+  The Zipformer2 encoder and the stateless-transducer decoder/joiner ported by
+  the `asr vosk` engine are reimplemented from the icefall zipformer recipe
+  (the reference the Vosk models are trained with).
+
+sherpa-onnx — Apache-2.0 License
+  Copyright (c) 2022-2024 Xiaomi Corporation
+  https://github.com/k2-fsa/sherpa-onnx
+  The `asr vosk` inference pipeline — the greedy and modified-beam-search
+  transducer decoders and the streaming chunk/state protocol — is a native
+  port of the sherpa-onnx runtime.
+
+kaldi-native-fbank — Apache-2.0 License
+  Copyright (c) 2022-2024 Xiaomi Corporation (authors: Fangjun Kuang)
+  https://github.com/csukuangfj/kaldi-native-fbank
+  The Kaldi-compatible log-mel fbank front end of the `asr vosk` engine (povey
+  window, snip-edges centering, HTK mel banks) reproduces kaldi-native-fbank,
+  as configured by sherpa-onnx for these models.
+
 Silero-VAD — MIT License
   Copyright (c) 2020-present Silero Team
   https://github.com/snakers4/silero-vad
@@ -67,9 +97,9 @@ candle / candle-transformers — Apache-2.0 OR MIT License
 burn — Apache-2.0 OR MIT License
   Copyright (c) 2022 Nathaniel Simard & Burn Framework Contributors
   https://github.com/tracel-ai/burn
-  The alternative `asr whisper`, `asr gigaam`, and `text structify` runtimes
-  (`--runtime burn`) execute the Whisper, GigaAM, and SaT networks on burn's
-  ndarray (CPU) and wgpu/Metal backends.
+  The alternative `asr whisper`, `asr gigaam`, `asr vosk`, and `text structify`
+  runtimes (`--runtime burn`) execute the Whisper, GigaAM, Zipformer2, and SaT
+  networks on burn's ndarray (CPU) and wgpu/Metal backends.
 
 XLM-RoBERTa (FacebookAI/xlm-roberta-base) — MIT License
   https://huggingface.co/FacebookAI/xlm-roberta-base

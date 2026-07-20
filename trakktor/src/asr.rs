@@ -1,9 +1,6 @@
 //! `asr whisper`: flag mapping, model resolution, and the transcription run.
 
-use std::{
-    io::{IsTerminal, Write},
-    path::Path,
-};
+use std::path::Path;
 
 use trakktor_core::{
     asr::whisper::{
@@ -16,9 +13,12 @@ use trakktor_core::{
 use crate::{cli::WhisperArgs, error::CliError, output};
 
 mod gigaam;
+pub(crate) mod progress;
+mod vosk;
 mod writers;
 
 pub(crate) use gigaam::run_gigaam;
+pub(crate) use vosk::run_vosk;
 
 /// Runs one transcription end to end: resolve (and if needed download) the
 /// model, load it, decode the audio, transcribe, and print the result.
@@ -50,7 +50,7 @@ pub(crate) fn run_whisper(
     let resolved = whisper::resolve_model(
         model_dir,
         &args.model,
-        &mut download_progress(),
+        &mut progress::download_progress(),
     )?;
     let precision = args.precision.to_core();
 
@@ -157,18 +157,18 @@ fn transcribe_and_output<P: ForwardProvider>(
     let mut transcription = if no_speech {
         empty_transcription(&audio, options.language.clone())
     } else {
-        let mut report = transcribe_progress(started);
+        let mut report = progress::live_reporter(started);
         // With VAD the loop runs on the dense speech buffer, so its progress is
         // in buffer time against the (shorter) speech duration. Map the
         // position back to the original timeline and report against the
         // original duration, so the length shown is the file's, not the
         // speech's. Without VAD the position passes through unchanged.
         let mut progress = |p: whisper::TranscribeProgress| match &collapsed {
-            Some(collapsed) => report(whisper::TranscribeProgress {
-                processed_seconds: collapsed.mapping.map(p.processed_seconds),
-                total_seconds: collapsed.duration,
-            }),
-            None => report(p),
+            Some(collapsed) => report(
+                collapsed.mapping.map(p.processed_seconds),
+                Some(collapsed.duration),
+            ),
+            None => report(p.processed_seconds, Some(p.total_seconds)),
         };
         whisper::transcribe_with_progress(
             &mut runtime,
@@ -183,15 +183,8 @@ fn transcribe_and_output<P: ForwardProvider>(
         transcription.duration = collapsed.duration;
     }
 
-    // Close the in-place progress line on a terminal with a final 100% and the
-    // total wall time; `\x1b[K` clears the leftover of the longer live line.
-    if !no_speech && std::io::stderr().is_terminal() {
-        let total = clock(transcription.duration);
-        let elapsed = clock(started.elapsed().as_secs_f64());
-        eprintln!(
-            "\r✓ transcribing {total} / {total} (100%) · {elapsed} \
-             elapsed\x1b[K"
-        );
+    if !no_speech {
+        progress::finish_line(started, transcription.duration);
     }
 
     let vad_speech = vad_speech.as_deref();
@@ -466,131 +459,4 @@ fn resolve_clip_timestamps(args: &WhisperArgs) -> Result<Vec<f32>, CliError> {
         clips.push(end.0 as f32);
     }
     Ok(clips)
-}
-
-/// A transcription progress reporter: the audio position and percentage on
-/// stderr, rewritten in place on a terminal and printed once per advance
-/// otherwise. Diagnostics only — the result never goes to stderr.
-fn transcribe_progress(
-    started: std::time::Instant,
-) -> impl FnMut(whisper::TranscribeProgress) {
-    let interactive = std::io::stderr().is_terminal();
-    let mut last_percent: u64 = u64::MAX;
-    let mut frame: usize = 0;
-    let mut last_render: Option<std::time::Instant> = None;
-    let mut last_shown: f64 = 0.0;
-    let mut eta_pos: f64 = 0.0;
-    let mut eta: Option<String> = None;
-    move |p: whisper::TranscribeProgress| {
-        // The callback fires on every sampled token; render at most every
-        // quarter second so a fast model does not flood stderr.
-        let now = std::time::Instant::now();
-        let too_soon = last_render.is_some_and(|last| {
-            now.duration_since(last) < std::time::Duration::from_millis(250)
-        });
-        if too_soon {
-            return;
-        }
-        // Clamp to the furthest position shown so a beam reshuffle can't tick
-        // the mid-window position backward.
-        let position = p.processed_seconds.max(last_shown);
-        let percent = if p.total_seconds > 0.0 {
-            (position / p.total_seconds * 100.0).round() as u64
-        } else {
-            100
-        };
-        // Off a terminal, only an advancing position is worth a line.
-        if !interactive && percent == last_percent {
-            return;
-        }
-        last_render = Some(now);
-        last_shown = position;
-        last_percent = percent;
-        let processed = clock(position);
-        let total = clock(p.total_seconds);
-        let elapsed_s = started.elapsed().as_secs_f64();
-        // Recompute the time-left estimate only when the position actually
-        // advances. Otherwise the wall clock keeps growing while progress
-        // stalls and the estimate would creep upward, then snap down on the
-        // next advance — jumpy. Hold the last value between advances, and show
-        // a placeholder until the first one exists. (Approximate anyway: the
-        // first window carries one-time setup, so early estimates run high.)
-        if position > eta_pos && position < p.total_seconds {
-            eta_pos = position;
-            eta = Some(clock(
-                elapsed_s * (p.total_seconds - position) / position,
-            ));
-        }
-        let left = eta.as_deref().unwrap_or("--:--");
-        let elapsed = clock(elapsed_s);
-        if interactive {
-            // A spinner shows life even inside a single slow window; the
-            // position, percent, and estimate update as the window decodes.
-            // `\x1b[K` clears the previous, possibly longer, line.
-            const SPINNER: [char; 10] =
-                ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-            let spin = SPINNER[frame % SPINNER.len()];
-            frame = frame.wrapping_add(1);
-            eprint!(
-                "\r{spin} transcribing {processed} / {total} ({percent}%) · \
-                 {elapsed} elapsed · ~{left} left\x1b[K"
-            );
-            let _ = std::io::stderr().flush();
-        } else {
-            eprintln!(
-                "transcribing {processed} / {total} ({percent}%) · {elapsed} \
-                 elapsed · ~{left} left"
-            );
-        }
-    }
-}
-
-/// Formats a number of seconds as `mm:ss`, or `h:mm:ss` past an hour.
-fn clock(seconds: f64) -> String {
-    let total = seconds.max(0.0) as u64;
-    let (hours, minutes, secs) =
-        (total / 3600, (total % 3600) / 60, total % 60);
-    if hours > 0 {
-        format!("{hours}:{minutes:02}:{secs:02}")
-    } else {
-        format!("{minutes:02}:{secs:02}")
-    }
-}
-
-/// A download progress reporter: percentages on stderr when it is a
-/// terminal, one line per file otherwise. Shared with other commands that
-/// download model weights.
-pub(crate) fn download_progress() -> impl FnMut(&str, u64, Option<u64>) {
-    let interactive = std::io::stderr().is_terminal();
-    let mut announced: Option<String> = None;
-    let mut last_percent: u64 = u64::MAX;
-    move |file: &str, done: u64, total: Option<u64>| {
-        if announced.as_deref() != Some(file) {
-            announced = Some(file.to_string());
-            last_percent = u64::MAX;
-            if !interactive {
-                eprintln!("downloading {file}...");
-            }
-        }
-        if !interactive {
-            return;
-        }
-        match total {
-            Some(total) if total > 0 => {
-                let percent = done * 100 / total;
-                if percent != last_percent {
-                    last_percent = percent;
-                    eprint!("\rdownloading {file}: {percent}%");
-                    if percent == 100 {
-                        eprintln!();
-                    }
-                    let _ = std::io::stderr().flush();
-                }
-            },
-            _ => {
-                eprint!("\rdownloading {file}: {} MiB", done >> 20);
-                let _ = std::io::stderr().flush();
-            },
-        }
-    }
 }

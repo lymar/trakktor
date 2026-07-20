@@ -6,7 +6,7 @@
 //! never change its external `code`.
 
 use trakktor_core::{
-    asr::{gigaam::GigaamError, whisper::WhisperError},
+    asr::{gigaam::GigaamError, vosk::VoskError, whisper::WhisperError},
     audio::AudioError,
     feed::FeedError,
     http::HttpError,
@@ -22,6 +22,8 @@ pub enum CliError {
     Asr(WhisperError),
     /// An error from the GigaAM engine.
     Gigaam(GigaamError),
+    /// An error from the Vosk engine.
+    Vosk(VoskError),
     /// An error from voice-activity detection (the model).
     Vad(VadError),
     /// An error from decoding or encoding audio (the `vad` feature).
@@ -41,6 +43,7 @@ impl CliError {
         match self {
             CliError::Asr(err) => asr_code(err),
             CliError::Gigaam(err) => gigaam_code(err),
+            CliError::Vosk(err) => vosk_code(err),
             CliError::Vad(_) => "vad_failed",
             CliError::Audio(err) => audio_code(err),
             CliError::Feed(err) => feed_code(err),
@@ -55,6 +58,7 @@ impl std::fmt::Display for CliError {
         match self {
             CliError::Asr(err) => write!(f, "{err}"),
             CliError::Gigaam(err) => write!(f, "{err}"),
+            CliError::Vosk(err) => write!(f, "{err}"),
             CliError::Vad(err) => write!(f, "{err}"),
             CliError::Audio(err) => write!(f, "{err}"),
             CliError::Feed(err) => write!(f, "{err}"),
@@ -70,6 +74,10 @@ impl From<WhisperError> for CliError {
 
 impl From<GigaamError> for CliError {
     fn from(err: GigaamError) -> Self { CliError::Gigaam(err) }
+}
+
+impl From<VoskError> for CliError {
+    fn from(err: VoskError) -> Self { CliError::Vosk(err) }
 }
 
 impl From<VadError> for CliError {
@@ -118,6 +126,20 @@ fn gigaam_code(err: &GigaamError) -> &'static str {
         GigaamError::Vad(_) => "vad_failed",
         GigaamError::Io(_) => "io_error",
         GigaamError::HomeDirUnknown => "no_home_dir",
+    }
+}
+
+/// Maps a [`VoskError`] to its stable `code`.
+fn vosk_code(err: &VoskError) -> &'static str {
+    match err {
+        VoskError::AudioDecode(_) => "audio_decode_failed",
+        VoskError::InvalidModel(_) | VoskError::ModelDownload(_) => {
+            "model_unavailable"
+        },
+        VoskError::InvalidOptions(_) => "invalid_options",
+        VoskError::Vad(_) => "vad_failed",
+        VoskError::Io(_) => "io_error",
+        VoskError::HomeDirUnknown => "no_home_dir",
     }
 }
 

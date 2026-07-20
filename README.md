@@ -87,12 +87,15 @@ read-state), `--model-dir <path>` (also `TRAKKTOR_MODEL_DIR`; default
 
 Transcribe (or translate) speech from an audio file. Speech recognition is
 organized as **engines**, each selected as a subcommand with its own models and
-flags. Two engines ship today, each documented in its own section below:
+flags. Three engines ship today, each documented in its own section below:
 
 - [**`asr whisper`**](#asr-whisper--whisper-engine) — Whisper models: many
   languages with autodetection; can translate to English.
 - [**`asr gigaam`**](#asr-gigaam--gigaam-engine) — GigaAM Conformer models
-  (CTC and RNN-T): strongest on Russian; fast single-pass decoding.
+  (CTC and RNN-T): mainly for Russian; fast single-pass decoding.
+- [**`asr vosk`**](#asr-vosk--vosk-engine) — Vosk's Zipformer2 transducers
+  (Alpha Cephei / k2-fsa): mainly for Russian, with offline and
+  low-latency streaming models.
 
 ```sh
 trakktor asr whisper talk.mp3            # JSON (default): text + timestamped segments
@@ -101,6 +104,9 @@ trakktor asr whisper talk.mp3 --pretty   # indented JSON
 
 trakktor asr gigaam ru.mp3               # GigaAM (Russian by default)
 trakktor asr gigaam ru.mp3 --model multilingual_large_ctc --device metal
+
+trakktor asr vosk ru.mp3                 # Vosk (large Russian by default)
+trakktor asr vosk ru.mp3 --model small-streaming-ru --decoding greedy
 ```
 
 What the engines share is documented once, right below: audio input, model
@@ -137,7 +143,8 @@ Models are downloaded **on first use** and reused on later runs; first-run
 download progress is printed to stderr. The weights are large and **shared
 across projects**: they live under the **model directory** — `~/.trakktor` by
 default — *not* in the per-project `--work-dir`, each engine under its own
-path (`asr/whisper/<name>/`, `asr/gigaam/<name>.ckpt`). Override the root with
+path (`asr/whisper/<name>/`, `asr/gigaam/<name>.ckpt`,
+`asr/vosk/<name>/`). Override the root with
 `--model-dir <path>` or `TRAKKTOR_MODEL_DIR` (precedence: flag > env >
 `~/.trakktor`); to reuse weights already downloaded elsewhere, point it at
 that root — e.g. `TRAKKTOR_MODEL_DIR=/data/models` looks for
@@ -175,7 +182,7 @@ section.
 --runtime candle|burn   # default: candle
 ```
 
-Both engines execute their network on the [candle](https://github.com/huggingface/candle)
+All three engines execute their network on the [candle](https://github.com/huggingface/candle)
 runtime by default. An alternative [burn](https://github.com/tracel-ai/burn)
 runtime is available behind the `burn` build feature and selected per run with
 `--runtime burn` (candle needs nothing extra; burn brings its own Metal
@@ -185,7 +192,8 @@ the odd word, as with any half-precision kernel change (and since Whisper
 conditions each window on the previous text, on a long recording one swapped
 word can ripple into locally different, equally valid phrasing downstream).
 On Metal the two runtimes are close: burn measured moderately faster than
-candle for Whisper `large-v3` at a lower memory peak, and on par for GigaAM.
+candle for Whisper `large-v3` at a lower memory peak, and on par for GigaAM
+and Vosk.
 (One known exception: candle degrades on Metal with `--precision f32` on
 Whisper `large-v3` — for full precision on the GPU use `--runtime burn`,
 which handles it correctly.) The very first burn run on a machine is a few
@@ -204,13 +212,13 @@ parallelize the way candle's do); the burn runtime is aimed at Metal.
 
 - `segment` — per-segment start/end times (the default).
 - `word` — segment times plus per-word timings. Whisper derives them with an
-  extra alignment pass (slower); GigaAM reads them off its emission frames at
-  no extra cost.
+  extra alignment pass (slower); GigaAM and Vosk read them off their emission
+  frames at no extra cost.
 - `none` — text only, no segment list.
 
 The default output is a single JSON object: the transcript `text`, the
-`language` (whisper detects it when omitted; gigaam only reports one when
-`--language` is given), the audio `duration` (seconds), the `engine`, and —
+`language` (whisper detects it when omitted; gigaam and vosk only report one
+when `--language` is given), the audio `duration` (seconds), the `engine`, and —
 unless `--timestamps none` — a `segments` array. Each segment carries its
 `id`, `start`, `end`, `text`, and (with `--timestamps word`) a `words` array;
 whisper segments also carry decoder quality signals under `whisper`. A whisper
@@ -240,7 +248,8 @@ result:
 ```
 
 With `--timestamps word`, each segment also gets a `words` array of
-`{ start, end, word, probability }` (GigaAM words have no `probability`):
+`{ start, end, word, probability }` (GigaAM and Vosk words have no
+`probability`):
 
 ```json
 "words": [
@@ -251,7 +260,7 @@ With `--timestamps word`, each segment also gets a `words` array of
 The `whisper` block is diagnostic: `avg_logprob` (average token
 log-probability — confidence), `compression_ratio` (zlib ratio; high means
 repetitive), `no_speech_prob`, and the `temperature` the accepted result was
-decoded at. GigaAM's greedy decoding has no counterpart signals, so its
+decoded at. The GigaAM and Vosk decoders have no counterpart signals, so their
 segments carry no such block. `--text` instead prints one right-aligned
 `[start --> end] text` line per segment (or just the transcript with
 `--timestamps none`), and errors follow the usual
@@ -440,8 +449,8 @@ trakktor asr whisper voice.opus --audio-decoder ffmpeg --model small
 ### `asr gigaam` — GigaAM engine
 
 [GigaAM](https://github.com/salute-developers/GigaAM) is a family of Conformer
-acoustic models with CTC or RNN-T (transducer) decoding — strongest on
-Russian, and, with the multilingual checkpoints, several more languages. It is
+acoustic models with CTC or RNN-T (transducer) decoding — mainly for Russian,
+and, with the multilingual checkpoints, several more languages. It is
 a faithful port of the reference pipeline on the same candle runtime as
 `whisper`, and all the shared behavior above — audio input, model storage,
 device and precision, output — applies as-is. The engine has no decoding
@@ -500,6 +509,62 @@ speech detection runs incrementally, and each chunk is transcribed — and its
 audio released — as soon as its boundaries are settled. Memory stays bounded
 by a few minutes of audio regardless of the recording length, so multi-hour
 files transcribe in constant memory.
+
+### `asr vosk` — Vosk engine
+
+[Vosk](https://alphacephei.com/vosk/)'s current model line (Alpha Cephei) is
+a family of **Zipformer2 RNN-T transducers** trained with
+[k2-fsa/icefall](https://github.com/k2-fsa/icefall) — mainly for Russian,
+with more languages available. trakktor is a native port of the reference
+pipeline (feature extraction, encoder, and transducer decoding follow the
+[sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) runtime), on the same
+candle runtime as the other engines, and all the shared behavior above —
+audio input, model storage, device and precision, output — applies as-is. The
+models emit **lowercase text without punctuation** (the usual form for
+downstream processing or WER evaluation). Vosk does not detect the language;
+`--language <code>` only annotates the output. The shared `--runtime burn`
+runs the same network on the alternative burn runtime.
+
+```sh
+trakktor asr vosk ru.mp3                           # large Russian, offline, JSON
+trakktor asr vosk ru.mp3 --text                    # readable [start --> end] lines
+trakktor asr vosk ru.mp3 --decoding greedy         # faster search, slightly less accurate
+trakktor asr vosk ru.mp3 --model small-streaming-ru --device metal
+```
+
+Models (downloaded on first use into `~/.trakktor/asr/vosk/<name>/`, or pass a
+path to a directory holding a compatible export — `encoder.onnx`,
+`decoder.onnx`, `joiner.onnx`, `tokens.txt`). The size is the total download
+(the fp32 encoder dominates); "large" models are ~264 MB, "small" ones ~94 MB:
+
+| Model | Language | Type | Size |
+|---|---|---|---|
+| `ru` (default) | Russian | offline (full-context) | ~264 MB |
+| `small-ru` | Russian | offline | ~93 MB |
+| `streaming-ru` | Russian | streaming (low-latency chunked) | ~264 MB |
+| `small-streaming-ru` | Russian | streaming | ~94 MB |
+| `small-streaming-bn` | Bengali | streaming | ~94 MB |
+| `tg` | Tajik | offline | ~264 MB |
+
+**Languages.** The catalog covers **Russian, Bengali, and Tajik** — the models
+Alpha Cephei ships in its portable Zipformer2 line so far. Vosk's other
+languages are still legacy Kaldi models, which this native port does not cover.
+`--model <dir>` additionally loads any compatible icefall Zipformer2 transducer
+export (the same four files) from a local directory.
+
+Two searches are available with `--decoding`: **`beam`** (the default,
+modified beam search — the reference's method) and **`greedy`** (one token per
+frame — faster, usually slightly less accurate). The transducer decoder runs
+on the CPU from the encoder output, so a chunk is one encoder pass plus one
+read-back on the GPU, like GigaAM.
+
+**Offline** models transcribe audio up to ~25 seconds directly; longer audio
+is split along detected speech into chunks (the same voice-activity
+segmentation as GigaAM) and stitched back onto the original timeline. The
+whole pipeline is streaming and bounded in memory regardless of file length.
+**Streaming** models instead run a native chunked encoder with cached state —
+low latency and low memory, the basis for future live transcription; on files,
+the offline models are more accurate.
 
 ## `vad` — voice-activity audio editing
 
@@ -820,6 +885,15 @@ Apache-licensed:
 - **`asr gigaam`** — [GigaAM](https://github.com/salute-developers/GigaAM)
   (MIT): Conformer acoustic models (CTC and RNN-T) by the GigaChat team,
   pipeline ported to the same candle runtime, with the same optional burn
+  runtime.
+- **`asr vosk`** — [Vosk](https://alphacephei.com/vosk/) models by Alpha
+  Cephei (Apache-2.0): Zipformer2 RNN-T transducers trained with
+  [k2-fsa/icefall](https://github.com/k2-fsa/icefall) (Apache-2.0); the
+  inference pipeline is a native port of
+  [k2-fsa/sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) (Apache-2.0)
+  with Kaldi-compatible fbank features from
+  [kaldi-native-fbank](https://github.com/csukuangfj/kaldi-native-fbank)
+  (Apache-2.0), on the same candle runtime with the same optional burn
   runtime.
 - **`vad`, and `asr --vad`** — [Silero-VAD](https://github.com/snakers4/silero-vad)
   (MIT): the ported speech detector behind both the audio editing commands and

@@ -1,62 +1,71 @@
-//! `asr gigaam`: model resolution, streamed decoding, and the transcription
+//! `asr vosk`: model resolution, streamed decoding, and the transcription
 //! run.
 //!
 //! The audio is decoded block by block and fed straight into the engine's
-//! streaming session, which detects speech, plans chunk cuts, transcribes
-//! committed chunks, and releases their PCM — so memory stays bounded by a few
-//! minutes of audio regardless of the file length.
+//! streaming session. For an offline model that session detects speech,
+//! plans chunk cuts, transcribes committed chunks, and releases their PCM; a
+//! streaming model runs the native chunked encoder instead. Either way memory
+//! stays bounded regardless of the file length.
 
 use std::{io::Read, path::Path, time::Instant};
 
-use trakktor_core::asr::gigaam::{
-    self, GigaamError, StreamTranscriber, TranscribeOptions, TranscribeProgress,
+use trakktor_core::asr::vosk::{
+    self, Decoding, TranscribeOptions, TranscribeProgress, TransducerHead,
+    VoskError,
 };
 
-use crate::{cli::GigaamArgs, error::CliError, output};
+use crate::{cli::VoskArgs, error::CliError, output};
 
 /// Samples per block fed into the session over the ffmpeg pipe (~2 s).
 const FFMPEG_BLOCK_SAMPLES: usize = 32 * 1024;
 
-/// Runs one GigaAM transcription end to end: resolve (and if needed download)
-/// the model, load it, then stream-decode, segment, and transcribe.
-pub(crate) fn run_gigaam(
-    args: &GigaamArgs,
+/// Runs one Vosk transcription end to end: resolve (and if needed download)
+/// the model, load it, then stream-decode and transcribe.
+pub(crate) fn run_vosk(
+    args: &VoskArgs,
     model_dir: &Path,
     json: bool,
     pretty: bool,
 ) -> Result<(), CliError> {
-    let resolved = gigaam::resolve_model(
+    let resolved = vosk::resolve_model(
         model_dir,
         &args.model,
         &mut crate::asr::progress::download_progress(),
     )?;
-    let precision = args.precision.to_gigaam();
-    let model: Box<dyn gigaam::AsrModel> = match args.runtime {
+    let weights = vosk::weights::load_dir(&resolved.dir)?;
+    let tokens = std::fs::read_to_string(resolved.dir.join("tokens.txt"))
+        .map_err(|e| {
+            VoskError::InvalidModel(format!("reading tokens.txt: {e}"))
+        })?;
+    let tokenizer = vosk::Tokenizer::parse(&tokens)?;
+    let head = TransducerHead::load(&weights, tokenizer.unk_id())?;
+    let precision = args.precision.to_vosk();
+
+    let model: Box<dyn vosk::EncoderSeam> = match args.runtime {
         crate::cli::RuntimeArg::Candle => match args.device {
             crate::cli::DeviceArg::Cpu => {
-                Box::new(gigaam::GigaamModel::load_cpu(
-                    &resolved.ckpt,
-                    &resolved.config,
-                    precision,
-                )?)
+                Box::new(vosk::VoskModel::load_cpu(&weights, precision)?)
             },
-            crate::cli::DeviceArg::Metal => Box::new(load_metal(
-                &resolved.ckpt,
-                &resolved.config,
-                precision,
-            )?),
+            crate::cli::DeviceArg::Metal => {
+                Box::new(load_metal(&weights, precision)?)
+            },
         },
         crate::cli::RuntimeArg::Burn => {
-            load_burn(&resolved.ckpt, &resolved.config, args.device, precision)?
+            load_burn(&weights, args.device, precision)?
         },
     };
-    let tokenizer = resolved.config.tokenizer.build();
 
     let options = TranscribeOptions {
         word_timestamps: matches!(
             args.timestamps,
             crate::cli::TimestampsArg::Word
         ),
+        decoding: match args.decoding {
+            crate::cli::DecodingArg::Beam => Decoding::Beam {
+                max_active: vosk::decode::DEFAULT_MAX_ACTIVE,
+            },
+            crate::cli::DecodingArg::Greedy => Decoding::Greedy,
+        },
     };
 
     let started = Instant::now();
@@ -66,16 +75,16 @@ pub(crate) fn run_gigaam(
 
     let transcription = match args.audio_decoder {
         crate::cli::AudioDecoderArg::Builtin => {
-            run_builtin(args, &*model, &tokenizer, options, &mut report)?
+            run_builtin(args, &*model, &head, &tokenizer, options, &mut report)?
         },
         crate::cli::AudioDecoderArg::Ffmpeg => {
-            run_ffmpeg(args, &*model, &tokenizer, options, &mut report)?
+            run_ffmpeg(args, &*model, &head, &tokenizer, options, &mut report)?
         },
     };
 
     crate::asr::progress::finish_line(started, transcription.duration);
 
-    output::print_gigaam_transcription(
+    output::print_vosk_transcription(
         &transcription,
         &args.model,
         args.language.as_deref(),
@@ -87,8 +96,9 @@ pub(crate) fn run_gigaam(
     if let Some(format) = args.output_format {
         let with_words =
             matches!(args.timestamps, crate::cli::TimestampsArg::Word);
-        let paths = crate::asr::writers::write_gigaam_outputs(
+        let paths = crate::asr::writers::write_vosk_outputs(
             &transcription,
+            &args.model,
             &args.audio,
             format,
             &args.output_dir,
@@ -103,24 +113,26 @@ pub(crate) fn run_gigaam(
 
 /// Streams the built-in decoder's blocks through a transcription session.
 fn run_builtin(
-    args: &GigaamArgs,
-    model: &dyn gigaam::AsrModel,
-    tokenizer: &gigaam::Tokenizer,
+    args: &VoskArgs,
+    model: &dyn vosk::EncoderSeam,
+    head: &TransducerHead,
+    tokenizer: &vosk::Tokenizer,
     options: TranscribeOptions,
     report: &mut dyn FnMut(TranscribeProgress),
-) -> Result<gigaam::Transcription, CliError> {
+) -> Result<vosk::Transcription, CliError> {
     let mut stream =
         trakktor_core::audio::MonoS16Stream::open(&args.audio, 16_000)
-            .map_err(|e| GigaamError::AudioDecode(e.to_string()))?;
-    let mut session = StreamTranscriber::new(
+            .map_err(|e| VoskError::AudioDecode(e.to_string()))?;
+    let mut session = vosk::StreamTranscriber::new(
         model,
+        head,
         tokenizer,
         options,
         stream.duration_hint(),
     )?;
     while let Some(block) = stream
         .next_block()
-        .map_err(|e| GigaamError::AudioDecode(e.to_string()))?
+        .map_err(|e| VoskError::AudioDecode(e.to_string()))?
     {
         let samples: Vec<f32> =
             block.iter().map(|&s| f32::from(s) / 32768.0).collect();
@@ -132,12 +144,13 @@ fn run_builtin(
 /// Streams 16 kHz mono s16 PCM from an external `ffmpeg` process through a
 /// transcription session (formats the built-in decoder does not cover).
 fn run_ffmpeg(
-    args: &GigaamArgs,
-    model: &dyn gigaam::AsrModel,
-    tokenizer: &gigaam::Tokenizer,
+    args: &VoskArgs,
+    model: &dyn vosk::EncoderSeam,
+    head: &TransducerHead,
+    tokenizer: &vosk::Tokenizer,
     options: TranscribeOptions,
     report: &mut dyn FnMut(TranscribeProgress),
-) -> Result<gigaam::Transcription, CliError> {
+) -> Result<vosk::Transcription, CliError> {
     use std::process::{Command, Stdio};
 
     let mut child = Command::new("ffmpeg")
@@ -151,13 +164,14 @@ fn run_ffmpeg(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| {
-            GigaamError::AudioDecode(format!(
+            VoskError::AudioDecode(format!(
                 "could not run ffmpeg ({e}); is it installed and on PATH?"
             ))
         })?;
 
     // The pipe has no length; progress runs without a total.
-    let mut session = StreamTranscriber::new(model, tokenizer, options, None)?;
+    let mut session =
+        vosk::StreamTranscriber::new(model, head, tokenizer, options, None)?;
     let mut stdout = child.stdout.take().expect("stdout is piped");
     let mut bytes = vec![0u8; FFMPEG_BLOCK_SAMPLES * 2];
     // A block may end mid-sample; the odd byte carries into the next read.
@@ -172,7 +186,7 @@ fn run_ffmpeg(
         };
         let read = stdout
             .read(&mut bytes[offset..])
-            .map_err(|e| GigaamError::AudioDecode(format!("ffmpeg: {e}")))?;
+            .map_err(|e| VoskError::AudioDecode(format!("ffmpeg: {e}")))?;
         if read == 0 {
             break;
         }
@@ -193,7 +207,7 @@ fn run_ffmpeg(
 
     let status = child
         .wait()
-        .map_err(|e| GigaamError::AudioDecode(format!("ffmpeg: {e}")))?;
+        .map_err(|e| VoskError::AudioDecode(format!("ffmpeg: {e}")))?;
     if !status.success() {
         let mut stderr = String::new();
         if let Some(mut pipe) = child.stderr.take() {
@@ -206,7 +220,7 @@ fn run_ffmpeg(
             .unwrap_or("")
             .trim()
             .to_string();
-        return Err(CliError::from(GigaamError::AudioDecode(format!(
+        return Err(CliError::from(VoskError::AudioDecode(format!(
             "ffmpeg could not decode {}: {detail}",
             args.audio.display()
         ))));
@@ -217,21 +231,19 @@ fn run_ffmpeg(
 /// Loads a model on Metal (builds with the `metal` feature).
 #[cfg(feature = "metal")]
 fn load_metal(
-    ckpt: &Path,
-    config: &gigaam::ModelConfig,
-    precision: gigaam::Precision,
-) -> Result<gigaam::GigaamModel, CliError> {
-    Ok(gigaam::GigaamModel::load_metal(ckpt, config, precision)?)
+    weights: &vosk::weights::ModelWeights,
+    precision: vosk::Precision,
+) -> Result<vosk::VoskModel, CliError> {
+    Ok(vosk::VoskModel::load_metal(weights, precision)?)
 }
 
 /// Without the `metal` feature, `--device metal` is a validation error.
 #[cfg(not(feature = "metal"))]
 fn load_metal(
-    _ckpt: &Path,
-    _config: &gigaam::ModelConfig,
-    _precision: gigaam::Precision,
-) -> Result<gigaam::GigaamModel, CliError> {
-    Err(CliError::from(GigaamError::InvalidOptions(
+    _weights: &vosk::weights::ModelWeights,
+    _precision: vosk::Precision,
+) -> Result<vosk::VoskModel, CliError> {
+    Err(CliError::from(VoskError::InvalidOptions(
         "this build has no Metal support; install or build trakktor with the \
          `metal` feature"
             .into(),
@@ -242,12 +254,11 @@ fn load_metal(
 /// burn Metal backend is independent of the candle `metal` feature.
 #[cfg(feature = "burn")]
 fn load_burn(
-    ckpt: &Path,
-    config: &gigaam::ModelConfig,
+    weights: &vosk::weights::ModelWeights,
     device: crate::cli::DeviceArg,
-    precision: gigaam::Precision,
-) -> Result<Box<dyn gigaam::AsrModel>, CliError> {
-    use trakktor_core::asr::gigaam::runtime_burn;
+    precision: vosk::Precision,
+) -> Result<Box<dyn vosk::EncoderSeam>, CliError> {
+    use trakktor_core::asr::vosk::runtime_burn;
     let load = match device {
         crate::cli::DeviceArg::Cpu => runtime_burn::load_cpu,
         crate::cli::DeviceArg::Metal => {
@@ -255,18 +266,17 @@ fn load_burn(
             runtime_burn::load_metal
         },
     };
-    Ok(load(ckpt, config, precision)?)
+    Ok(load(weights, precision)?)
 }
 
 /// Without the `burn` feature, `--runtime burn` is a validation error.
 #[cfg(not(feature = "burn"))]
 fn load_burn(
-    _ckpt: &Path,
-    _config: &gigaam::ModelConfig,
+    _weights: &vosk::weights::ModelWeights,
     _device: crate::cli::DeviceArg,
-    _precision: gigaam::Precision,
-) -> Result<Box<dyn gigaam::AsrModel>, CliError> {
-    Err(CliError::from(GigaamError::InvalidOptions(
+    _precision: vosk::Precision,
+) -> Result<Box<dyn vosk::EncoderSeam>, CliError> {
+    Err(CliError::from(VoskError::InvalidOptions(
         "this build has no burn runtime; install or build trakktor with the \
          `burn` feature"
             .into(),

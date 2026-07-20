@@ -12,13 +12,15 @@ license.workspace = true
 metal = [
     "trakktor_core/whisper-metal",
     "trakktor_core/gigaam-metal",
+    "trakktor_core/vosk-metal",
     "trakktor_core/structify-metal",
 ]
-# The burn runtime for `asr whisper`, `asr gigaam`, and `text structify`
-# (`--runtime burn`), with its own CPU and Metal backends.
+# The burn runtime for `asr whisper`, `asr gigaam`, `asr vosk`, and `text
+# structify` (`--runtime burn`), with its own CPU and Metal backends.
 burn = [
     "trakktor_core/whisper-burn",
     "trakktor_core/gigaam-burn",
+    "trakktor_core/vosk-burn",
     "trakktor_core/structify-burn",
 ]
 

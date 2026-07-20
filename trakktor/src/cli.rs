@@ -184,7 +184,7 @@ pub(crate) enum AsrCommand {
     /// Transcribe audio with a GigaAM model.
     ///
     /// GigaAM is a family of Conformer acoustic models with CTC or RNN-T
-    /// (transducer) decoding — strongest on Russian and, with the
+    /// (transducer) decoding — mainly for Russian and, with the
     /// multilingual checkpoints, several more languages. The default model
     /// emits punctuated, capitalized Russian; see --model for the
     /// alternatives. The audio is decoded by the built-in decoder, split
@@ -193,6 +193,19 @@ pub(crate) enum AsrCommand {
     /// the model directory (~/.trakktor by default; see --model-dir), and
     /// later runs reuse it.
     Gigaam(GigaamArgs),
+
+    /// Transcribe audio with a Vosk model.
+    ///
+    /// Vosk's current model line is a family of Zipformer2 transducers
+    /// (Alpha Cephei / k2-fsa) — mainly for Russian, with more languages
+    /// available. The models emit lowercase text without punctuation.
+    /// Offline models are split along detected speech and each chunk
+    /// transcribed in one pass; streaming models run a low-latency chunked
+    /// pipeline. The default model is the large Russian one; see --model for
+    /// the alternatives, or pass a directory with a compatible export. The
+    /// first use of a named model downloads it into the model directory
+    /// (~/.trakktor by default; see --model-dir), and later runs reuse it.
+    Vosk(VoskArgs),
 }
 
 /// Flags of `asr gigaam`.
@@ -282,6 +295,115 @@ pub(crate) struct GigaamArgs {
     /// (default: the current directory).
     #[arg(long, default_value = ".", value_name = "dir")]
     pub(crate) output_dir: PathBuf,
+}
+
+/// Flags of `asr vosk`.
+#[derive(Args)]
+pub(crate) struct VoskArgs {
+    /// Path to the audio file to transcribe.
+    #[arg(value_name = "audio")]
+    pub(crate) audio: PathBuf,
+
+    /// Model: a published name, downloaded on first use, or a path to a
+    /// directory holding a compatible export (encoder.onnx, decoder.onnx,
+    /// joiner.onnx, tokens.txt). Names: ru (large Russian, offline; the
+    /// default), small-ru (small Russian, offline), streaming-ru (large
+    /// Russian, streaming), small-streaming-ru (small Russian, streaming),
+    /// small-streaming-bn (Bengali, streaming), tg (Tajik, offline). All emit
+    /// lowercase text without punctuation.
+    #[arg(long, default_value = "ru", value_name = "name|dir")]
+    pub(crate) model: String,
+
+    /// Transducer search. `beam` (the default) is modified beam search, as
+    /// used by the reference; `greedy` is faster and usually slightly less
+    /// accurate.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = DecodingArg::Beam,
+        value_name = "search"
+    )]
+    pub(crate) decoding: DecodingArg,
+
+    /// Timestamp granularity of the output.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = TimestampsArg::Segment,
+        value_name = "granularity"
+    )]
+    pub(crate) timestamps: TimestampsArg,
+
+    /// Inference runtime executing the model. Both produce the same
+    /// transcription; `burn` needs a build with the `burn` feature enabled,
+    /// and on the CPU computes in f32 only.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = RuntimeArg::Candle,
+        value_name = "runtime"
+    )]
+    pub(crate) runtime: RuntimeArg,
+
+    /// Compute device. `metal` needs a build with the `metal` feature (for
+    /// the candle runtime) or the `burn` feature (for the burn runtime)
+    /// enabled, and is only available on macOS.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = DeviceArg::Cpu,
+        value_name = "device"
+    )]
+    pub(crate) device: DeviceArg,
+
+    /// Compute precision of the encoder. `f16` (the default) uses about half
+    /// the memory and is faster on GPU; `f32` runs in full precision for
+    /// reproducible results, at twice the memory. The transducer decoder
+    /// always runs in f32.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = PrecisionArg::F16,
+        value_name = "precision"
+    )]
+    pub(crate) precision: PrecisionArg,
+
+    /// Audio decoder. `builtin` (the default) is pure Rust and needs no
+    /// external tools; `ffmpeg` shells out to an installed `ffmpeg` and adds
+    /// input formats the built-in decoder does not cover, such as opus, wma,
+    /// and amr.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = AudioDecoderArg::Builtin,
+        value_name = "decoder"
+    )]
+    pub(crate) audio_decoder: AudioDecoderArg,
+
+    /// Language label to report in the output (a code like `ru`). Vosk does
+    /// not detect the language; this only annotates the result.
+    #[arg(long, value_name = "lang")]
+    pub(crate) language: Option<String>,
+
+    /// Also write the transcript to files in this format: txt, vtt, srt, tsv,
+    /// json, or `all`. Files are named after the audio and written into
+    /// `--output-dir`; stdout still prints the result as usual.
+    #[arg(long, value_enum, value_name = "format")]
+    pub(crate) output_format: Option<OutputFormatArg>,
+
+    /// Directory for files written by `--output-format`, created if missing
+    /// (default: the current directory).
+    #[arg(long, default_value = ".", value_name = "dir")]
+    pub(crate) output_dir: PathBuf,
+}
+
+/// The `--decoding` value of `asr vosk`.
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum DecodingArg {
+    /// Modified beam search (the reference default).
+    Beam,
+    /// Greedy search: one token per frame, faster.
+    Greedy,
 }
 
 /// Flags of `asr whisper`.
@@ -578,6 +700,13 @@ impl PrecisionArg {
         match self {
             PrecisionArg::F16 => trakktor_core::asr::gigaam::Precision::F16,
             PrecisionArg::F32 => trakktor_core::asr::gigaam::Precision::F32,
+        }
+    }
+
+    pub(crate) fn to_vosk(self) -> trakktor_core::asr::vosk::Precision {
+        match self {
+            PrecisionArg::F16 => trakktor_core::asr::vosk::Precision::F16,
+            PrecisionArg::F32 => trakktor_core::asr::vosk::Precision::F32,
         }
     }
 
@@ -1133,6 +1262,12 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                 global.pretty,
             ),
             AsrCommand::Gigaam(args) => crate::asr::run_gigaam(
+                args,
+                &global.model_dir()?,
+                global.json(),
+                global.pretty,
+            ),
+            AsrCommand::Vosk(args) => crate::asr::run_vosk(
                 args,
                 &global.model_dir()?,
                 global.json(),

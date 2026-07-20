@@ -11,6 +11,7 @@ license.workspace = true
 default = [
     "whisper-runtime",
     "gigaam-runtime",
+    "vosk-runtime",
     "audio",
     "vad",
     "structify-runtime",
@@ -33,6 +34,13 @@ gigaam-runtime = ["dep:candle-core", "dep:candle-nn", "dep:serde_json", "dep:md-
 # the candle one. Builds on top of the candle runtime (shared checkpoint
 # reader and model plumbing).
 gigaam-burn = ["gigaam-runtime", "dep:burn"]
+# The candle-backed Vosk runtime (Zipformer2 transducer, offline and
+# streaming models). Off the default set this crate builds without it.
+vosk-runtime = ["dep:candle-core", "dep:candle-nn", "dep:serde_json"]
+# The burn-backed alternative Vosk runtime, selectable at run time next to
+# the candle one. Builds on top of the candle runtime (shared weight
+# extraction and model plumbing).
+vosk-burn = ["vosk-runtime", "dep:burn"]
 # Silero voice-activity detection: an engine-independent speech-preprocessing
 # stage over ASR. Needs candle (the model runs on the CPU). Off the default set
 # the crate builds without VAD.
@@ -56,6 +64,9 @@ whisper-cuda = ["whisper-runtime", "candle-core/cuda", "candle-nn/cuda"]
 # GPU acceleration for the GigaAM runtime.
 gigaam-metal = ["gigaam-runtime", "candle-core/metal", "candle-nn/metal"]
 gigaam-cuda = ["gigaam-runtime", "candle-core/cuda", "candle-nn/cuda"]
+# GPU acceleration for the Vosk runtime.
+vosk-metal = ["vosk-runtime", "candle-core/metal", "candle-nn/metal"]
+vosk-cuda = ["vosk-runtime", "candle-core/cuda", "candle-nn/cuda"]
 # GPU acceleration for the structify runtime.
 structify-metal = ["structify-runtime", "candle-core/metal", "candle-nn/metal"]
 structify-cuda = ["structify-runtime", "candle-core/cuda", "candle-nn/cuda"]

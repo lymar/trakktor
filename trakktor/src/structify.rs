@@ -28,11 +28,11 @@ pub(crate) fn run_structify(
     let resolved = structify::resolve_model(
         model_dir,
         &args.model,
-        &mut crate::asr::download_progress(),
+        &mut crate::asr::progress::download_progress(),
     )?;
     let tokenizer_path = structify::resolve_tokenizer(
         model_dir,
-        &mut crate::asr::download_progress(),
+        &mut crate::asr::progress::download_progress(),
     )?;
 
     let precision = args.precision.to_structify();

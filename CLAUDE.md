@@ -87,6 +87,20 @@ published separately). Rationale: `../trakktor_project/docs/adr/0002-cargo-works
 - Keep `trakktor` (bin) thin; put real logic in `trakktor_core`.
 - Machine-readable output (e.g. JSON) is a first-class requirement — the primary
   consumers are agents (see `conventions/output.md`).
+- **Every ASR engine drives the live transcription progress line through the
+  shared `trakktor::asr::progress` module — never a per-engine copy.** That
+  line MUST include the **time-remaining estimate** (`~mm:ss left`) whenever the
+  audio length is known (it is omitted only for a length-less source such as an
+  `ffmpeg` pipe). A new transcriber wires its progress callback into
+  `progress::live_reporter` and closes with `progress::finish_line`; model
+  downloads use `progress::download_progress`. Do not reintroduce a local
+  `transcribe_progress`/`clock`/`download_progress`.
+- **Any burn run on a GPU device must call `burn_notice::announce_cold_gpu_start`
+  before loading the model** — it prints the kernel compile/autotune heads-up
+  (burn autotunes per kernel shape, so a not-yet-tuned model re-tunes even when
+  the cache holds another's) and installs the panic hook that mutes cubecl's
+  harmless autotune-internal panics. The CPU backend does not autotune, so it is
+  not called there.
 - Describe errors with `thiserror` (typed enums); map them to the output contract
   (stable `code` + exit) at the bin boundary. See `conventions/error-handling.md`.
 - The CLI is self-documenting and the skill is generated from it (ADR-0003): a

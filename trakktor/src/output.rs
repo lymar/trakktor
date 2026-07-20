@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value, json};
 use trakktor_core::{
     asr::{
-        gigaam,
+        gigaam, vosk,
         whisper::{Segment, Transcription, Word},
     },
     feed::{
@@ -227,6 +227,103 @@ fn gigaam_segment_to_json(
     segment: &gigaam::Segment,
     with_words: bool,
 ) -> Value {
+    let mut object = Map::new();
+    object.insert("id".into(), Value::from(segment.id));
+    insert_f64(&mut object, "start", segment.start);
+    insert_f64(&mut object, "end", segment.end);
+    object.insert("text".into(), Value::String(segment.text.clone()));
+    if with_words {
+        let words = segment
+            .words
+            .iter()
+            .map(|word| {
+                let mut object = Map::new();
+                insert_f64(&mut object, "start", word.start);
+                insert_f64(&mut object, "end", word.end);
+                object.insert("word".into(), Value::String(word.text.clone()));
+                Value::Object(object)
+            })
+            .collect();
+        object.insert("words".into(), Value::Array(words));
+    }
+    Value::Object(object)
+}
+
+// ---------------------------------------------------------------------------
+// asr vosk
+// ---------------------------------------------------------------------------
+
+/// Prints a Vosk transcription. Same common ASR envelope as the other
+/// engines, minus any engine-specific diagnostics (transducer decoding has
+/// none): `text`, optional `language`, `duration`, `engine`, and (unless
+/// `--timestamps none`) `segments`, with per-word timings under
+/// `--timestamps word`.
+pub fn print_vosk_transcription(
+    transcription: &vosk::Transcription,
+    model: &str,
+    language: Option<&str>,
+    timestamps: TimestampsArg,
+    json: bool,
+    pretty: bool,
+) {
+    if json {
+        let value = vosk_transcription_to_json(
+            transcription,
+            model,
+            language,
+            timestamps != TimestampsArg::None,
+            timestamps == TimestampsArg::Word,
+        );
+        print_json(&value, pretty);
+        return;
+    }
+
+    if timestamps == TimestampsArg::None {
+        println!("{}", transcription.text.trim());
+        return;
+    }
+    for segment in &transcription.segments {
+        println!(
+            "[{:8.2} --> {:8.2}] {}",
+            segment.start,
+            segment.end,
+            collapse(segment.text.trim())
+        );
+    }
+}
+
+/// Builds Vosk's ASR envelope as a JSON value. Shared by stdout printing and
+/// the `json` output file.
+pub fn vosk_transcription_to_json(
+    transcription: &vosk::Transcription,
+    model: &str,
+    language: Option<&str>,
+    include_segments: bool,
+    with_words: bool,
+) -> Value {
+    let mut object = Map::new();
+    object.insert("text".into(), Value::String(transcription.text.clone()));
+    // Vosk does not detect the language; report it only when the caller
+    // supplied a label.
+    if let Some(language) = language {
+        object.insert("language".into(), Value::String(language.to_string()));
+    }
+    insert_f64(&mut object, "duration", transcription.duration);
+    object.insert("engine".into(), json!({ "name": "vosk", "model": model }));
+    if include_segments {
+        let segments = transcription
+            .segments
+            .iter()
+            .map(|segment| vosk_segment_to_json(segment, with_words))
+            .collect();
+        object.insert("segments".into(), Value::Array(segments));
+    }
+    Value::Object(object)
+}
+
+/// One Vosk segment of the envelope: the common fields, and per-word timings
+/// under `--timestamps word`. Vosk has no engine-specific diagnostics block.
+fn vosk_segment_to_json(segment: &vosk::Segment, with_words: bool) -> Value {
     let mut object = Map::new();
     object.insert("id".into(), Value::from(segment.id));
     insert_f64(&mut object, "start", segment.start);

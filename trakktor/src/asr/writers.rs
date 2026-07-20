@@ -12,7 +12,7 @@ use std::{
 
 use trakktor_core::{
     asr::{
-        gigaam,
+        gigaam, vosk,
         whisper::{Transcription, WhisperError},
     },
     vad::SpeechSegment,
@@ -36,6 +36,12 @@ impl CueSegment for trakktor_core::asr::whisper::Segment {
 }
 
 impl CueSegment for gigaam::Segment {
+    fn start(&self) -> f64 { self.start }
+    fn end(&self) -> f64 { self.end }
+    fn text(&self) -> &str { &self.text }
+}
+
+impl CueSegment for vosk::Segment {
     fn start(&self) -> f64 { self.start }
     fn end(&self) -> f64 { self.end }
     fn text(&self) -> &str { &self.text }
@@ -156,6 +162,70 @@ pub fn write_gigaam_outputs(
                         .file_stem()
                         .and_then(|s| s.to_str())
                         .unwrap_or("gigaam"),
+                    None,
+                    true,
+                    with_words,
+                );
+                (
+                    "json",
+                    serde_json::to_string(&value)
+                        .expect("serializing a serde_json::Value never fails"),
+                )
+            },
+            OutputFormatArg::All => unreachable!("all is expanded"),
+        };
+        let path = output_dir.join(format!("{stem}.{extension}"));
+        fs::write(&path, content).map_err(|e| {
+            WhisperError::Io(format!("{}: {e}", path.display()))
+        })?;
+        written.push(path);
+    }
+    Ok(written)
+}
+
+/// Writes a Vosk transcript in the requested format(s) into `output_dir`.
+/// Same file layout as [`write_outputs`]; the JSON form is Vosk's envelope.
+pub fn write_vosk_outputs(
+    transcription: &vosk::Transcription,
+    model: &str,
+    audio_path: &Path,
+    format: OutputFormatArg,
+    output_dir: &Path,
+    with_words: bool,
+) -> Result<Vec<PathBuf>, WhisperError> {
+    let stem = audio_path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "transcript".to_string());
+
+    fs::create_dir_all(output_dir).map_err(|e| {
+        WhisperError::Io(format!("{}: {e}", output_dir.display()))
+    })?;
+
+    let formats: &[OutputFormatArg] = match format {
+        OutputFormatArg::All => &ALL_FORMATS,
+        ref single => std::slice::from_ref(single),
+    };
+
+    let mut written = Vec::with_capacity(formats.len());
+    for &format in formats {
+        let (extension, content) = match format {
+            OutputFormatArg::Txt => {
+                ("txt", render_txt(&transcription.segments))
+            },
+            OutputFormatArg::Vtt => {
+                ("vtt", render_vtt(&transcription.segments))
+            },
+            OutputFormatArg::Srt => {
+                ("srt", render_srt(&transcription.segments))
+            },
+            OutputFormatArg::Tsv => {
+                ("tsv", render_tsv(&transcription.segments))
+            },
+            OutputFormatArg::Json => {
+                let value = crate::output::vosk_transcription_to_json(
+                    transcription,
+                    model,
                     None,
                     true,
                     with_words,

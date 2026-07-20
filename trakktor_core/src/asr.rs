@@ -4,7 +4,7 @@
 //! universal call: different models expose different capabilities and settings
 //! that do not reduce to a common denominator. Each engine lives in its own
 //! submodule and owns its inputs, options, and result shape. The engines are
-//! [`whisper`] and [`gigaam`].
+//! [`whisper`], [`gigaam`], and [`vosk`].
 //!
 //! Alongside the engines, the domain has engine-independent preprocessing that
 //! works on any engine's 16 kHz mono PCM input; the first such stage is
@@ -14,4 +14,5 @@
 //! preprocessing stage.
 
 pub mod gigaam;
+pub mod vosk;
 pub mod whisper;
