@@ -15,6 +15,7 @@ default = [
     "audio",
     "vad",
     "structify-runtime",
+    "punctuate-runtime",
 ]
 # Built-in audio decoding (symphonia), the sample-rate/channel conversion
 # pipeline, and the WAV/FLAC encoders. Off the default set the crate builds
@@ -58,6 +59,21 @@ structify-runtime = [
 # candle one. Builds on top of the candle runtime (shared checkpoint reader
 # and model plumbing).
 structify-burn = ["structify-runtime", "dep:burn"]
+# The candle-backed punctuation/truecasing runtime for `text punctuate`: an
+# XLM-RoBERTa encoder with cascaded classification heads (punctuation,
+# truecasing, sentence boundaries). Needs candle, the `tokenizers` crate (its
+# own SentencePiece model), and `tar` (extracting the weights from the NeMo
+# archive). Off the default set the crate builds without it.
+punctuate-runtime = [
+    "dep:candle-core",
+    "dep:candle-nn",
+    "dep:tokenizers",
+    "dep:tar",
+]
+# The burn-backed alternative punctuate runtime, selectable at run time next to
+# the candle one. Builds on top of the candle runtime (shared checkpoint reader
+# and model plumbing).
+punctuate-burn = ["punctuate-runtime", "dep:burn"]
 # GPU acceleration for the Whisper runtime.
 whisper-metal = ["whisper-runtime", "candle-core/metal", "candle-nn/metal"]
 whisper-cuda = ["whisper-runtime", "candle-core/cuda", "candle-nn/cuda"]
@@ -70,6 +86,9 @@ vosk-cuda = ["vosk-runtime", "candle-core/cuda", "candle-nn/cuda"]
 # GPU acceleration for the structify runtime.
 structify-metal = ["structify-runtime", "candle-core/metal", "candle-nn/metal"]
 structify-cuda = ["structify-runtime", "candle-core/cuda", "candle-nn/cuda"]
+# GPU acceleration for the punctuate runtime.
+punctuate-metal = ["punctuate-runtime", "candle-core/metal", "candle-nn/metal"]
+punctuate-cuda = ["punctuate-runtime", "candle-core/cuda", "candle-nn/cuda"]
 
 [dependencies]
 base64.workspace = true
@@ -93,6 +112,7 @@ rustc-hash.workspace = true
 scraper.workspace = true
 serde_json = { workspace = true, optional = true }
 symphonia = { workspace = true, optional = true }
+tar = { workspace = true, optional = true }
 thiserror.workspace = true
 tiktoken-rs.workspace = true
 tokenizers = { workspace = true, optional = true }

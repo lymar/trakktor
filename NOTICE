@@ -86,25 +86,42 @@ SaT / wtpsplit — MIT License
   model weights (MIT, https://huggingface.co/segment-any-text) are downloaded
   at runtime and are not redistributed in this repository.
 
+1-800-BAD-CODE punctuation / true-casing model — Apache-2.0 License
+  Copyright (c) 1-800-BAD-CODE
+  https://huggingface.co/1-800-BAD-CODE/xlm-roberta_punctuation_fullstop_truecase
+  The `text punctuate` model — a multilingual XLM-RoBERTa encoder with a cascade
+  of punctuation, true-casing, and sentence-boundary heads (the NeMo
+  `PunctCapSegModel` / `ConditionedPCSDecoder`) — is ported from this
+  checkpoint. Its post-processing (windowing, overlap stitching, and text
+  reconstruction) follows the author's `punctuators` package (MIT License,
+  https://github.com/1-800-BAD-CODE/punctuators). The PyTorch model weights
+  (inside the NeMo archive) and the SentencePiece model are downloaded from
+  Hugging Face at runtime and are not redistributed in this repository.
+
 candle / candle-transformers — Apache-2.0 OR MIT License
   Copyright (c) The candle authors (Hugging Face)
   https://github.com/huggingface/candle
   The vendored neural-network implementations — the Whisper and XLM-RoBERTa
   forward passes — are adapted from candle-transformers (the burn variants of
-  the Whisper and XLM-RoBERTa networks are ported from that adaptation).
-  candle is also the runtime that executes them.
+  the Whisper and XLM-RoBERTa networks are ported from that adaptation). The
+  XLM-RoBERTa encoder is shared by `text structify` and `text punctuate` (the
+  latter adds the cascaded classification heads). candle is also the runtime
+  that executes them.
 
 burn — Apache-2.0 OR MIT License
   Copyright (c) 2022 Nathaniel Simard & Burn Framework Contributors
   https://github.com/tracel-ai/burn
-  The alternative `asr whisper`, `asr gigaam`, `asr vosk`, and `text structify`
-  runtimes (`--runtime burn`) execute the Whisper, GigaAM, Zipformer2, and SaT
-  networks on burn's ndarray (CPU) and wgpu/Metal backends.
+  The alternative `asr whisper`, `asr gigaam`, `asr vosk`, `text structify`, and
+  `text punctuate` runtimes (`--runtime burn`) execute the Whisper, GigaAM,
+  Zipformer2, SaT, and punctuation networks on burn's ndarray (CPU) and
+  wgpu/Metal backends.
 
 XLM-RoBERTa (FacebookAI/xlm-roberta-base) — MIT License
   https://huggingface.co/FacebookAI/xlm-roberta-base
   Used as the tokenizer for `text structify` (its tokenizer.json is downloaded
-  at runtime) and as the base model of the SaT checkpoints.
+  at runtime) and as the base model of both the SaT checkpoints and the
+  1-800-BAD-CODE punctuation checkpoint (whose SentencePiece model is a
+  repackaging of the XLM-RoBERTa one).
 
 
 -------------------------------------------------------------------------------

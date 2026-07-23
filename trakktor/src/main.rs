@@ -9,6 +9,7 @@ mod burn_notice;
 mod cli;
 mod error;
 mod output;
+mod punctuate;
 mod skill;
 mod structify;
 mod vad;

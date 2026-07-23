@@ -23,20 +23,20 @@ const DESCRIPTION_MAX: usize = 1024;
 /// so a new feature does not reach skill discovery on its own.
 const STUB_DESCRIPTION: &str =
     "Use {name}, a predictable, automation-friendly CLI toolbox for coding \
-     agents, for helper tasks over web feeds, audio, and text. Feeds: \
-     discover the RSS/Atom/JSON feeds a page declares, read a feed's latest \
-     entries as structured JSON, and track what has been seen. Speech: \
-     transcribe an audio file with a local Whisper (or translate to English), \
-     GigaAM, or Vosk (the last two mainly for Russian) model, with word- or \
-     segment-level timestamps. Audio editing: with voice-activity detection, \
+     agents: helpers for feeds, audio, and text. Feeds: discover the \
+     RSS/Atom/JSON feeds a page declares, read unread entries as JSON, and \
+     track read state. Speech: transcribe audio with a local Whisper (or \
+     translate to English), GigaAM, or Vosk (mainly Russian) model, with \
+     word- or segment-level timestamps. Audio: by voice-activity detection, \
      report a speech/silence timeline, cut silence out of a recording, or \
-     split it into one clip per utterance. Text: split an unstructured wall \
-     of text, such as a raw transcript, into readable paragraphs with a local \
-     model, offline and multilingual. Reach for it whenever a task involves \
-     an RSS/Atom/JSON feed or blog/news URL, polling a site for new posts, \
-     turning speech from an audio file (mp3, wav, m4a, flac, and more) into a \
-     transcript or captions, removing dead air or splitting a recording on \
-     pauses, or restructuring a transcript into paragraphs.";
+     split it into one clip per utterance. Text: restore punctuation and \
+     capitalization in a raw lowercase transcript, and split a wall of text \
+     into paragraphs — local models, offline, multilingual. Reach for it \
+     whenever a task involves an RSS/Atom/JSON feed or blog/news URL, polling \
+     a site for new posts, turning an audio file (mp3, wav, m4a, flac, and \
+     more) into a transcript or captions, removing dead air or splitting a \
+     recording on pauses, restoring punctuation and casing to a raw \
+     transcript, or splitting a transcript into paragraphs.";
 
 /// Renders the agent-facing guide (`trakktor skill show`).
 ///

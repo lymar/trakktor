@@ -677,7 +677,9 @@ formats. It needs `ffmpeg` on your `PATH` — the built-in path never does.
 
 ## `text` — structure text
 
-Text-processing operations. One ships today, `structify`.
+Text-processing operations, each with a local model, fully offline. Two ship
+today: `structify` (split into paragraphs) and `punctuate` (restore punctuation
+and casing).
 
 ### `text structify` — split text into paragraphs
 
@@ -697,7 +699,7 @@ breaks), then a local **SaT** (Segment any Text) model — an XLM-RoBERTa networ
 that scores each position for a boundary — re-groups the text into paragraphs.
 It is multilingual, Russian and English included.
 
-### Models
+#### Models
 
 ```
 --model <name|dir>      # default: sat-12l-no-limited-lookahead
@@ -729,7 +731,7 @@ Two families, differing in what they cut on:
 trakktor text structify transcript.txt --model sat-3l-sm --text
 ```
 
-### Runtime, device, and precision
+#### Runtime, device, and precision
 
 ```
 --runtime candle|burn   # default: candle
@@ -747,7 +749,7 @@ network on the alternative burn runtime (see the Runtime section under `asr`
 — the same build feature, backends, and caveats). Both runtimes produce the
 same paragraphs.
 
-### Segmentation controls
+#### Segmentation controls
 
 ```
 --threshold 0.5   # paragraph-boundary probability cutoff (0..=1); higher = fewer, longer paragraphs
@@ -755,7 +757,7 @@ same paragraphs.
 --batch-size 32   # windows per forward batch — the main lever on GPU utilization
 ```
 
-### Output shape
+#### Output shape
 
 The default output is a single JSON object: the `model` and a `paragraphs`
 array. Each paragraph carries its character range `start`/`end` (code points
@@ -780,6 +782,90 @@ trakktor text structify transcript.txt --device metal --pretty
 # From speech to paragraphs: transcribe, then structure
 trakktor asr whisper talk.mp3 --timestamps none --text > transcript.txt
 trakktor text structify transcript.txt --text
+```
+
+### `text punctuate` — restore punctuation and casing
+
+Turn raw ASR output — lowercase text with no punctuation, as the Vosk and
+GigaAM engines emit — into readable text: restore punctuation, capitalization
+(including acronyms like `NATO` and `U.S.`), and sentence boundaries, fully
+offline:
+
+```sh
+trakktor text punctuate transcript.txt          # JSON (default): model + text + sentences
+trakktor text punctuate transcript.txt --text   # the restored text
+trakktor text punctuate transcript.txt --pretty # indented JSON
+```
+
+The one required argument is the path to a UTF-8 text file. Its whitespace is
+collapsed first, then a local multilingual **XLM-RoBERTa** model — an encoder
+with a cascade of punctuation, true-casing, and sentence-boundary heads —
+restores the marks and casing and splits the stream into sentences. It handles
+47 languages, Russian and English included.
+
+#### Models
+
+```
+--model <name|dir>      # default: xlmr-47lang
+```
+
+Pass a **published name** — downloaded on first use into
+`~/.trakktor/text/punctuate/<name>/` and reused on later runs — or a **path** to
+a local model directory. One model ships today:
+
+- **`xlmr-47lang` (the default)** — a multilingual XLM-RoBERTa punctuator over
+  47 languages, Russian and English included. It restores `.`, `,`, `?` (and
+  the marks of other scripts), capitalization, and sentence boundaries. On first
+  use its SentencePiece model and PyTorch weights (extracted from the published
+  NeMo archive) are downloaded from Hugging Face.
+
+#### Runtime, device, and precision
+
+```
+--runtime candle|burn   # default: candle
+--device cpu|metal      # default: cpu
+--precision f16|f32     # default: f16
+```
+
+Same as `structify` (and `asr`): `--device metal` needs the `metal` feature and
+`--runtime burn` the `burn` feature. Both runtimes, and both f32 devices,
+produce byte-identical output; `f16` may differ by the odd sentence split on a
+borderline token.
+
+#### Windowing controls
+
+```
+--overlap 16      # token overlap between consecutive windows (for long inputs)
+--batch-size 16   # windows per forward batch
+```
+
+Inputs longer than the model's window (256 tokens) are split into overlapping
+windows and stitched back together; these tune that.
+
+#### Output shape
+
+The default output is a single JSON object: the `model`, the restored `text`
+(the sentences joined by a space), and the `sentences` array.
+
+```json
+{
+  "model": "xlmr-47lang",
+  "text": "Hello friend, how's it going? It's snowing outside right now.",
+  "sentences": [
+    "Hello friend, how's it going?",
+    "It's snowing outside right now."
+  ]
+}
+```
+
+`--text` instead prints the restored text alone.
+
+```sh
+# From raw Russian speech to punctuated paragraphs: transcribe, punctuate, structure.
+# v3_rnnt gives the most accurate raw (lowercase, unpunctuated) Russian text.
+trakktor asr gigaam talk.mp3 --model v3_rnnt --timestamps none --text > raw.txt
+trakktor text punctuate raw.txt --text > punctuated.txt
+trakktor text structify punctuated.txt --text
 ```
 
 ## `feed` — RSS / Atom / JSON Feed
@@ -903,6 +989,12 @@ Apache-licensed:
   [XLM-RoBERTa](https://huggingface.co/FacebookAI/xlm-roberta-base) (MIT)
   tokenizer, on the same candle runtime with the same optional burn runtime.
   Please cite the SaT paper if you use these models.
+- **`text punctuate`** — the
+  [1-800-BAD-CODE multilingual punctuation/true-casing model](https://huggingface.co/1-800-BAD-CODE/xlm-roberta_punctuation_fullstop_truecase)
+  (Apache-2.0), an [XLM-RoBERTa](https://huggingface.co/FacebookAI/xlm-roberta-base)
+  (MIT) encoder with cascaded heads, its post-processing following the author's
+  [punctuators](https://github.com/1-800-BAD-CODE/punctuators) package (MIT), on
+  the same candle runtime with the same optional burn runtime.
 
 See [`NOTICE`](NOTICE) for the full third-party attributions and license
 notices.

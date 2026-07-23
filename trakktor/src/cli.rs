@@ -26,11 +26,12 @@ const DEFAULT_MODEL_DIR_NAME: &str = ".trakktor";
 
 /// A predictable, automation-friendly CLI toolbox for coding agents (Claude
 /// Code, OpenCode, etc.): speech-to-text, voice-activity audio editing, feeds,
-/// text structuring, and more — machine-readable output, stable flags, and
-/// meaningful exit codes. Reach for it when a task needs one of these helpers,
-/// such as fetching a feed's unread items, transcribing an audio file to
-/// timestamped text, cutting the silence out of a recording, or splitting a
-/// transcript into readable paragraphs.
+/// text structuring and punctuation, and more — machine-readable output, stable
+/// flags, and meaningful exit codes. Reach for it when a task needs one of
+/// these helpers, such as fetching a feed's unread items, transcribing an audio
+/// file to timestamped text, cutting the silence out of a recording, restoring
+/// punctuation to a raw transcript, or splitting a transcript into readable
+/// paragraphs.
 ///
 /// Output is JSON by default (`--pretty` indents it); pass `--text` for
 /// human-readable text. Results go to stdout, errors to stderr. Exit codes are
@@ -133,10 +134,12 @@ enum Command {
 
     /// Structure and transform text.
     ///
-    /// A group of text-processing operations. The first, `structify`, turns an
-    /// unstructured wall of text — for example a speech transcript whose line
-    /// breaks fall on segments rather than meaning — into readable paragraphs
-    /// with a local model, fully offline.
+    /// A group of text-processing operations, each with a local model, fully
+    /// offline: `structify` turns an unstructured wall of text — for example a
+    /// speech transcript whose line breaks fall on segments rather than meaning
+    /// — into readable paragraphs; `punctuate` restores punctuation and
+    /// capitalization in raw lowercase text, such as the output of the Vosk and
+    /// GigaAM speech engines.
     Text {
         #[command(subcommand)]
         command: TextCommand,
@@ -716,6 +719,13 @@ impl PrecisionArg {
             PrecisionArg::F32 => trakktor_core::structify::Precision::F32,
         }
     }
+
+    pub(crate) fn to_punctuate(self) -> trakktor_core::punctuate::Precision {
+        match self {
+            PrecisionArg::F16 => trakktor_core::punctuate::Precision::F16,
+            PrecisionArg::F32 => trakktor_core::punctuate::Precision::F32,
+        }
+    }
 }
 
 /// The `--task` value of `asr whisper`.
@@ -843,6 +853,78 @@ pub(crate) enum TextCommand {
     /// with its character range and text; pass --text for the paragraphs
     /// separated by blank lines. Multilingual, including Russian and English.
     Structify(StructifyArgs),
+
+    /// Restore punctuation and capitalization in raw text.
+    ///
+    /// Reads a UTF-8 text file of lowercase, unpunctuated text — the typical
+    /// output of the Vosk and GigaAM speech engines — and restores punctuation,
+    /// capitalization (including acronyms like NATO and U.S.), and sentence
+    /// boundaries with a local multilingual model, fully offline. The first use
+    /// of a model downloads it into the model directory (~/.trakktor by
+    /// default; see --model-dir), and later runs reuse it. Output is JSON by
+    /// default — the model, the restored text, and the list of sentences; pass
+    /// --text for the restored text alone. Handles 47 languages, including
+    /// Russian and English. A natural pipeline is `asr vosk` → `text punctuate`
+    /// → `text structify`.
+    Punctuate(PunctuateArgs),
+}
+
+/// Flags of `text punctuate`.
+#[derive(Args)]
+pub(crate) struct PunctuateArgs {
+    /// Path to the UTF-8 text file to punctuate.
+    #[arg(value_name = "input")]
+    pub(crate) input: PathBuf,
+
+    /// Model: a published name, downloaded on first use, or a path to a model
+    /// directory. Names: xlmr-47lang (multilingual XLM-RoBERTa covering 47
+    /// languages, including Russian and English; punctuation, capitalization,
+    /// and sentence boundaries).
+    #[arg(long, default_value = "xlmr-47lang", value_name = "name|dir")]
+    pub(crate) model: String,
+
+    /// Inference runtime executing the model. Both produce the same result;
+    /// `burn` needs a build with the `burn` feature enabled, and on the CPU
+    /// computes in f32 only.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = RuntimeArg::Candle,
+        value_name = "runtime"
+    )]
+    pub(crate) runtime: RuntimeArg,
+
+    /// Compute device. `metal` needs a build with the `metal` feature (for the
+    /// candle runtime) or the `burn` feature (for the burn runtime) enabled,
+    /// and is only available on macOS.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = DeviceArg::Cpu,
+        value_name = "device"
+    )]
+    pub(crate) device: DeviceArg,
+
+    /// Compute precision. `f16` (the default) uses about half the memory and
+    /// is faster; `f32` runs in full precision for reproducible results,
+    /// at twice the memory.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = PrecisionArg::F16,
+        value_name = "precision"
+    )]
+    pub(crate) precision: PrecisionArg,
+
+    /// Overlap between consecutive windows, in tokens, when the text is longer
+    /// than one window. The seam is split evenly between the two windows; an
+    /// odd value is rounded down to even.
+    #[arg(long, default_value_t = 16, value_name = "int")]
+    pub(crate) overlap: usize,
+
+    /// Windows per forward batch — the main lever on GPU utilization.
+    #[arg(long, default_value_t = 16, value_name = "int")]
+    pub(crate) batch_size: usize,
 }
 
 /// Flags of `text structify`.
@@ -1287,6 +1369,12 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
         },
         Command::Text { command } => match command {
             TextCommand::Structify(args) => crate::structify::run_structify(
+                args,
+                &global.model_dir()?,
+                global.json(),
+                global.pretty,
+            ),
+            TextCommand::Punctuate(args) => crate::punctuate::run_punctuate(
                 args,
                 &global.model_dir()?,
                 global.json(),

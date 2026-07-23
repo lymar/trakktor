@@ -98,6 +98,15 @@ fn stub_description_is_a_bounded_trigger_line() {
     // Strict-frontmatter guarantees: non-empty, bounded, one clean line.
     assert!(!desc.is_empty() && desc.chars().count() <= DESCRIPTION_MAX);
     assert!(!desc.chars().any(|c| c.is_control()));
+    // The authored line must FIT the limit — a clamped description ends with
+    // the ellipsis, silently cutting the trigger text an agent matches on.
+    // (STUB_DESCRIPTION grew past the limit once; trim it, don't let it clip.)
+    assert!(
+        !desc.ends_with('…'),
+        "STUB_DESCRIPTION overflows DESCRIPTION_MAX and was truncated ({} \
+         chars): shorten it",
+        desc.chars().count()
+    );
 }
 
 #[test]

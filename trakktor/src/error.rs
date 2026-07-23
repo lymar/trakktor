@@ -10,6 +10,7 @@ use trakktor_core::{
     audio::AudioError,
     feed::FeedError,
     http::HttpError,
+    punctuate::PunctuateError,
     skill::SkillError,
     structify::StructifyError,
     vad::VadError,
@@ -34,6 +35,8 @@ pub enum CliError {
     Skill(SkillError),
     /// An error from the `text structify` feature.
     Structify(StructifyError),
+    /// An error from the `text punctuate` feature.
+    Punctuate(PunctuateError),
 }
 
 impl CliError {
@@ -49,6 +52,7 @@ impl CliError {
             CliError::Feed(err) => feed_code(err),
             CliError::Skill(err) => skill_code(err),
             CliError::Structify(err) => structify_code(err),
+            CliError::Punctuate(err) => punctuate_code(err),
         }
     }
 }
@@ -64,6 +68,7 @@ impl std::fmt::Display for CliError {
             CliError::Feed(err) => write!(f, "{err}"),
             CliError::Skill(err) => write!(f, "{err}"),
             CliError::Structify(err) => write!(f, "{err}"),
+            CliError::Punctuate(err) => write!(f, "{err}"),
         }
     }
 }
@@ -98,6 +103,10 @@ impl From<SkillError> for CliError {
 
 impl From<StructifyError> for CliError {
     fn from(err: StructifyError) -> Self { CliError::Structify(err) }
+}
+
+impl From<PunctuateError> for CliError {
+    fn from(err: PunctuateError) -> Self { CliError::Punctuate(err) }
 }
 
 /// Maps a [`WhisperError`] to its stable `code`.
@@ -191,5 +200,17 @@ fn structify_code(err: &StructifyError) -> &'static str {
         StructifyError::InvalidOptions(_) => "invalid_options",
         StructifyError::Io(_) => "io_error",
         StructifyError::HomeDirUnknown => "no_home_dir",
+    }
+}
+
+/// Maps a [`PunctuateError`] to its stable `code`.
+fn punctuate_code(err: &PunctuateError) -> &'static str {
+    match err {
+        PunctuateError::InvalidModel(_) |
+        PunctuateError::ModelDownload(_) |
+        PunctuateError::Tokenizer(_) => "model_unavailable",
+        PunctuateError::InvalidOptions(_) => "invalid_options",
+        PunctuateError::Io(_) => "io_error",
+        PunctuateError::HomeDirUnknown => "no_home_dir",
     }
 }

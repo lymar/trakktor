@@ -9,6 +9,8 @@ pub mod asr;
 pub mod audio;
 pub mod feed;
 pub mod http;
+#[cfg(feature = "punctuate-runtime")]
+pub mod punctuate;
 pub mod skill;
 #[cfg(feature = "structify-runtime")]
 pub mod structify;

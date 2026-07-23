@@ -577,6 +577,30 @@ pub fn print_structify(
 }
 
 // ---------------------------------------------------------------------------
+// text punctuate
+// ---------------------------------------------------------------------------
+
+/// Prints the result of a punctuate run. JSON: an object with the `model`, the
+/// restored `text` (sentences joined by a space), and the `sentences` array.
+/// Text: the restored text on one line.
+pub fn print_punctuate(
+    model: &str,
+    sentences: &[String],
+    json: bool,
+    pretty: bool,
+) {
+    let text = sentences.join(" ");
+    if json {
+        print_json(
+            &json!({ "model": model, "text": text, "sentences": sentences }),
+            pretty,
+        );
+        return;
+    }
+    println!("{text}");
+}
+
+// ---------------------------------------------------------------------------
 // feed discover
 // ---------------------------------------------------------------------------
 

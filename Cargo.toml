@@ -35,6 +35,9 @@ feedparser-rs = { version = "0.5", default-features = false }
 flacenc = { version = "0.5", default-features = false }
 flate2 = "1"
 hound = "3"
+# Reading NeMo `.nemo` archives (a plain or gzip tar) to extract the model
+# weights for `text punctuate`.
+tar = "0.4"
 md-5 = "0.10"
 rand = "0.9"
 realfft = "3"
