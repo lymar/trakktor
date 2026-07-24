@@ -1,9 +1,9 @@
 # trakktor
 
 `trakktor` is a predictable, automation-friendly Rust CLI toolbox for coding
-agents (Claude Code, OpenCode, etc.): speech-to-text, voice-activity audio
-editing, feeds, text structuring, and more — machine-readable output, stable
-flags, and meaningful exit codes.
+agents (Claude Code, OpenCode, etc.): speech-to-text and text-to-speech,
+voice-activity audio editing, feeds, text structuring, and more —
+machine-readable output, stable flags, and meaningful exit codes.
 
 ## Install
 
@@ -566,6 +566,71 @@ whole pipeline is streaming and bounded in memory regardless of file length.
 low latency and low memory, the basis for future live transcription; on files,
 the offline models are more accurate.
 
+## `tts` — speech synthesis
+
+`trakktor tts` is the counterpart to `asr`: text in, an audio file out. Like
+`asr`, it is organized as a set of engines, each picked as a subcommand, and
+runs entirely locally.
+
+```bash
+trakktor tts qwen3-tts "Привет! Это синтез речи." --language russian -o hello.wav
+```
+
+The audio is always written to a file — raw samples on stdout would not survive
+the machine-readable contract — and `stdout` carries the metadata:
+
+```json
+{
+  "output": "hello.wav",
+  "format": "wav",
+  "sample_rate": 24000,
+  "duration": 2.16,
+  "language": "russian",
+  "voice": { "kind": "preset", "name": "serena" },
+  "engine": { "name": "qwen3-tts", "model": "0.6b-customvoice", "runtime": "candle" },
+  "qwen3-tts": { "frames": 27, "sampling": "top_k", "seed": 0, "top_k": 50, "temperature": 0.9 }
+}
+```
+
+The container follows the `--output` extension: `.wav` (32-bit float, exactly
+as synthesized) or `.flac` (quantized to 24 bits).
+
+### `tts qwen3-tts` — Qwen3-TTS engine
+
+A native port of the open **Qwen3-TTS 12 Hz** family. Three stages run in
+sequence: a Qwen3 decoder ("talker") reads the text and predicts the first
+codebook of every 12.5 Hz frame; a small code predictor fills that frame's
+remaining 15 residual codebooks; and a causal convolutional codec decoder turns
+the finished frames into a 24 kHz waveform.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--voice <name>` | `serena` | Preset timbre: `serena`, `vivian`, `uncle_fu`, `ryan`, `aiden`, `ono_anna`, `sohee`, `eric`, `dylan`. |
+| `--language <lang>` | `auto` | Target language, set independently of the voice: `russian`, `english`, `german`, `spanish`, `chinese`, `japanese`, `french`, `korean`, `italian`, `portuguese`. |
+| `--model <name\|dir>` | `0.6b-customvoice` | `0.6b-customvoice` or `1.7b-customvoice` (larger, slower), or a checkpoint directory. |
+| `--seed <int>` | `0` | Makes a sampled run repeatable. |
+| `--temperature`, `--top-k`, `--repetition-penalty` | `0.9`, `50`, `1.05` | Sampling controls. |
+| `--greedy` | off | Take the most likely code instead of sampling — deterministic, usually flatter. |
+| `--precision <bf16\|f32>` | `bf16` | `bf16` is the format the weights are stored in and what the reference runs; `f32` doubles the memory and is reproducible. The codec always runs in full precision. |
+
+Any voice can speak any supported language: the language is a separate
+conditioning token, not a property of the timbre. Russian is supported
+first-class.
+
+Generation **samples** by default, so two runs of the same text differ slightly;
+`--seed` pins a run, and `--greedy` removes the randomness altogether. The
+codec decoder is deterministic either way — with the frames fixed, it
+reproduces the same waveform every time.
+
+The first use downloads the checkpoint (about 2.5 GB for `0.6b-customvoice`,
+4.5 GB for `1.7b-customvoice`, codec included) into the model directory; later
+runs reuse it. `--device metal` is considerably faster than the CPU and is the
+recommended way to run it — the CPU path is impractically slow for anything
+past a short phrase.
+
+`1.7b-customvoice` needs roughly 4.5 GB of memory in `bf16` and about twice
+that in `f32`; on a 16 GB machine only `bf16` is practical for it.
+
 ## `vad` — voice-activity audio editing
 
 `trakktor vad` finds the speech in an audio file with Silero voice-activity
@@ -981,6 +1046,11 @@ Apache-licensed:
   [kaldi-native-fbank](https://github.com/csukuangfj/kaldi-native-fbank)
   (Apache-2.0), on the same candle runtime with the same optional burn
   runtime.
+- **`tts qwen3-tts`** — [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS)
+  (Apache-2.0) by the Alibaba Qwen team: the 12 Hz talker, residual code
+  predictor, and codec decoder, ported to the same candle runtime. Model
+  weights and the bundled speech tokenizer are downloaded at runtime. Technical
+  report: [arXiv:2601.15621](https://arxiv.org/abs/2601.15621).
 - **`vad`, and `asr --vad`** — [Silero-VAD](https://github.com/snakers4/silero-vad)
   (MIT): the ported speech detector behind both the audio editing commands and
   the transcription preprocessing stage.

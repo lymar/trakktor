@@ -98,6 +98,17 @@ SaT / wtpsplit — MIT License
   (inside the NeMo archive) and the SentencePiece model are downloaded from
   Hugging Face at runtime and are not redistributed in this repository.
 
+Qwen3-TTS — Apache License 2.0
+  Copyright (c) 2026 Alibaba Cloud / the Qwen team
+  https://github.com/QwenLM/Qwen3-TTS
+  The `tts qwen3-tts` engine ports the Qwen3-TTS 12 Hz synthesis pipeline from
+  the reference `qwen-tts` package: the dual-track talker, the residual code
+  predictor, and the causal-convolutional codec decoder. The model checkpoints
+  (`Qwen/Qwen3-TTS-12Hz-*-CustomVoice`), each bundling the matching speech
+  tokenizer (`Qwen3-TTS-Tokenizer-12Hz`) and the byte-level BPE vocabulary, are
+  downloaded from Hugging Face at runtime and are not redistributed in this
+  repository. Technical report: https://arxiv.org/abs/2601.15621
+
 candle / candle-transformers — Apache-2.0 OR MIT License
   Copyright (c) The candle authors (Hugging Face)
   https://github.com/huggingface/candle
@@ -160,5 +171,7 @@ MIT License (applies to the MIT-licensed works listed in section 1)
   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
   SOFTWARE.
 
-Apache License 2.0 (candle and burn, at your option): see
+Apache License 2.0 (applies to the Apache-licensed works listed in section 1 —
+Vosk/icefall/sherpa-onnx, the 1-800-BAD-CODE punctuation model, Qwen3-TTS, and,
+at your option, candle and burn): see
 https://www.apache.org/licenses/LICENSE-2.0

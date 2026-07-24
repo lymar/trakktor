@@ -14,5 +14,7 @@ pub mod punctuate;
 pub mod skill;
 #[cfg(feature = "structify-runtime")]
 pub mod structify;
+#[cfg(feature = "tts-runtime")]
+pub mod tts;
 #[cfg(feature = "vad")]
 pub mod vad;

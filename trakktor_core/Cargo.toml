@@ -16,6 +16,7 @@ default = [
     "vad",
     "structify-runtime",
     "punctuate-runtime",
+    "tts-runtime",
 ]
 # Built-in audio decoding (symphonia), the sample-rate/channel conversion
 # pipeline, and the WAV/FLAC encoders. Off the default set the crate builds
@@ -74,6 +75,17 @@ punctuate-runtime = [
 # the candle one. Builds on top of the candle runtime (shared checkpoint reader
 # and model plumbing).
 punctuate-burn = ["punctuate-runtime", "dep:burn"]
+# The candle-backed Qwen3-TTS runtime for `tts qwen3-tts`: speech synthesis
+# (talker + code predictor + codec decoder). Needs candle, the `tokenizers`
+# crate (the byte-level BPE ships as raw vocab/merges), and the audio encoders
+# for writing the result. Off the default set the crate builds without it.
+tts-runtime = [
+    "dep:candle-core",
+    "dep:candle-nn",
+    "dep:serde_json",
+    "dep:tokenizers",
+    "audio",
+]
 # GPU acceleration for the Whisper runtime.
 whisper-metal = ["whisper-runtime", "candle-core/metal", "candle-nn/metal"]
 whisper-cuda = ["whisper-runtime", "candle-core/cuda", "candle-nn/cuda"]
@@ -89,6 +101,9 @@ structify-cuda = ["structify-runtime", "candle-core/cuda", "candle-nn/cuda"]
 # GPU acceleration for the punctuate runtime.
 punctuate-metal = ["punctuate-runtime", "candle-core/metal", "candle-nn/metal"]
 punctuate-cuda = ["punctuate-runtime", "candle-core/cuda", "candle-nn/cuda"]
+# GPU acceleration for the Qwen3-TTS runtime.
+tts-metal = ["tts-runtime", "candle-core/metal", "candle-nn/metal"]
+tts-cuda = ["tts-runtime", "candle-core/cuda", "candle-nn/cuda"]
 
 [dependencies]
 base64.workspace = true

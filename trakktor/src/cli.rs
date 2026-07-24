@@ -25,11 +25,12 @@ const DEFAULT_WORK_DIR: &str = ".trakktor";
 const DEFAULT_MODEL_DIR_NAME: &str = ".trakktor";
 
 /// A predictable, automation-friendly CLI toolbox for coding agents (Claude
-/// Code, OpenCode, etc.): speech-to-text, voice-activity audio editing, feeds,
-/// text structuring and punctuation, and more — machine-readable output, stable
-/// flags, and meaningful exit codes. Reach for it when a task needs one of
-/// these helpers, such as fetching a feed's unread items, transcribing an audio
-/// file to timestamped text, cutting the silence out of a recording, restoring
+/// Code, OpenCode, etc.): speech-to-text and text-to-speech, voice-activity
+/// audio editing, feeds, text structuring and punctuation, and more —
+/// machine-readable output, stable flags, and meaningful exit codes. Reach for
+/// it when a task needs one of these helpers, such as fetching a feed's unread
+/// items, transcribing an audio file to timestamped text, reading text aloud
+/// into an audio file, cutting the silence out of a recording, restoring
 /// punctuation to a raw transcript, or splitting a transcript into readable
 /// paragraphs.
 ///
@@ -115,6 +116,17 @@ enum Command {
     Asr {
         #[command(subcommand)]
         command: AsrCommand,
+    },
+
+    /// Synthesize speech from text (TTS).
+    ///
+    /// Speech synthesis is organized as a set of engines, each with its own
+    /// voices and flags; pick one as the subcommand. The audio is written to a
+    /// file (WAV or FLAC, by the output's extension) and the result on stdout
+    /// is JSON with the path, the duration, and the voice used.
+    Tts {
+        #[command(subcommand)]
+        command: TtsCommand,
     },
 
     /// Edit audio by voice-activity detection: report, cut, or split on speech.
@@ -209,6 +221,120 @@ pub(crate) enum AsrCommand {
     /// first use of a named model downloads it into the model directory
     /// (~/.trakktor by default; see --model-dir), and later runs reuse it.
     Vosk(VoskArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum TtsCommand {
+    /// Synthesize speech with a Qwen3-TTS model.
+    ///
+    /// Reads the text as an argument and writes spoken audio at 24 kHz. The
+    /// voice is one of the model's preset speakers (see --voice) and the
+    /// language is set independently of it (see --language), so any voice can
+    /// speak any of the supported languages, Russian included. Generation
+    /// samples by default, which makes each run differ slightly; pass --seed
+    /// to repeat a run exactly, or --greedy for deterministic output. The
+    /// first use of a model downloads its checkpoint into the model directory
+    /// (~/.trakktor by default; see --model-dir), and later runs reuse it.
+    #[command(name = "qwen3-tts")]
+    Qwen3Tts(Qwen3TtsArgs),
+}
+
+/// Flags of `tts qwen3-tts`.
+#[derive(Args)]
+pub(crate) struct Qwen3TtsArgs {
+    /// The text to speak.
+    // The id must differ from the global `--text` flag, which clap would
+    // otherwise take this for.
+    #[arg(id = "speech", value_name = "text")]
+    pub(crate) text: String,
+
+    /// Where to write the audio; the extension picks the format (`.wav` or
+    /// `.flac`).
+    #[arg(long, short, default_value = "speech.wav", value_name = "path")]
+    pub(crate) output: PathBuf,
+
+    /// Language to speak in, as an English name: russian, english, german,
+    /// spanish, chinese, japanese, french, korean, italian, or portuguese.
+    /// Omit (or pass `auto`) to let the model decide from the text.
+    #[arg(long, default_value = "auto", value_name = "lang")]
+    pub(crate) language: String,
+
+    /// Preset voice: serena, vivian, uncle_fu, ryan, aiden, ono_anna, sohee,
+    /// eric, or dylan.
+    #[arg(long, default_value = "serena", value_name = "name")]
+    pub(crate) voice: String,
+
+    /// Model: a published name, downloaded on first use, or a path to a
+    /// checkpoint directory. Names: 0.6b-customvoice (the default),
+    /// 1.7b-customvoice (larger and slower).
+    #[arg(long, default_value = "0.6b-customvoice", value_name = "name|dir")]
+    pub(crate) model: String,
+
+    /// Seed for sampling, making a run repeatable.
+    #[arg(long, default_value_t = 0, value_name = "int")]
+    pub(crate) seed: u64,
+
+    /// Sampling temperature; higher is more varied.
+    #[arg(long, default_value_t = 0.9, value_name = "float")]
+    pub(crate) temperature: f32,
+
+    /// Candidates kept before sampling.
+    #[arg(long, default_value_t = 50, value_name = "int")]
+    pub(crate) top_k: usize,
+
+    /// Penalty discouraging codes already generated.
+    #[arg(long, default_value_t = 1.05, value_name = "float")]
+    pub(crate) repetition_penalty: f32,
+
+    /// Always take the most likely code instead of sampling. Deterministic,
+    /// and usually flatter; mainly for reproducible comparisons.
+    #[arg(long, conflicts_with_all = ["seed", "temperature", "top_k"])]
+    pub(crate) greedy: bool,
+
+    /// Inference runtime executing the model.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = RuntimeArg::Candle,
+        value_name = "runtime"
+    )]
+    pub(crate) runtime: RuntimeArg,
+
+    /// Compute device. `metal` needs a build with the `metal` feature enabled,
+    /// and is only available on macOS.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = DeviceArg::Cpu,
+        value_name = "device"
+    )]
+    pub(crate) device: DeviceArg,
+
+    /// Compute precision of the speech model. `bf16` uses about half the
+    /// memory and matches how the weights are stored; `f32` runs in full
+    /// precision and is reproducible. The codec always runs in full precision
+    /// either way.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = TtsPrecisionArg::Bf16,
+        value_name = "precision"
+    )]
+    pub(crate) precision: TtsPrecisionArg,
+}
+
+/// The `--precision` value of `tts qwen3-tts`.
+///
+/// Deliberately not the shared [`PrecisionArg`]: this engine's half-precision
+/// option is `bf16`, the format its weights are stored in. `f16` is not
+/// offered because its narrower exponent range overflows partway through
+/// generation and the run degenerates into babble.
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum TtsPrecisionArg {
+    /// Half precision, as the weights are stored (the default).
+    Bf16,
+    /// Full precision: reproducible, at twice the memory.
+    F32,
 }
 
 /// Flags of `asr gigaam`.
@@ -1350,6 +1476,14 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                 global.pretty,
             ),
             AsrCommand::Vosk(args) => crate::asr::run_vosk(
+                args,
+                &global.model_dir()?,
+                global.json(),
+                global.pretty,
+            ),
+        },
+        Command::Tts { command } => match command {
+            TtsCommand::Qwen3Tts(args) => crate::tts::run_qwen3_tts(
                 args,
                 &global.model_dir()?,
                 global.json(),

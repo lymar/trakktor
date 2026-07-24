@@ -13,6 +13,7 @@ use trakktor_core::{
     punctuate::PunctuateError,
     skill::SkillError,
     structify::StructifyError,
+    tts::qwen3_tts::Qwen3TtsError,
     vad::VadError,
 };
 
@@ -37,6 +38,8 @@ pub enum CliError {
     Structify(StructifyError),
     /// An error from the `text punctuate` feature.
     Punctuate(PunctuateError),
+    /// An error from the Qwen3-TTS engine.
+    Qwen3Tts(Qwen3TtsError),
 }
 
 impl CliError {
@@ -53,6 +56,7 @@ impl CliError {
             CliError::Skill(err) => skill_code(err),
             CliError::Structify(err) => structify_code(err),
             CliError::Punctuate(err) => punctuate_code(err),
+            CliError::Qwen3Tts(err) => qwen3_tts_code(err),
         }
     }
 }
@@ -69,6 +73,7 @@ impl std::fmt::Display for CliError {
             CliError::Skill(err) => write!(f, "{err}"),
             CliError::Structify(err) => write!(f, "{err}"),
             CliError::Punctuate(err) => write!(f, "{err}"),
+            CliError::Qwen3Tts(err) => write!(f, "{err}"),
         }
     }
 }
@@ -107,6 +112,10 @@ impl From<StructifyError> for CliError {
 
 impl From<PunctuateError> for CliError {
     fn from(err: PunctuateError) -> Self { CliError::Punctuate(err) }
+}
+
+impl From<Qwen3TtsError> for CliError {
+    fn from(err: Qwen3TtsError) -> Self { CliError::Qwen3Tts(err) }
 }
 
 /// Maps a [`WhisperError`] to its stable `code`.
@@ -212,5 +221,20 @@ fn punctuate_code(err: &PunctuateError) -> &'static str {
         PunctuateError::InvalidOptions(_) => "invalid_options",
         PunctuateError::Io(_) => "io_error",
         PunctuateError::HomeDirUnknown => "no_home_dir",
+    }
+}
+
+/// Maps a [`Qwen3TtsError`] to its stable `code`.
+fn qwen3_tts_code(err: &Qwen3TtsError) -> &'static str {
+    match err {
+        Qwen3TtsError::TextEmpty => "text_empty",
+        Qwen3TtsError::InvalidModel(_) |
+        Qwen3TtsError::ModelDownload(_) |
+        Qwen3TtsError::Tokenizer(_) => "model_unavailable",
+        Qwen3TtsError::UnsupportedVoice(_) => "unsupported_voice",
+        Qwen3TtsError::UnsupportedLanguage(_) => "unsupported_language",
+        Qwen3TtsError::InvalidOptions(_) => "invalid_options",
+        Qwen3TtsError::Io(_) => "io_error",
+        Qwen3TtsError::HomeDirUnknown => "no_home_dir",
     }
 }

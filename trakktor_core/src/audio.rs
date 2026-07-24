@@ -15,7 +15,7 @@ mod decode;
 pub mod edit;
 pub mod encode;
 mod error;
-mod pipeline;
+pub(crate) mod pipeline;
 mod rematrix;
 mod resample;
 

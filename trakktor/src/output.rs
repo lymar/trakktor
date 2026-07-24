@@ -19,6 +19,10 @@ use trakktor_core::{
     },
     skill::WriteOutcome,
     structify::Paragraph,
+    tts::{
+        Voice,
+        qwen3_tts::{Sampling, Synthesis},
+    },
     vad::{Keep, SpeechSegment},
 };
 
@@ -598,6 +602,88 @@ pub fn print_punctuate(
         return;
     }
     println!("{text}");
+}
+
+// ---------------------------------------------------------------------------
+// tts
+// ---------------------------------------------------------------------------
+
+/// Prints the result of a synthesis run. JSON: the common TTS envelope — where
+/// the audio was written, its `format`, `sample_rate` and `duration`, the
+/// `language` and `voice` used, and the `engine` — with engine diagnostics
+/// under the engine's own key. Text: the path, then a one-line summary.
+///
+/// The audio itself is always a file: raw samples on stdout would not survive
+/// the machine-readable contract.
+pub fn print_synthesis(
+    synthesis: &Synthesis,
+    output: &Path,
+    format: &str,
+    model: &str,
+    runtime: &str,
+    sampling: &Sampling,
+    json: bool,
+    pretty: bool,
+) {
+    let duration = synthesis.speech.duration();
+    if json {
+        let mut voice = Map::new();
+        voice.insert(
+            "kind".into(),
+            Value::String(synthesis.voice.kind().into()),
+        );
+        if let Voice::Preset { name } = &synthesis.voice {
+            voice.insert("name".into(), Value::String(name.clone()));
+        }
+
+        let mut engine_block = json!({
+            "frames": synthesis.frames,
+            "sampling": sampling.as_str(),
+        });
+        if let Sampling::TopK {
+            top_k,
+            temperature,
+            seed,
+            ..
+        } = sampling
+        {
+            let block = engine_block.as_object_mut().expect("object");
+            block.insert("seed".into(), json!(seed));
+            block.insert("top_k".into(), json!(top_k));
+            block.insert("temperature".into(), json!(temperature));
+        }
+
+        let mut object = Map::new();
+        object.insert(
+            "output".into(),
+            Value::String(output.display().to_string()),
+        );
+        object.insert("format".into(), Value::String(format.into()));
+        object
+            .insert("sample_rate".into(), json!(synthesis.speech.sample_rate));
+        insert_f64(&mut object, "duration", duration);
+        insert_opt(&mut object, "language", synthesis.language.as_deref());
+        object.insert("voice".into(), Value::Object(voice));
+        object.insert(
+            "engine".into(),
+            json!({ "name": "qwen3-tts", "model": model, "runtime": runtime }),
+        );
+        object.insert("qwen3-tts".into(), engine_block);
+        print_json(&Value::Object(object), pretty);
+        return;
+    }
+
+    println!("{}", output.display());
+    println!(
+        "{:.2}s\t{} Hz\t{} frames\tvoice {}",
+        duration,
+        synthesis.speech.sample_rate,
+        synthesis.frames,
+        match &synthesis.voice {
+            Voice::Preset { name } => name.as_str(),
+            other => other.kind(),
+        }
+    );
 }
 
 // ---------------------------------------------------------------------------

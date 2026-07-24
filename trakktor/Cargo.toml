@@ -8,14 +8,15 @@ rust-version.workspace = true
 license.workspace = true
 
 [features]
-# GPU acceleration on macOS for `asr`, `text structify`, and `text punctuate`
-# (`--device metal`).
+# GPU acceleration on macOS for `asr`, `text structify`, `text punctuate`, and
+# `tts` (`--device metal`).
 metal = [
     "trakktor_core/whisper-metal",
     "trakktor_core/gigaam-metal",
     "trakktor_core/vosk-metal",
     "trakktor_core/structify-metal",
     "trakktor_core/punctuate-metal",
+    "trakktor_core/tts-metal",
 ]
 # The burn runtime for `asr whisper`, `asr gigaam`, `asr vosk`, `text
 # structify`, and `text punctuate` (`--runtime burn`), with its own CPU and

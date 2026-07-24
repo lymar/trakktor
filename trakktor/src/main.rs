@@ -12,6 +12,7 @@ mod output;
 mod punctuate;
 mod skill;
 mod structify;
+mod tts;
 mod vad;
 
 fn main() { std::process::exit(cli::run()); }
