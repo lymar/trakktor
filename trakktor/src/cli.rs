@@ -227,7 +227,10 @@ pub(crate) enum AsrCommand {
 pub(crate) enum TtsCommand {
     /// Synthesize speech with a Qwen3-TTS model.
     ///
-    /// Reads the text as an argument and writes spoken audio at 24 kHz. The
+    /// Reads the text as an argument (or from a file with --text-file) and
+    /// writes spoken audio at 24 kHz. The whole text is spoken as one
+    /// utterance; a very long one runs into the engine's frame ceiling and the
+    /// result then reports `truncated`. The
     /// voice is one of the model's preset speakers (see --voice) and the
     /// language is set independently of it (see --language), so any voice can
     /// speak any of the supported languages, Russian included. Generation
@@ -241,12 +244,21 @@ pub(crate) enum TtsCommand {
 
 /// Flags of `tts qwen3-tts`.
 #[derive(Args)]
+// Exactly one source of text, and the error names both when neither is given.
+#[command(group(clap::ArgGroup::new("source").required(true).args(["speech", "text_file"])))]
 pub(crate) struct Qwen3TtsArgs {
-    /// The text to speak.
+    /// The text to speak. Omit it when reading the text from a file with
+    /// --text-file.
     // The id must differ from the global `--text` flag, which clap would
     // otherwise take this for.
     #[arg(id = "speech", value_name = "text")]
-    pub(crate) text: String,
+    pub(crate) text: Option<String>,
+
+    /// Read the text to speak from a UTF-8 file instead of the argument.
+    /// Line breaks and repeated spaces are collapsed, so hard-wrapped text
+    /// reads as running prose; the whole file is spoken as one utterance.
+    #[arg(long, value_name = "path")]
+    pub(crate) text_file: Option<PathBuf>,
 
     /// Where to write the audio; the extension picks the format (`.wav` or
     /// `.flac`).

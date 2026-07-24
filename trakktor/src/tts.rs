@@ -27,7 +27,9 @@ pub(crate) fn run_qwen3_tts(
     json: bool,
     pretty: bool,
 ) -> Result<(), CliError> {
-    // Decide the container before any download, so a bad extension fails fast.
+    // Resolve the text and the container before any download, so a bad path or
+    // extension fails fast rather than after gigabytes.
+    let text = resolve_text(args.text.as_deref(), args.text_file.as_deref())?;
     let format = output_format(&args.output)?;
 
     if matches!(args.runtime, RuntimeArg::Burn) {
@@ -67,7 +69,7 @@ pub(crate) fn run_qwen3_tts(
         .then(|| args.language.clone());
 
     let synthesis = synthesizer.speak(
-        &args.text,
+        &text,
         &SynthesisOptions {
             voice: args.voice.clone(),
             language,
@@ -89,6 +91,36 @@ pub(crate) fn run_qwen3_tts(
         pretty,
     );
     Ok(())
+}
+
+/// Resolves what to speak: the argument, or the contents of `--text-file`.
+///
+/// A file is read as UTF-8 and its whitespace collapsed — a hard-wrapped
+/// paragraph should read as running prose, and the model was trained on single
+/// lines, so raw newlines only confuse its prosody.
+fn resolve_text(
+    text: Option<&str>,
+    file: Option<&Path>,
+) -> Result<String, Qwen3TtsError> {
+    if let Some(text) = text {
+        return Ok(text.to_owned());
+    }
+    // clap enforces that exactly one of the two is given; this guards the
+    // library-level contract rather than the command line.
+    let path = file.ok_or_else(|| {
+        Qwen3TtsError::InvalidOptions(
+            "pass the text as an argument or with --text-file".into(),
+        )
+    })?;
+    let raw = std::fs::read_to_string(path).map_err(|e| {
+        Qwen3TtsError::Io(format!("reading {}: {e}", path.display()))
+    })?;
+    Ok(collapse_whitespace(&raw))
+}
+
+/// Collapses every run of whitespace to a single space and trims the ends.
+fn collapse_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Picks the container from the output path's extension.
@@ -128,3 +160,6 @@ fn device(device: DeviceArg) -> Result<Device, CliError> {
         DeviceArg::Metal
     ))?)
 }
+
+#[cfg(test)]
+mod tests;

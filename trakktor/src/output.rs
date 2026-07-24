@@ -640,6 +640,12 @@ pub fn print_synthesis(
             "frames": synthesis.frames,
             "sampling": sampling.as_str(),
         });
+        if synthesis.truncated {
+            engine_block
+                .as_object_mut()
+                .expect("object")
+                .insert("truncated".into(), json!(true));
+        }
         if let Sampling::TopK {
             top_k,
             temperature,
@@ -675,13 +681,18 @@ pub fn print_synthesis(
 
     println!("{}", output.display());
     println!(
-        "{:.2}s\t{} Hz\t{} frames\tvoice {}",
+        "{:.2}s\t{} Hz\t{} frames\tvoice {}{}",
         duration,
         synthesis.speech.sample_rate,
         synthesis.frames,
         match &synthesis.voice {
             Voice::Preset { name } => name.as_str(),
             other => other.kind(),
+        },
+        if synthesis.truncated {
+            "\ttruncated"
+        } else {
+            ""
         }
     );
 }

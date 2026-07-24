@@ -574,7 +574,18 @@ runs entirely locally.
 
 ```bash
 trakktor tts qwen3-tts "Привет! Это синтез речи." --language russian -o hello.wav
+
+# or read the text from a file instead of the argument
+trakktor tts qwen3-tts --text-file article.txt --language russian -o article.wav
 ```
+
+The text comes either as the positional argument or from `--text-file` — one of
+the two, never both. A file is read as UTF-8 with its line breaks and repeated
+spaces collapsed, so hard-wrapped prose reads naturally; the whole file is
+spoken as **one utterance**, so a long document runs into the engine's frame
+ceiling (about 2.7 minutes of audio) and the result then carries
+`"truncated": true`. Splitting long text into sentences before synthesis is not
+done for you yet.
 
 The audio is always written to a file — raw samples on stdout would not survive
 the machine-readable contract — and `stdout` carries the metadata:

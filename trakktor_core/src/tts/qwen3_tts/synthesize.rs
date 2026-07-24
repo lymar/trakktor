@@ -39,6 +39,9 @@ pub struct Synthesis {
     pub language: Option<String>,
     /// Frames generated — one per 1/12.5 s of audio.
     pub frames: usize,
+    /// Whether generation stopped at the frame ceiling rather than because the
+    /// model finished speaking — the tail of the text is then missing.
+    pub truncated: bool,
 }
 
 /// A loaded engine, ready to synthesize.
@@ -149,7 +152,7 @@ impl Synthesizer {
             },
         );
 
-        let frames = self.generate(&positions, options)?;
+        let (frames, truncated) = self.generate(&positions, options)?;
         let samples = self
             .codec
             .decode(&frames)
@@ -165,6 +168,7 @@ impl Synthesizer {
             },
             language: options.language.clone(),
             frames: frames.len(),
+            truncated,
         })
     }
 
@@ -173,7 +177,7 @@ impl Synthesizer {
         &mut self,
         positions: &[prompt::Position],
         options: &SynthesisOptions,
-    ) -> Result<Vec<Vec<u32>>, Qwen3TtsError> {
+    ) -> Result<(Vec<Vec<u32>>, bool), Qwen3TtsError> {
         let fail = |what: &'static str| {
             move |e: candle_core::Error| runtime::model_err(what, e)
         };
@@ -201,6 +205,7 @@ impl Synthesizer {
         let eos = self.config.talker.codec_eos_token_id;
         let mut frames: Vec<Vec<u32>> = Vec::new();
         let mut history: Vec<u32> = Vec::new();
+        let mut truncated = false;
 
         loop {
             let mut scores = logits
@@ -219,7 +224,11 @@ impl Synthesizer {
                 repetition_penalty,
                 &forbidden,
             );
-            if first == eos || frames.len() >= options.max_frames {
+            if first == eos {
+                break;
+            }
+            if frames.len() >= options.max_frames {
+                truncated = true;
                 break;
             }
             history.push(first);
@@ -263,7 +272,7 @@ impl Synthesizer {
             state = stepped.1;
         }
 
-        Ok(frames)
+        Ok((frames, truncated))
     }
 
     /// Resolves the sampling rules for both levels.
