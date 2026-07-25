@@ -303,7 +303,8 @@ pub(crate) struct Qwen3TtsArgs {
     #[arg(long, conflicts_with_all = ["seed", "temperature", "top_k"])]
     pub(crate) greedy: bool,
 
-    /// Inference runtime executing the model.
+    /// Inference runtime executing the model. The burn runtime computes in
+    /// f32 only, so pair it with `--precision f32`.
     #[arg(
         long,
         value_enum,
@@ -322,17 +323,14 @@ pub(crate) struct Qwen3TtsArgs {
     )]
     pub(crate) device: DeviceArg,
 
-    /// Compute precision of the speech model. `bf16` uses about half the
-    /// memory and matches how the weights are stored; `f32` runs in full
-    /// precision and is reproducible. The codec always runs in full precision
-    /// either way.
-    #[arg(
-        long,
-        value_enum,
-        default_value_t = TtsPrecisionArg::Bf16,
-        value_name = "precision"
-    )]
-    pub(crate) precision: TtsPrecisionArg,
+    /// Compute precision of the speech model. The default depends on the
+    /// runtime: `bf16` on candle (about half the memory, and the format the
+    /// weights are stored in — this is what keeps the larger model within a
+    /// 16 GB machine on Metal), `f32` on burn, which computes in `f32` only.
+    /// Pass `f32` for full precision and reproducible results. The codec
+    /// always runs in full precision either way.
+    #[arg(long, value_enum, value_name = "precision")]
+    pub(crate) precision: Option<TtsPrecisionArg>,
 }
 
 /// The `--precision` value of `tts qwen3-tts`.
@@ -343,9 +341,9 @@ pub(crate) struct Qwen3TtsArgs {
 /// generation and the run degenerates into babble.
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum TtsPrecisionArg {
-    /// Half precision, as the weights are stored (the default).
+    /// Half precision, as the weights are stored (the candle default).
     Bf16,
-    /// Full precision: reproducible, at twice the memory.
+    /// Full precision: reproducible, at twice the memory (the burn default).
     F32,
 }
 

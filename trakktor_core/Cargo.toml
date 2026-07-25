@@ -86,6 +86,10 @@ tts-runtime = [
     "dep:tokenizers",
     "audio",
 ]
+# The burn-backed alternative Qwen3-TTS runtime, selectable at run time next to
+# the candle one. Builds on top of the candle runtime (shared checkpoint reader
+# and model plumbing).
+tts-burn = ["tts-runtime", "dep:burn"]
 # GPU acceleration for the Whisper runtime.
 whisper-metal = ["whisper-runtime", "candle-core/metal", "candle-nn/metal"]
 whisper-cuda = ["whisper-runtime", "candle-core/cuda", "candle-nn/cuda"]

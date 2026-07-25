@@ -6,11 +6,22 @@
 //! read from the checkpoint rather than embedded here. That keeps one code path
 //! serving every published variant.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, path::Path};
 
 use serde_json::Value;
 
 use super::error::Qwen3TtsError;
+
+/// Reads a file from a checkpoint directory.
+pub(super) fn read(
+    model_dir: &Path,
+    name: &str,
+) -> Result<String, Qwen3TtsError> {
+    let path = model_dir.join(name);
+    std::fs::read_to_string(&path).map_err(|e| {
+        Qwen3TtsError::InvalidModel(format!("reading {}: {e}", path.display()))
+    })
+}
 
 /// Which conditioning path a checkpoint was trained for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -156,6 +167,16 @@ pub struct ModelConfig {
 }
 
 impl ModelConfig {
+    /// Reads and parses a checkpoint's `config.json`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Qwen3TtsError::InvalidModel`] when the file is missing or
+    /// malformed; see [`parse`](Self::parse).
+    pub fn read(model_dir: &Path) -> Result<Self, Qwen3TtsError> {
+        Self::parse(&read(model_dir, "config.json")?)
+    }
+
     /// Parses a checkpoint's `config.json`.
     ///
     /// # Errors
@@ -266,6 +287,13 @@ impl ModelConfig {
     }
 }
 
+/// The file holding the codec's geometry inside a checkpoint directory.
+pub const CODEC_CONFIG: &str = "speech_tokenizer/config.json";
+/// The file holding the codec's weights inside a checkpoint directory.
+pub const CODEC_WEIGHTS: &str = "speech_tokenizer/model.safetensors";
+/// The file holding the talker's weights inside a checkpoint directory.
+pub const TALKER_WEIGHTS: &str = "model.safetensors";
+
 /// Geometry of the codec decoder, read from `speech_tokenizer/config.json`.
 ///
 /// Only the decoding half is modelled: turning frames of codes back into a
@@ -308,6 +336,26 @@ pub struct CodecConfig {
 }
 
 impl CodecConfig {
+    /// Reads and parses the codec's `speech_tokenizer/config.json`, checking
+    /// that its upsampling stages account for the declared frame rate.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Qwen3TtsError::InvalidModel`] when the file is missing or
+    /// malformed, or the stages do not multiply out.
+    pub fn read(model_dir: &Path) -> Result<Self, Qwen3TtsError> {
+        let cfg = Self::parse(&read(model_dir, CODEC_CONFIG)?)?;
+        if cfg.total_upsample() != cfg.decode_upsample_rate {
+            return Err(Qwen3TtsError::InvalidModel(format!(
+                "codec upsampling stages multiply to {} but the config \
+                 declares {}",
+                cfg.total_upsample(),
+                cfg.decode_upsample_rate
+            )));
+        }
+        Ok(cfg)
+    }
+
     /// Parses `speech_tokenizer/config.json`.
     ///
     /// # Errors
@@ -403,6 +451,16 @@ impl Default for GenerationDefaults {
 }
 
 impl GenerationDefaults {
+    /// Reads and parses a checkpoint's `generation_config.json`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Qwen3TtsError::InvalidModel`] when the file is missing or
+    /// malformed.
+    pub fn read(model_dir: &Path) -> Result<Self, Qwen3TtsError> {
+        Self::parse(&read(model_dir, "generation_config.json")?)
+    }
+
     /// Parses `generation_config.json`, falling back to the reference defaults
     /// for anything it does not state.
     ///

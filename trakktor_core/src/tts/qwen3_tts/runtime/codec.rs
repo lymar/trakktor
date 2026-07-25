@@ -20,12 +20,10 @@ use super::layers::{
     CausalConv1d, CausalConvTranspose1d, LayerScale, RmsNorm, SnakeBeta,
     rope_tables, rotate_half,
 };
-use crate::tts::qwen3_tts::config::CodecConfig;
-
-/// Frames decoded per chunk, and the frames of left context each chunk carries.
-/// Both come from the reference; changing either changes the output.
-const CHUNK_FRAMES: usize = 300;
-const LEFT_CONTEXT_FRAMES: usize = 25;
+use crate::tts::qwen3_tts::{
+    chunking::{chunk_plan, window_visible},
+    config::CodecConfig,
+};
 
 /// Guard on the divisor when turning accumulated codebook sums into entries.
 const CLUSTER_USAGE_EPS: f64 = 1e-5;
@@ -556,8 +554,7 @@ impl CodecDecoder {
         let upsample = self.cfg.decode_upsample_rate;
         let mut wave: Vec<f32> = Vec::with_capacity(total * upsample);
         for chunk in chunk_plan(total) {
-            let span = chunk.end - chunk.context_start();
-            let codes = codes.narrow(1, chunk.context_start(), span)?;
+            let codes = codes.narrow(1, chunk.context_start(), chunk.span())?;
             let mut decoded = self.forward(&codes)?;
             // Drop the samples the context produced; they only prime the
             // convolutions.
@@ -628,53 +625,12 @@ fn sliding_window_mask(
     let mut mask = vec![0f32; frames * frames];
     for query in 0..frames {
         for key in 0..frames {
-            let visible = key <= query && key + window > query;
-            if !visible {
+            if !window_visible(query, key, window) {
                 mask[query * frames + key] = f32::NEG_INFINITY;
             }
         }
     }
     Tensor::from_vec(mask, (1, 1, frames, frames), device)
-}
-
-/// One chunk of a long decode: the frames to emit and the context before them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Chunk {
-    /// First frame whose samples are kept.
-    start: usize,
-    /// One past the last frame whose samples are kept.
-    end: usize,
-    /// Frames of context decoded before `start` and then discarded.
-    context: usize,
-}
-
-impl Chunk {
-    /// First frame fed to the network, context included.
-    fn context_start(self) -> usize { self.start - self.context }
-}
-
-/// Splits `total` frames the way the reference splits them: fixed-size chunks,
-/// each (after the first) primed with a fixed left context.
-fn chunk_plan(total: usize) -> Vec<Chunk> {
-    let mut chunks = Vec::new();
-    let mut start = 0usize;
-    while start < total {
-        let end = (start + CHUNK_FRAMES).min(total);
-        // The first chunk has nothing to its left; later ones carry the fixed
-        // context, bounded by how many frames actually precede them.
-        let context = if start > LEFT_CONTEXT_FRAMES {
-            LEFT_CONTEXT_FRAMES
-        } else {
-            start
-        };
-        chunks.push(Chunk {
-            start,
-            end,
-            context,
-        });
-        start = end;
-    }
-    chunks
 }
 
 #[cfg(test)]

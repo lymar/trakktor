@@ -183,7 +183,8 @@ section.
 ```
 
 All three engines execute their network on the [candle](https://github.com/huggingface/candle)
-runtime by default. An alternative [burn](https://github.com/tracel-ai/burn)
+runtime by default (as do `text structify`, `text punctuate`, and
+`tts qwen3-tts`). An alternative [burn](https://github.com/tracel-ai/burn)
 runtime is available behind the `burn` build feature and selected per run with
 `--runtime burn` (candle needs nothing extra; burn brings its own Metal
 backend, independent of the `metal` feature). Both runtimes produce the same
@@ -622,7 +623,9 @@ the finished frames into a 24 kHz waveform.
 | `--seed <int>` | `0` | Makes a sampled run repeatable. |
 | `--temperature`, `--top-k`, `--repetition-penalty` | `0.9`, `50`, `1.05` | Sampling controls. |
 | `--greedy` | off | Take the most likely code instead of sampling — deterministic, usually flatter. |
-| `--precision <bf16\|f32>` | `bf16` | `bf16` is the format the weights are stored in and what the reference runs; `f32` doubles the memory and is reproducible. The codec always runs in full precision. |
+| `--precision <bf16\|f32>` | `bf16` on candle, `f32` on burn | **Runtime-dependent default.** `bf16` is the format the weights are stored in and what the reference runs — and what keeps `1.7b-customvoice` within a 16 GB machine on Metal; `f32` doubles the memory and is reproducible, and is the *only* precision the burn runtime serves. The codec always runs in full precision either way. |
+| `--runtime <candle\|burn>` | `candle` | Inference runtime; burn needs the `burn` build feature and computes in f32 only. |
+| `--device <cpu\|metal>` | `cpu` | Compute device; `metal` needs the `metal` build feature (burn brings its own). |
 
 Any voice can speak any supported language: the language is a separate
 conditioning token, not a property of the timbre. Russian is supported
@@ -640,7 +643,30 @@ recommended way to run it — the CPU path is impractically slow for anything
 past a short phrase.
 
 `1.7b-customvoice` needs roughly 4.5 GB of memory in `bf16` and about twice
-that in `f32`; on a 16 GB machine only `bf16` is practical for it.
+that in `f32`; on a 16 GB machine only `bf16` is practical for it on candle,
+which is why `bf16` is the default there — including on Metal, where it is what
+keeps the large model in memory. (burn is the exception: it runs the same model
+in `f32` on Metal within 16 GB; see Runtime below.)
+
+#### Runtime
+
+The alternative [burn](https://github.com/tracel-ai/burn) runtime (see the
+Runtime section under `asr`) runs this engine too, with one restriction: **it
+computes in f32 only**. You need not pass `--precision` for it — the default is
+runtime-dependent, `f32` whenever `--runtime burn` is selected and `bf16` on
+candle. Half precision is unavailable on burn from below: its Metal backend
+cannot compile `bf16` kernels, and `f16` is excluded by the model itself — so
+`--precision bf16 --runtime burn` is a validation error rather than a silent
+downgrade.
+
+Both runtimes pick the same codes in `--greedy --precision f32`, and the
+waveforms are indistinguishable (cosine 1.0000000000); burn additionally
+reproduces byte-for-byte between its own runs. On speed the trade is the
+opposite of the encoders': generation is one frame at a time over many tiny
+passes, which suits candle's lower per-operation overhead, so burn is around
+1.25× slower per frame and slower to load. What burn can do and candle cannot
+is run `1.7b-customvoice` in **full precision on Metal** within 16 GB — for
+that, `--runtime burn --precision f32`.
 
 ## `vad` — voice-activity audio editing
 
@@ -1059,8 +1085,9 @@ Apache-licensed:
   runtime.
 - **`tts qwen3-tts`** — [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS)
   (Apache-2.0) by the Alibaba Qwen team: the 12 Hz talker, residual code
-  predictor, and codec decoder, ported to the same candle runtime. Model
-  weights and the bundled speech tokenizer are downloaded at runtime. Technical
+  predictor, and codec decoder, ported to the same candle runtime, with the
+  same optional burn runtime. Model weights and the bundled speech tokenizer
+  are downloaded at runtime. Technical
   report: [arXiv:2601.15621](https://arxiv.org/abs/2601.15621).
 - **`vad`, and `asr --vad`** — [Silero-VAD](https://github.com/snakers4/silero-vad)
   (MIT): the ported speech detector behind both the audio editing commands and

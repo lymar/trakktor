@@ -6,17 +6,18 @@
 //! back into the talker's next input. When the talker calls an end to the
 //! speech, the collected frames go to the codec decoder and come back as a
 //! waveform.
+//!
+//! Nothing here touches a tensor: the networks sit behind [`SpeechModel`], so
+//! this loop reads the same on either runtime.
 
 use std::path::Path;
 
-use candle_core::{Device, Tensor};
-
 use super::{
-    Precision, Sampling, SynthesisOptions,
+    Sampling, SynthesisOptions,
     config::{GenerationDefaults, ModelConfig, ModelType},
     error::Qwen3TtsError,
+    model::SpeechModel,
     prompt::{self, PromptSpec},
-    runtime::{self, CodecDecoder, Talker},
     sampler::{Rule, Sampler},
     tokenizer::TextTokenizer,
 };
@@ -49,8 +50,7 @@ pub struct Synthesizer {
     config: ModelConfig,
     defaults: GenerationDefaults,
     tokenizer: TextTokenizer,
-    talker: Talker,
-    codec: CodecDecoder,
+    model: Box<dyn SpeechModel>,
     /// The newline that closes the prompt's opening role.
     newline_id: u32,
     /// Codes the talker must never emit for codebook 0.
@@ -58,10 +58,8 @@ pub struct Synthesizer {
 }
 
 impl Synthesizer {
-    /// Loads a checkpoint directory onto `device`.
-    ///
-    /// The talker and the code predictor run at `precision`; the codec decoder
-    /// always runs in full precision.
+    /// Wraps a loaded runtime with everything around it: the tokenizer, the
+    /// checkpoint's sampling defaults, and the codes the talker may not emit.
     ///
     /// # Errors
     ///
@@ -70,10 +68,9 @@ impl Synthesizer {
     /// [`Qwen3TtsError::Tokenizer`] when the tokenizer cannot be assembled.
     pub fn load(
         model_dir: &Path,
-        device: Device,
-        precision: Precision,
+        model: Box<dyn SpeechModel>,
     ) -> Result<Self, Qwen3TtsError> {
-        let config = ModelConfig::parse(&read(model_dir, "config.json")?)?;
+        let config = model.config().clone();
         if config.model_type != ModelType::CustomVoice {
             return Err(Qwen3TtsError::InvalidModel(format!(
                 "this checkpoint conditions the voice in a way the engine \
@@ -81,10 +78,7 @@ impl Synthesizer {
                 config.model_type
             )));
         }
-        let defaults = GenerationDefaults::parse(&read(
-            model_dir,
-            "generation_config.json",
-        )?)?;
+        let defaults = GenerationDefaults::read(model_dir)?;
 
         let tokenizer = TextTokenizer::load(
             &model_dir.join("vocab.json"),
@@ -98,16 +92,12 @@ impl Synthesizer {
             )
         })?;
 
-        let talker = load_talker(model_dir, &config, &device, precision)?;
-        let codec = runtime::load_codec(model_dir, device)?;
-
         let forbidden = forbidden_codes(&config);
         Ok(Self {
             config,
             defaults,
             tokenizer,
-            talker,
-            codec,
+            model,
             newline_id,
             forbidden,
         })
@@ -153,15 +143,12 @@ impl Synthesizer {
         );
 
         let (frames, truncated) = self.generate(&positions, options)?;
-        let samples = self
-            .codec
-            .decode(&frames)
-            .map_err(|e| runtime::model_err("decoding the codec frames", e))?;
+        let samples = self.model.decode(&frames)?;
 
         Ok(Synthesis {
             speech: Speech {
                 samples,
-                sample_rate: self.codec.sample_rate(),
+                sample_rate: self.model.sample_rate(),
             },
             voice: Voice::Preset {
                 name: options.voice.clone(),
@@ -178,29 +165,11 @@ impl Synthesizer {
         positions: &[prompt::Position],
         options: &SynthesisOptions,
     ) -> Result<(Vec<Vec<u32>>, bool), Qwen3TtsError> {
-        let fail = |what: &'static str| {
-            move |e: candle_core::Error| runtime::model_err(what, e)
-        };
-
-        self.talker.reset();
-        let prompt_embeds = self
-            .embed_prompt(positions)
-            .map_err(fail("embedding the prompt"))?;
-        // During generation the text track has nothing left to say and simply
-        // pads; the codec track carries the frames.
-        let pad_embed = self
-            .talker
-            .embed_text(&[self.config.tts_pad_token_id])
-            .map_err(fail("embedding the text padding"))?;
-
         let (talker_rule, predictor_rule, repetition_penalty, seed) =
             self.rules(options);
         let mut sampler = Sampler::new(seed);
 
-        let (mut logits, mut state) = self
-            .talker
-            .forward(&prompt_embeds)
-            .map_err(fail("priming the talker"))?;
+        let mut logits = self.model.prime(positions)?;
 
         let eos = self.config.talker.codec_eos_token_id;
         let mut frames: Vec<Vec<u32>> = Vec::new();
@@ -208,9 +177,6 @@ impl Synthesizer {
         let mut truncated = false;
 
         loop {
-            let mut scores = logits
-                .to_vec1::<f32>()
-                .map_err(fail("reading the logits"))?;
             // Holding the speech open for the first frames keeps a model that
             // opens with the end code from returning silence.
             let mut forbidden = self.forbidden.clone();
@@ -218,7 +184,7 @@ impl Synthesizer {
                 forbidden.push(eos);
             }
             let first = sampler.pick(
-                &mut scores,
+                &mut logits,
                 talker_rule,
                 &history,
                 repetition_penalty,
@@ -235,41 +201,18 @@ impl Synthesizer {
 
             // The code predictor fills the rest of this frame, conditioned on
             // the talker's state and the code it just picked.
-            let mut residual_error = None;
-            let residuals = self
-                .talker
-                .predict_residuals(&state, first, |logits, _step| {
-                    let mut scores = logits.to_vec1::<f32>()?;
-                    Ok(sampler.pick(&mut scores, predictor_rule, &[], 1.0, &[]))
-                })
-                .map_err(|e| {
-                    residual_error = Some(e);
-                    runtime::model_err(
-                        "predicting the residual codebooks",
-                        residual_error.take().expect("just set"),
-                    )
+            let residuals =
+                self.model.predict_residuals(first, &mut |scores, _step| {
+                    let mut scores = scores.to_vec();
+                    sampler.pick(&mut scores, predictor_rule, &[], 1.0, &[])
                 })?;
 
             let mut frame = Vec::with_capacity(residuals.len() + 1);
             frame.push(first);
             frame.extend_from_slice(&residuals);
 
-            // The finished frame folds into one embedding and, with the text
-            // track's padding, becomes the talker's next input.
-            let folded = self
-                .talker
-                .fold_frame(&frame)
-                .map_err(fail("folding the frame"))?;
-            let next =
-                (folded + &pad_embed).map_err(fail("adding the padding"))?;
+            logits = self.model.advance(&frame)?;
             frames.push(frame);
-
-            let stepped = self
-                .talker
-                .forward(&next)
-                .map_err(fail("advancing the talker"))?;
-            logits = stepped.0;
-            state = stepped.1;
         }
 
         Ok((frames, truncated))
@@ -306,44 +249,6 @@ impl Synthesizer {
             ),
         }
     }
-
-    /// Embeds a laid-out prompt into `[1, positions, hidden]`.
-    fn embed_prompt(
-        &self,
-        positions: &[prompt::Position],
-    ) -> candle_core::Result<Tensor> {
-        // Every position drives the text track; only the opening role, a
-        // prefix, leaves the codec track silent.
-        let text_ids: Vec<u32> = positions
-            .iter()
-            .filter_map(|position| position.text)
-            .collect();
-        let lead = positions
-            .iter()
-            .take_while(|position| position.codec.is_none())
-            .count();
-        let codec_ids: Vec<u32> = positions
-            .iter()
-            .filter_map(|position| position.codec)
-            .collect();
-        debug_assert_eq!(text_ids.len(), positions.len());
-        debug_assert_eq!(codec_ids.len() + lead, positions.len());
-
-        let text = self.talker.embed_text(&text_ids)?;
-        let codec = self.talker.embed_codec(&codec_ids)?;
-        let hidden = text.dim(2)?;
-        let silent =
-            Tensor::zeros((1, lead, hidden), codec.dtype(), codec.device())?;
-        text + Tensor::cat(&[&silent, &codec], 1)?
-    }
-}
-
-/// Reads a file from the checkpoint directory.
-fn read(model_dir: &Path, name: &str) -> Result<String, Qwen3TtsError> {
-    let path = model_dir.join(name);
-    std::fs::read_to_string(&path).map_err(|e| {
-        Qwen3TtsError::InvalidModel(format!("reading {}: {e}", path.display()))
-    })
 }
 
 /// The codes the talker must never emit for codebook 0.
@@ -356,34 +261,6 @@ fn forbidden_codes(config: &ModelConfig) -> Vec<u32> {
     (predictor_vocab..vocab)
         .filter(|code| *code != config.talker.codec_eos_token_id)
         .collect()
-}
-
-/// Loads the talker from a checkpoint directory.
-fn load_talker(
-    model_dir: &Path,
-    config: &ModelConfig,
-    device: &Device,
-    precision: Precision,
-) -> Result<Talker, Qwen3TtsError> {
-    let weights = model_dir.join("model.safetensors");
-    if !weights.is_file() {
-        return Err(Qwen3TtsError::InvalidModel(format!(
-            "no {} in the checkpoint",
-            weights.display()
-        )));
-    }
-    // SAFETY: the checkpoint is memory-mapped read-only; candle requires the
-    // file not to be mutated while mapped, which nothing here does.
-    let vb = unsafe {
-        candle_nn::VarBuilder::from_mmaped_safetensors(
-            &[&weights],
-            precision.dtype(),
-            device,
-        )
-        .map_err(|e| runtime::model_err(&weights.display().to_string(), e))?
-    };
-    Talker::load(&config.talker, vb, device.clone(), precision.dtype())
-        .map_err(|e| runtime::model_err("loading the talker", e))
 }
 
 #[cfg(test)]

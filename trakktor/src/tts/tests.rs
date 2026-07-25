@@ -45,6 +45,45 @@ fn neither_source_is_an_options_error() {
 }
 
 #[test]
+fn the_precision_default_follows_the_runtime() {
+    use crate::cli::{RuntimeArg, TtsPrecisionArg};
+
+    // Unspecified: candle keeps bf16, burn falls to the only precision it
+    // serves.
+    assert_eq!(
+        resolve_precision(None, RuntimeArg::Candle).expect("candle default"),
+        Precision::Bf16
+    );
+    assert_eq!(
+        resolve_precision(None, RuntimeArg::Burn).expect("burn default"),
+        Precision::F32
+    );
+
+    // An explicit choice is honored on candle, either way.
+    assert_eq!(
+        resolve_precision(Some(TtsPrecisionArg::F32), RuntimeArg::Candle)
+            .expect("candle f32"),
+        Precision::F32
+    );
+    assert_eq!(
+        resolve_precision(Some(TtsPrecisionArg::Bf16), RuntimeArg::Candle)
+            .expect("candle bf16"),
+        Precision::Bf16
+    );
+
+    // f32 is fine on burn; bf16 is rejected rather than downgraded.
+    assert_eq!(
+        resolve_precision(Some(TtsPrecisionArg::F32), RuntimeArg::Burn)
+            .expect("burn f32"),
+        Precision::F32
+    );
+    assert!(
+        resolve_precision(Some(TtsPrecisionArg::Bf16), RuntimeArg::Burn)
+            .is_err()
+    );
+}
+
+#[test]
 fn the_output_extension_picks_the_container() {
     assert!(matches!(
         output_format(Path::new("a.wav")).expect("wav"),

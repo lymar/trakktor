@@ -122,10 +122,10 @@ candle / candle-transformers — Apache-2.0 OR MIT License
 burn — Apache-2.0 OR MIT License
   Copyright (c) 2022 Nathaniel Simard & Burn Framework Contributors
   https://github.com/tracel-ai/burn
-  The alternative `asr whisper`, `asr gigaam`, `asr vosk`, `text structify`, and
-  `text punctuate` runtimes (`--runtime burn`) execute the Whisper, GigaAM,
-  Zipformer2, SaT, and punctuation networks on burn's ndarray (CPU) and
-  wgpu/Metal backends.
+  The alternative `asr whisper`, `asr gigaam`, `asr vosk`, `text structify`,
+  `text punctuate`, and `tts qwen3-tts` runtimes (`--runtime burn`) execute the
+  Whisper, GigaAM, Zipformer2, SaT, punctuation, and Qwen3-TTS networks on
+  burn's ndarray (CPU) and wgpu/Metal backends.
 
 XLM-RoBERTa (FacebookAI/xlm-roberta-base) — MIT License
   https://huggingface.co/FacebookAI/xlm-roberta-base

@@ -22,11 +22,15 @@
 //! bundled speech tokenizer. The speaker-verification network used for voice
 //! cloning follows **ECAPA-TDNN** (Desplanques, Thienpondt, and Demuynck).
 
+mod chunking;
 pub mod config;
 pub mod download;
 mod error;
+mod model;
 pub mod prompt;
 pub mod runtime;
+#[cfg(feature = "tts-burn")]
+pub mod runtime_burn;
 mod sampler;
 mod synthesize;
 mod tokenizer;
@@ -39,6 +43,7 @@ pub use download::{
     KNOWN_MODELS, KnownModel, REQUIRED_FILES, ResolvedModel, resolve_model,
 };
 pub use error::Qwen3TtsError;
+pub use model::SpeechModel;
 pub use synthesize::{Synthesis, Synthesizer};
 pub use tokenizer::TextTokenizer;
 

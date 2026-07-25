@@ -5,8 +5,8 @@ use std::path::Path;
 use trakktor_core::{
     audio::encode::Format,
     tts::qwen3_tts::{
-        self, Precision, Qwen3TtsError, Sampling, SynthesisOptions,
-        Synthesizer, runtime::Device,
+        self, Precision, Qwen3TtsError, Sampling, SpeechModel,
+        SynthesisOptions, Synthesizer, runtime::Device,
     },
 };
 
@@ -27,18 +27,12 @@ pub(crate) fn run_qwen3_tts(
     json: bool,
     pretty: bool,
 ) -> Result<(), CliError> {
-    // Resolve the text and the container before any download, so a bad path or
-    // extension fails fast rather than after gigabytes.
+    // Resolve the text, the container, and the precision before any download,
+    // so a bad path, a bad extension, or a precision the runtime cannot serve
+    // fails fast rather than after gigabytes.
     let text = resolve_text(args.text.as_deref(), args.text_file.as_deref())?;
     let format = output_format(&args.output)?;
-
-    if matches!(args.runtime, RuntimeArg::Burn) {
-        return Err(Qwen3TtsError::InvalidOptions(
-            "this engine has no burn runtime yet; use `--runtime candle`"
-                .into(),
-        )
-        .into());
-    }
+    let precision = resolve_precision(args.precision, args.runtime)?;
 
     let resolved = qwen3_tts::resolve_model(
         model_dir,
@@ -46,12 +40,15 @@ pub(crate) fn run_qwen3_tts(
         &mut crate::asr::progress::download_progress(),
     )?;
 
-    let device = device(args.device)?;
-    let precision = match args.precision {
-        TtsPrecisionArg::Bf16 => Precision::Bf16,
-        TtsPrecisionArg::F32 => Precision::F32,
+    let model: Box<dyn SpeechModel> = match args.runtime {
+        RuntimeArg::Candle => Box::new(qwen3_tts::runtime::load(
+            &resolved.dir,
+            device(args.device)?,
+            precision,
+        )?),
+        RuntimeArg::Burn => load_burn(&resolved.dir, args.device, precision)?,
     };
-    let mut synthesizer = Synthesizer::load(&resolved.dir, device, precision)?;
+    let mut synthesizer = Synthesizer::load(&resolved.dir, model)?;
 
     let sampling = if args.greedy {
         Sampling::Greedy
@@ -85,12 +82,78 @@ pub(crate) fn run_qwen3_tts(
         &args.output,
         format_name(format),
         &resolved.label(),
-        "candle",
+        runtime_name(args.runtime),
         &sampling,
         json,
         pretty,
     );
     Ok(())
+}
+
+/// Loads the model on the burn runtime (builds with the `burn` feature); the
+/// burn Metal backend is independent of the candle `metal` feature.
+#[cfg(feature = "burn")]
+fn load_burn(
+    model_dir: &Path,
+    device: DeviceArg,
+    precision: Precision,
+) -> Result<Box<dyn SpeechModel>, CliError> {
+    use trakktor_core::tts::qwen3_tts::runtime_burn;
+    let load = match device {
+        DeviceArg::Cpu => runtime_burn::load_cpu,
+        DeviceArg::Metal => {
+            crate::burn_notice::announce_cold_gpu_start();
+            runtime_burn::load_metal
+        },
+    };
+    Ok(load(model_dir, precision)?)
+}
+
+/// Resolves the compute precision, whose default depends on the runtime: burn
+/// serves `f32` only, so that is its default; candle keeps the reference's
+/// `bf16`. Asking burn for `bf16` explicitly is rejected rather than quietly
+/// downgraded.
+fn resolve_precision(
+    precision: Option<TtsPrecisionArg>,
+    runtime: RuntimeArg,
+) -> Result<Precision, CliError> {
+    Ok(match (precision, runtime) {
+        (Some(TtsPrecisionArg::F32), _) => Precision::F32,
+        (Some(TtsPrecisionArg::Bf16), RuntimeArg::Candle) => Precision::Bf16,
+        (Some(TtsPrecisionArg::Bf16), RuntimeArg::Burn) => {
+            return Err(Qwen3TtsError::InvalidOptions(
+                "the burn runtime computes in f32 only; use `--precision \
+                 f32`, or `--runtime candle` for bf16"
+                    .into(),
+            )
+            .into());
+        },
+        // Unspecified: burn serves only f32; candle keeps the reference's bf16.
+        (None, RuntimeArg::Burn) => Precision::F32,
+        (None, RuntimeArg::Candle) => Precision::Bf16,
+    })
+}
+
+/// Without the `burn` feature, `--runtime burn` is a validation error.
+#[cfg(not(feature = "burn"))]
+fn load_burn(
+    _model_dir: &Path,
+    _device: DeviceArg,
+    _precision: Precision,
+) -> Result<Box<dyn SpeechModel>, CliError> {
+    Err(CliError::from(Qwen3TtsError::InvalidOptions(
+        "this build has no burn runtime; install or build trakktor with the \
+         `burn` feature"
+            .into(),
+    )))
+}
+
+/// The name of a runtime, as the output contract spells it.
+fn runtime_name(runtime: RuntimeArg) -> &'static str {
+    match runtime {
+        RuntimeArg::Candle => "candle",
+        RuntimeArg::Burn => "burn",
+    }
 }
 
 /// Resolves what to speak: the argument, or the contents of `--text-file`.
