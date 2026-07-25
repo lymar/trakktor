@@ -233,6 +233,174 @@ pub fn paragraph_spans(
     spans
 }
 
+/// Threshold-search steps. Twenty halvings resolve the interval far finer than
+/// the probabilities themselves distinguish, and each step is arithmetic over
+/// a vector the network already produced.
+const THRESHOLD_STEPS: usize = 20;
+
+/// Splits text into pieces that each fit `budget`, with as few cuts as
+/// possible.
+///
+/// Two steps, and they answer different questions. **Where may a cut fall** —
+/// lowering the threshold can only *add* boundaries, so "does this threshold
+/// fit the budget" is monotone in it, and a binary search finds the highest
+/// threshold that still fits (starting from `max_threshold`, the caller's
+/// ordinary paragraph threshold — nothing coarser is wanted). Every cut is then
+/// as strong a boundary as the text offers. **How many cuts are actually
+/// needed** — the threshold that makes the worst piece fit usually chops the
+/// rest finer than necessary, so neighbouring pieces are greedily merged back
+/// while they still fit. Left to right, that is the fewest pieces those
+/// boundaries admit.
+///
+/// When even the model's finest boundaries leave a piece over budget — one long
+/// sentence, a run without punctuation — that piece is cut without the model
+/// (see [`hard_split`]). The guarantee that every piece fits rests on that
+/// step, not on the network.
+#[must_use]
+pub fn split_to_budget(
+    chars: &[char],
+    char_probs: &[f32],
+    max_threshold: f32,
+    budget: usize,
+    cost: &dyn Fn(&str) -> usize,
+) -> Vec<String> {
+    // Fewest cuts of all is none: text that fits comes back whole.
+    let whole: String = chars.iter().collect();
+    let whole = whole.trim();
+    if whole.is_empty() {
+        return Vec::new();
+    }
+    if cost(whole) <= budget {
+        return vec![whole.to_owned()];
+    }
+
+    let fits = |threshold: f32| -> Option<Vec<String>> {
+        let pieces = pieces_at(chars, char_probs, threshold);
+        pieces
+            .iter()
+            .all(|piece| cost(piece) <= budget)
+            .then_some(pieces)
+    };
+
+    if let Some(pieces) = fits(max_threshold) {
+        return merge_to_budget(pieces, budget, cost);
+    }
+
+    let (mut low, mut high) = (0.0f32, max_threshold);
+    let mut best = fits(low);
+    for _ in 0..THRESHOLD_STEPS {
+        let middle = (low + high) / 2.0;
+        match fits(middle) {
+            Some(pieces) => {
+                best = Some(pieces);
+                low = middle;
+            },
+            None => high = middle,
+        }
+    }
+
+    let pieces = best.unwrap_or_else(|| {
+        pieces_at(chars, char_probs, 0.0)
+            .iter()
+            .flat_map(|piece| hard_split(piece, budget, cost))
+            .collect()
+    });
+    merge_to_budget(pieces, budget, cost)
+}
+
+/// Merges neighbouring pieces while the result still fits, left to right.
+fn merge_to_budget(
+    pieces: Vec<String>,
+    budget: usize,
+    cost: &dyn Fn(&str) -> usize,
+) -> Vec<String> {
+    let mut merged: Vec<String> = Vec::with_capacity(pieces.len());
+    for piece in pieces {
+        let Some(last) = merged.last_mut() else {
+            merged.push(piece);
+            continue;
+        };
+        let joined = format!("{last} {piece}");
+        if cost(&joined) <= budget {
+            *last = joined;
+        } else {
+            merged.push(piece);
+        }
+    }
+    merged
+}
+
+/// The pieces a threshold cuts the text into, trimmed and without empties.
+fn pieces_at(
+    chars: &[char],
+    char_probs: &[f32],
+    threshold: f32,
+) -> Vec<String> {
+    paragraph_spans(chars, char_probs, threshold)
+        .into_iter()
+        .map(|span| trim_span(chars, span))
+        .filter(|span| span.end > span.start)
+        .map(|span| chars[span.start..span.end].iter().collect())
+        .collect()
+}
+
+/// Halves a piece until every part fits, cutting at the sentence end nearest
+/// the middle, else the nearest space, else the middle itself. The last resort
+/// when the model offers no boundary at all.
+fn hard_split(
+    text: &str,
+    budget: usize,
+    cost: &dyn Fn(&str) -> usize,
+) -> Vec<String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() < 2 || cost(text) <= budget {
+        return vec![text.to_owned()];
+    }
+
+    let at = cut_point(&chars);
+    let (head, tail) = chars.split_at(at);
+    let mut pieces = hard_split(&head.iter().collect::<String>(), budget, cost);
+    pieces.extend(hard_split(&tail.iter().collect::<String>(), budget, cost));
+    pieces
+}
+
+/// Where to cut a piece in two: after the sentence end closest to the middle,
+/// else after the closest space, else at the middle. Always strictly inside the
+/// piece, so halving terminates.
+fn cut_point(chars: &[char]) -> usize {
+    let middle = chars.len() / 2;
+    let sentence_end = |index: usize| {
+        matches!(chars[index], '.' | '!' | '?' | '…' | ';' | ':') &&
+            chars.get(index + 1).is_none_or(|next| next.is_whitespace())
+    };
+    let at = nearest(chars.len(), middle, sentence_end)
+        .or_else(|| {
+            nearest(chars.len(), middle, |index| chars[index].is_whitespace())
+        })
+        .map_or(middle, |index| index + 1);
+    at.clamp(1, chars.len() - 1)
+}
+
+/// The index nearest `middle` that satisfies `matches`, scanning outward in
+/// both directions.
+fn nearest(
+    len: usize,
+    middle: usize,
+    matches: impl Fn(usize) -> bool,
+) -> Option<usize> {
+    (0..len).find_map(|step| {
+        let before = middle.checked_sub(step);
+        let after = middle + step;
+        before
+            .filter(|&index| matches(index))
+            .or_else(|| (after < len && matches(after)).then_some(after))
+    })
+}
+
 /// Trims leading/trailing whitespace off a character range, returning the
 /// tightened range (empty if all whitespace).
 #[must_use]

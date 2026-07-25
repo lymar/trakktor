@@ -1,26 +1,36 @@
 //! `tts qwen3-tts`: flag mapping, model resolution, and the synthesis run.
 
-use std::path::Path;
+use std::{
+    io::Read,
+    path::{Path, PathBuf},
+    time::Instant,
+};
 
 use trakktor_core::{
-    audio::encode::Format,
-    tts::qwen3_tts::{
-        self, Precision, Qwen3TtsError, Sampling, SpeechModel,
-        SynthesisOptions, Synthesizer, runtime::Device,
+    audio::encode,
+    tts::{
+        Speech,
+        qwen3_tts::{
+            self, Precision, Qwen3TtsError, Sampling, SpeechModel,
+            SynthesisOptions, Synthesizer, TextTokenizer, runtime::Device,
+        },
+        text,
     },
 };
 
 use crate::{
-    cli::{DeviceArg, Qwen3TtsArgs, RuntimeArg, TtsPrecisionArg},
+    cli::{
+        AudioEncoderArg, DeviceArg, Qwen3TtsArgs, RuntimeArg, TtsPrecisionArg,
+    },
     error::CliError,
 };
 
-/// Frames the engine may generate before giving up on an end-of-speech code.
-/// At 12.5 frames per second this bounds one run to a few minutes of audio.
-const MAX_FRAMES: usize = 2048;
+mod progress;
+mod split;
 
-/// Runs one synthesis end to end: resolve (and if needed download) the model,
-/// load it, speak the text, write the audio, and print the result.
+/// Runs one synthesis end to end: read the text, resolve (and if needed
+/// download) the model, load it, speak the paragraphs, write the audio, and
+/// print the result.
 pub(crate) fn run_qwen3_tts(
     args: &Qwen3TtsArgs,
     model_dir: &Path,
@@ -30,8 +40,17 @@ pub(crate) fn run_qwen3_tts(
     // Resolve the text, the container, and the precision before any download,
     // so a bad path, a bad extension, or a precision the runtime cannot serve
     // fails fast rather than after gigabytes.
-    let text = resolve_text(args.text.as_deref(), args.text_file.as_deref())?;
-    let format = output_format(&args.output)?;
+    let input = read_input(args.text.as_deref(), args.text_file.as_deref())?;
+    let paragraphs = text::paragraphs(
+        &input.text,
+        args.text_format
+            .to_core()
+            .resolve(input.source.as_deref(), &input.text),
+    );
+    if paragraphs.is_empty() {
+        return Err(Qwen3TtsError::TextEmpty.into());
+    }
+    let target = output_target(&args.output, args.audio_encoder)?;
     let precision = resolve_precision(args.precision, args.runtime)?;
 
     let resolved = qwen3_tts::resolve_model(
@@ -65,22 +84,43 @@ pub(crate) fn run_qwen3_tts(
     let language = (!args.language.eq_ignore_ascii_case("auto"))
         .then(|| args.language.clone());
 
-    let synthesis = synthesizer.speak(
-        &text,
+    // Splitting an over-budget paragraph needs a second model; it is loaded
+    // only if a paragraph actually turns out to need one.
+    let mut splitter = split::Splitter::new(
+        model_dir,
+        args.runtime,
+        args.device,
+        TextTokenizer::load(
+            &resolved.dir.join("vocab.json"),
+            &resolved.dir.join("merges.txt"),
+        )?,
+    );
+
+    let report = progress::Reporter::start(Instant::now());
+    let synthesis = synthesizer.speak_paragraphs(
+        &paragraphs,
         &SynthesisOptions {
             voice: args.voice.clone(),
             language,
             sampling,
-            max_frames: MAX_FRAMES,
+            pause: f64::from(args.pause_ms) / 1000.0,
         },
+        &mut |text, budget| splitter.split(text, budget),
+        &mut |progress| report.update(progress),
     )?;
+    report.finish(&synthesis);
 
-    synthesis.speech.write(&args.output, format)?;
+    write_audio(
+        &args.output,
+        &synthesis.speech,
+        target,
+        args.bitrate.as_deref(),
+    )?;
 
     crate::output::print_synthesis(
         &synthesis,
         &args.output,
-        format_name(format),
+        &format_name(&args.output),
         &resolved.label(),
         runtime_name(args.runtime),
         &sampling,
@@ -156,17 +196,24 @@ fn runtime_name(runtime: RuntimeArg) -> &'static str {
     }
 }
 
-/// Resolves what to speak: the argument, or the contents of `--text-file`.
-///
-/// A file is read as UTF-8 and its whitespace collapsed — a hard-wrapped
-/// paragraph should read as running prose, and the model was trained on single
-/// lines, so raw newlines only confuse its prosody.
-fn resolve_text(
+/// The text to speak, and where it came from — the source name is what lets
+/// `--text-format auto` believe an extension.
+#[derive(Debug)]
+struct Input {
+    text: String,
+    source: Option<PathBuf>,
+}
+
+/// Resolves what to speak: the argument, a UTF-8 file, or standard input.
+fn read_input(
     text: Option<&str>,
     file: Option<&Path>,
-) -> Result<String, Qwen3TtsError> {
+) -> Result<Input, Qwen3TtsError> {
     if let Some(text) = text {
-        return Ok(text.to_owned());
+        return Ok(Input {
+            text: text.to_owned(),
+            source: None,
+        });
     }
     // clap enforces that exactly one of the two is given; this guards the
     // library-level contract rather than the command line.
@@ -175,44 +222,85 @@ fn resolve_text(
             "pass the text as an argument or with --text-file".into(),
         )
     })?;
-    let raw = std::fs::read_to_string(path).map_err(|e| {
+    if path == Path::new("-") {
+        let mut text = String::new();
+        std::io::stdin().read_to_string(&mut text).map_err(|e| {
+            Qwen3TtsError::Io(format!("reading standard input: {e}"))
+        })?;
+        return Ok(Input { text, source: None });
+    }
+    let text = std::fs::read_to_string(path).map_err(|e| {
         Qwen3TtsError::Io(format!("reading {}: {e}", path.display()))
     })?;
-    Ok(collapse_whitespace(&raw))
+    Ok(Input {
+        text,
+        source: Some(path.to_path_buf()),
+    })
 }
 
-/// Collapses every run of whitespace to a single space and trims the ends.
-fn collapse_whitespace(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+/// Where the audio goes: a built-in encoder, or an external ffmpeg process.
+#[derive(Clone, Copy)]
+enum OutputTarget {
+    Native(encode::Format),
+    Ffmpeg,
 }
 
-/// Picks the container from the output path's extension.
-fn output_format(path: &Path) -> Result<Format, Qwen3TtsError> {
-    match path
+/// Resolves the `--audio-encoder`/extension pair into a concrete target. With
+/// `auto` an extension the built-in encoders do not write is handed to ffmpeg;
+/// with `builtin` it is an error, before anything is generated.
+fn output_target(
+    path: &Path,
+    encoder: AudioEncoderArg,
+) -> Result<OutputTarget, Qwen3TtsError> {
+    let extension = path
         .extension()
         .and_then(|extension| extension.to_str())
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("wav") => Ok(Format::Wav),
-        Some("flac") => Ok(Format::Flac),
-        other => Err(Qwen3TtsError::InvalidOptions(format!(
-            "cannot write `{}`: the output extension must be wav or flac{}",
-            path.display(),
-            other.map_or_else(
-                || " (there is none)".to_owned(),
-                |found| format!(" (found `{found}`)")
-            )
-        ))),
+        .map(str::to_ascii_lowercase);
+    let native = match extension.as_deref() {
+        Some("wav") => Some(encode::Format::Wav),
+        Some("flac") => Some(encode::Format::Flac),
+        _ => None,
+    };
+    match (encoder, native) {
+        (AudioEncoderArg::Ffmpeg, _) | (AudioEncoderArg::Auto, None) => {
+            Ok(OutputTarget::Ffmpeg)
+        },
+        (_, Some(format)) => Ok(OutputTarget::Native(format)),
+        (AudioEncoderArg::Builtin, None) => {
+            Err(Qwen3TtsError::InvalidOptions(format!(
+                "cannot write `{}` with the builtin encoder: it writes wav or \
+                 flac{}; use `--audio-encoder ffmpeg` for other formats",
+                path.display(),
+                extension.map_or_else(
+                    || " (the output has no extension)".to_owned(),
+                    |found| format!(" (found `{found}`)")
+                )
+            )))
+        },
     }
 }
 
-/// The name of a container, as the output contract spells it.
-fn format_name(format: Format) -> &'static str {
-    match format {
-        Format::Wav => "wav",
-        Format::Flac => "flac",
+/// The format name reported in the output contract: the output's extension,
+/// lowercased.
+fn format_name(path: &Path) -> String {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default()
+}
+
+/// Writes the synthesized audio through the resolved target.
+fn write_audio(
+    path: &Path,
+    speech: &Speech,
+    target: OutputTarget,
+    bitrate: Option<&str>,
+) -> Result<(), CliError> {
+    match target {
+        OutputTarget::Native(format) => speech.write(path, format)?,
+        OutputTarget::Ffmpeg => speech.write_ffmpeg(path, bitrate)?,
     }
+    Ok(())
 }
 
 /// Creates the compute device, reporting a build without Metal as a validation

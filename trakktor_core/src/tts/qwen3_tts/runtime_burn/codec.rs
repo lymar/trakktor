@@ -30,7 +30,7 @@ use super::{
     net::{RmsNorm, matrix, rope_values, rows_of, weight},
 };
 use crate::tts::qwen3_tts::{
-    chunking::{chunk_plan, window_visible},
+    chunking::{aligned_span, chunk_plan, window_visible},
     config::CodecConfig,
     error::Qwen3TtsError,
     runtime::model_err,
@@ -902,6 +902,11 @@ impl<B: Backend> CodecDecoder<B> {
     /// The sample rate of the waveform this decoder produces.
     pub(super) fn sample_rate(&self) -> u32 { self.cfg.output_sample_rate }
 
+    /// Waveform samples one frame of codes decodes to.
+    pub(super) fn samples_per_frame(&self) -> usize {
+        self.cfg.decode_upsample_rate
+    }
+
     /// Decodes `frames` — one row of `num_quantizers` codes per frame — into a
     /// mono waveform.
     ///
@@ -937,22 +942,29 @@ impl<B: Backend> CodecDecoder<B> {
         let total = frames.len();
         let mut wave: Vec<f32> = Vec::with_capacity(total * upsample);
         for chunk in chunk_plan(total) {
+            // A run's last chunk is however many frames are left, and every
+            // new length costs this backend a fresh round of kernel
+            // compilation and autotuning — far more than decoding a few frames
+            // that get thrown away. Decode at a rounded length instead
+            // ([`aligned_span`]); the network is causal, so the padding cannot
+            // reach the samples before it.
+            let span = chunk.span();
+            let padded = aligned_span(span);
+            let start = chunk.context_start();
             // Lay the chunk's codes out codebook-major: the quantizer indexes
             // whole rows.
-            let span = chunk.span();
-            let start = chunk.context_start();
-            let mut codes = vec![0u32; quantizers * span];
+            let mut codes = vec![0u32; quantizers * padded];
             for (offset, frame) in frames[start..chunk.end].iter().enumerate() {
                 for (book, &code) in frame.iter().enumerate() {
-                    codes[book * span + offset] = code;
+                    codes[book * padded + offset] = code;
                 }
             }
-            let mut decoded = self.forward(&codes, span)?;
-            // Drop the samples the context produced; they only prime the
-            // convolutions.
-            wave.extend_from_slice(
-                &decoded.split_off(chunk.context * upsample),
-            );
+            let mut decoded = self.forward(&codes, padded)?;
+            // Drop the samples the context produced (they only prime the
+            // convolutions) and the ones the padding produced.
+            let mut kept = decoded.split_off(chunk.context * upsample);
+            kept.truncate((span - chunk.context) * upsample);
+            wave.extend_from_slice(&kept);
         }
         Ok(wave)
     }

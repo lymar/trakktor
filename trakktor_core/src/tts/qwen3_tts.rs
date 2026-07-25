@@ -44,7 +44,7 @@ pub use download::{
 };
 pub use error::Qwen3TtsError;
 pub use model::SpeechModel;
-pub use synthesize::{Synthesis, Synthesizer};
+pub use synthesize::{SplitParagraph, Synthesis, Synthesizer};
 pub use tokenizer::TextTokenizer;
 
 /// Compute precision of the talker and the code predictor.
@@ -107,7 +107,41 @@ pub struct SynthesisOptions {
     pub language: Option<String>,
     /// How tokens are picked at both levels.
     pub sampling: Sampling,
-    /// Upper bound on generated frames, guarding against a run that never
-    /// emits the end-of-speech code.
-    pub max_frames: usize,
+    /// Silence between paragraphs, in seconds, when a text is spoken in
+    /// several pieces.
+    pub pause: f64,
+}
+
+/// What a piece is busy with. Generation reports every frame; turning the
+/// finished frames into a waveform is one long call that reports only its
+/// start, so a caller can say what the silence is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stage {
+    /// The talker and code predictor are producing frames.
+    Generating,
+    /// The codec decoder is turning this piece's frames into audio.
+    Decoding,
+}
+
+/// How far along a multi-piece run is, reported as it goes.
+///
+/// The costs are in the same unit the chunk budget counts (text tokens), so a
+/// caller can turn them into a percentage or a time estimate; the audio
+/// seconds are what has actually been generated.
+#[derive(Debug, Clone, Copy)]
+pub struct SpeechProgress {
+    /// What the piece is doing right now.
+    pub stage: Stage,
+    /// 1-based index of the piece being spoken.
+    pub chunk: usize,
+    /// Pieces planned so far — it can grow if a piece has to be cut down.
+    pub chunks: usize,
+    /// Seconds of audio from the pieces already finished.
+    pub finished_audio: f64,
+    /// Seconds of audio generated in total, the current piece included.
+    pub audio: f64,
+    /// Cost of the pieces already finished.
+    pub done_cost: usize,
+    /// Cost of the whole text.
+    pub total_cost: usize,
 }

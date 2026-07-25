@@ -335,20 +335,24 @@ enum OutputTarget {
 }
 
 /// Resolves the `--audio-encoder`/`--format` pair into a concrete target. An
-/// unknown format with the built-in encoder is a usage error.
+/// unknown format with the built-in encoder is a usage error; `auto` hands
+/// such a format to ffmpeg instead.
 fn resolve_target(shape: &VadShapeArgs) -> OutputTarget {
-    match shape.audio_encoder {
-        AudioEncoderArg::Ffmpeg => OutputTarget::Ffmpeg,
-        AudioEncoderArg::Builtin => {
-            match shape.format.to_ascii_lowercase().as_str() {
-                "wav" => OutputTarget::Native(encode::Format::Wav),
-                "flac" => OutputTarget::Native(encode::Format::Flac),
-                other => crate::cli::usage_error(&format!(
-                    "the builtin encoder writes only `wav` or `flac`, not \
-                     `{other}`; use `--audio-encoder ffmpeg` for other formats"
-                )),
-            }
+    let native = match shape.format.to_ascii_lowercase().as_str() {
+        "wav" => Some(encode::Format::Wav),
+        "flac" => Some(encode::Format::Flac),
+        _ => None,
+    };
+    match (shape.audio_encoder, native) {
+        (AudioEncoderArg::Ffmpeg, _) | (AudioEncoderArg::Auto, None) => {
+            OutputTarget::Ffmpeg
         },
+        (_, Some(format)) => OutputTarget::Native(format),
+        (AudioEncoderArg::Builtin, None) => crate::cli::usage_error(&format!(
+            "the builtin encoder writes only `wav` or `flac`, not `{}`; use \
+             `--audio-encoder ffmpeg` for other formats",
+            shape.format
+        )),
     }
 }
 

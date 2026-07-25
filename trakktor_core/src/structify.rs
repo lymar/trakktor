@@ -53,6 +53,15 @@ pub fn normalize(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// The model a segmentation run uses unless told otherwise: the deepest
+/// full-context base model, whose paragraph signal is the best calibrated of
+/// the family (shallower ones need a lower threshold and cut less cleanly).
+///
+/// Every caller — the command and the other features that segment text — takes
+/// its default from here rather than spelling it out again, so the choice
+/// cannot drift between them.
+pub const DEFAULT_MODEL: &str = "sat-12l-no-limited-lookahead";
+
 /// Tunables for one segmentation run.
 #[derive(Debug, Clone, Copy)]
 pub struct StructifyOptions {
@@ -110,6 +119,44 @@ impl Structifier {
         Self { runtime, tokenizer }
     }
 
+    /// The model's boundary probability for every character of
+    /// already-[`normalize`]d text, before any threshold is applied.
+    ///
+    /// This is the whole cost of segmentation — one pass over the network.
+    /// Everything downstream (where to cut, and at which threshold) is
+    /// arithmetic over the returned vector, so a caller that tries several
+    /// thresholds pays for the model exactly once.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StructifyError`] on a tokenizer or backend failure.
+    pub fn boundary_probs(
+        &self,
+        text: &str,
+        options: &StructifyOptions,
+    ) -> Result<Vec<f32>, StructifyError> {
+        let n_chars = text.chars().count();
+        if n_chars == 0 {
+            return Ok(Vec::new());
+        }
+
+        let tokenized = self.tokenizer.encode(text)?;
+        let token_logits = self.runtime.token_boundary_logits(
+            &tokenized.ids,
+            self.tokenizer.cls_id,
+            self.tokenizer.sep_id,
+            options.stride,
+            options.batch_size,
+            options.weighting,
+        )?;
+
+        Ok(segment::char_probs(
+            n_chars,
+            &tokenized.offsets,
+            &token_logits,
+        ))
+    }
+
     /// Segments already-[`normalize`]d text into paragraphs.
     ///
     /// # Errors
@@ -125,18 +172,7 @@ impl Structifier {
             return Ok(Vec::new());
         }
 
-        let tokenized = self.tokenizer.encode(text)?;
-        let token_logits = self.runtime.token_boundary_logits(
-            &tokenized.ids,
-            self.tokenizer.cls_id,
-            self.tokenizer.sep_id,
-            options.stride,
-            options.batch_size,
-            options.weighting,
-        )?;
-
-        let char_probs =
-            segment::char_probs(chars.len(), &tokenized.offsets, &token_logits);
+        let char_probs = self.boundary_probs(text, options)?;
         let spans =
             segment::paragraph_spans(&chars, &char_probs, options.threshold);
 
@@ -151,5 +187,42 @@ impl Structifier {
                 })
             })
             .collect())
+    }
+
+    /// Splits already-[`normalize`]d text into pieces that each fit `budget`,
+    /// cutting as few times as possible.
+    ///
+    /// `cost` measures a piece in whatever unit `budget` counts — characters,
+    /// tokens of some other model, estimated seconds of speech. The caller owns
+    /// that unit; segmentation only has to know when a piece is too big.
+    ///
+    /// Text that already fits comes back whole, without touching the network.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StructifyError`] on a tokenizer or backend failure.
+    pub fn split_to_budget(
+        &self,
+        text: &str,
+        budget: usize,
+        cost: &dyn Fn(&str) -> usize,
+        options: &StructifyOptions,
+    ) -> Result<Vec<String>, StructifyError> {
+        if text.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        if cost(text) <= budget {
+            return Ok(vec![text.to_owned()]);
+        }
+
+        let chars: Vec<char> = text.chars().collect();
+        let char_probs = self.boundary_probs(text, options)?;
+        Ok(segment::split_to_budget(
+            &chars,
+            &char_probs,
+            options.threshold,
+            budget,
+            cost,
+        ))
     }
 }

@@ -9,6 +9,29 @@
 pub(super) const CHUNK_FRAMES: usize = 300;
 pub(super) const LEFT_CONTEXT_FRAMES: usize = 25;
 
+/// Step a chunk's length is rounded up to before it reaches a backend that
+/// specializes its kernels per shape.
+///
+/// A run's last chunk holds whatever frames are left over, so its length is
+/// effectively arbitrary — and on burn every new length means compiling and
+/// autotuning the decoder's convolutions again, which costs far more than
+/// decoding a few extra frames. Rounding to a step leaves at most five
+/// shapes for a whole run. The decoder is causal, so the frames added on the
+/// right cannot change the samples before them; they are decoded and dropped.
+/// Measured: the waveform moves by less than 1e-6 (the reordering of a
+/// reduction), while the stalls between pieces fall from tens of seconds to
+/// none.
+///
+/// candle compiles nothing per shape, so its path decodes the exact span.
+#[cfg(feature = "tts-burn")]
+pub(super) const DECODE_ALIGN: usize = 64;
+
+/// The length a chunk of `span` frames is decoded at.
+#[cfg(feature = "tts-burn")]
+pub(super) fn aligned_span(span: usize) -> usize {
+    span.div_ceil(DECODE_ALIGN) * DECODE_ALIGN
+}
+
 /// Whether a frame may attend to another: itself and the `window - 1` frames
 /// before it, and nothing after it.
 pub(super) fn window_visible(query: usize, key: usize, window: usize) -> bool {

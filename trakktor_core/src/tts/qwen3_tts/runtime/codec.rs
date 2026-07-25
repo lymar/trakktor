@@ -516,6 +516,10 @@ impl CodecDecoder {
     #[must_use]
     pub fn sample_rate(&self) -> u32 { self.cfg.output_sample_rate }
 
+    /// Waveform samples one frame of codes decodes to.
+    #[must_use]
+    pub fn samples_per_frame(&self) -> usize { self.cfg.decode_upsample_rate }
+
     /// Decodes `frames` — one row of `num_quantizers` codes per frame — into a
     /// mono waveform.
     ///

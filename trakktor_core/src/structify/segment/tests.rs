@@ -222,3 +222,129 @@ fn windowed_logits_empty_input() {
     .unwrap();
     assert!(got.is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// splitting to a budget
+// ---------------------------------------------------------------------------
+
+/// A text with boundary probabilities placed by hand: a strong boundary after
+/// every sentence, a weaker one after every comma.
+fn sentences() -> (Vec<char>, Vec<f32>) {
+    let text: Vec<char> = "One two, three four. Five six, seven eight. Nine \
+                           ten, eleven twelve."
+        .chars()
+        .collect();
+    let probs = text
+        .iter()
+        .map(|c| match c {
+            '.' => 0.9,
+            ',' => 0.4,
+            _ => 0.0,
+        })
+        .collect();
+    (text, probs)
+}
+
+/// Cost in characters — the unit the tests state their budgets in.
+fn chars_cost(text: &str) -> usize { text.chars().count() }
+
+#[test]
+fn the_highest_fitting_threshold_wins() {
+    let (text, probs) = sentences();
+
+    // A budget that fits a sentence: cut on sentences only, three pieces.
+    let pieces = split_to_budget(&text, &probs, 0.5, 25, &chars_cost);
+    assert_eq!(
+        pieces,
+        [
+            "One two, three four.",
+            "Five six, seven eight.",
+            "Nine ten, eleven twelve.",
+        ]
+    );
+
+    // A tighter budget forces the search below the comma level, which is the
+    // only way to fit — and it stops there rather than cutting finer.
+    let pieces = split_to_budget(&text, &probs, 0.5, 15, &chars_cost);
+    assert_eq!(
+        pieces,
+        [
+            "One two,",
+            "three four.",
+            "Five six,",
+            "seven eight.",
+            "Nine ten,",
+            "eleven twelve.",
+        ]
+    );
+}
+
+#[test]
+fn a_text_within_budget_is_left_whole() {
+    let (text, probs) = sentences();
+
+    let pieces = split_to_budget(&text, &probs, 0.5, 1000, &chars_cost);
+
+    assert_eq!(pieces.len(), 1);
+    assert_eq!(pieces[0].chars().count(), text.len());
+}
+
+#[test]
+fn a_piece_the_model_cannot_cut_is_split_anyway() {
+    // No boundary anywhere: the guarantee has to come from the mechanical
+    // split, which prefers the sentence end nearest the middle.
+    let text: Vec<char> = "aaa bbb ccc. ddd eee fff ggg hhh".chars().collect();
+    let probs = vec![0.0; text.len()];
+
+    let pieces = split_to_budget(&text, &probs, 0.5, 20, &chars_cost);
+
+    assert_eq!(pieces, ["aaa bbb ccc.", "ddd eee fff ggg hhh"]);
+    for piece in &pieces {
+        assert!(chars_cost(piece) <= 20, "{piece} is over budget");
+    }
+}
+
+#[test]
+fn every_piece_fits_even_without_punctuation_or_spaces() {
+    let text: Vec<char> = "щ".repeat(50).chars().collect();
+    let probs = vec![0.0; text.len()];
+
+    let pieces = split_to_budget(&text, &probs, 0.5, 7, &chars_cost);
+
+    assert_eq!(pieces.iter().map(|p| p.chars().count()).sum::<usize>(), 50);
+    for piece in &pieces {
+        assert!(chars_cost(piece) <= 7, "{piece} is over budget");
+    }
+}
+
+#[test]
+fn pieces_are_merged_back_when_the_threshold_had_to_go_low() {
+    // Three short sentences and one long one. Fitting the long one forces the
+    // search down to the comma level, which would chop the short ones apart
+    // too — merging puts them back together.
+    let text: Vec<char> = "Раз. Два. Три. Это предложение, увы, длиннее \
+                           прочих вместе взятых."
+        .chars()
+        .collect();
+    let probs: Vec<f32> = text
+        .iter()
+        .map(|c| match c {
+            '.' => 0.9,
+            ',' => 0.4,
+            _ => 0.0,
+        })
+        .collect();
+
+    let pieces = split_to_budget(&text, &probs, 0.5, 35, &chars_cost);
+
+    assert_eq!(
+        pieces,
+        [
+            "Раз. Два. Три. Это предложение,",
+            "увы, длиннее прочих вместе взятых.",
+        ]
+    );
+    for piece in &pieces {
+        assert!(chars_cost(piece) <= 35, "{piece} is over budget");
+    }
+}

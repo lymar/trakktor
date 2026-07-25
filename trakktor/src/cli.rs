@@ -29,10 +29,10 @@ const DEFAULT_MODEL_DIR_NAME: &str = ".trakktor";
 /// audio editing, feeds, text structuring and punctuation, and more —
 /// machine-readable output, stable flags, and meaningful exit codes. Reach for
 /// it when a task needs one of these helpers, such as fetching a feed's unread
-/// items, transcribing an audio file to timestamped text, reading text aloud
-/// into an audio file, cutting the silence out of a recording, restoring
-/// punctuation to a raw transcript, or splitting a transcript into readable
-/// paragraphs.
+/// items, transcribing an audio file to timestamped text, reading a text or
+/// Markdown file aloud into an audio file, cutting the silence out of a
+/// recording, restoring punctuation to a raw transcript, or splitting a
+/// transcript into readable paragraphs.
 ///
 /// Output is JSON by default (`--pretty` indents it); pass `--text` for
 /// human-readable text. Results go to stdout, errors to stderr. Exit codes are
@@ -121,9 +121,12 @@ enum Command {
     /// Synthesize speech from text (TTS).
     ///
     /// Speech synthesis is organized as a set of engines, each with its own
-    /// voices and flags; pick one as the subcommand. The audio is written to a
-    /// file (WAV or FLAC, by the output's extension) and the result on stdout
-    /// is JSON with the path, the duration, and the voice used.
+    /// voices and flags; pick one as the subcommand. Text of any length is
+    /// read aloud into a single audio file — plain text or Markdown, from an
+    /// argument, a file, or standard input. The format follows the output's
+    /// extension (wav and flac directly, others through ffmpeg), and the
+    /// result on stdout is JSON with the path, the duration, and the voice
+    /// used.
     Tts {
         #[command(subcommand)]
         command: TtsCommand,
@@ -227,17 +230,20 @@ pub(crate) enum AsrCommand {
 pub(crate) enum TtsCommand {
     /// Synthesize speech with a Qwen3-TTS model.
     ///
-    /// Reads the text as an argument (or from a file with --text-file) and
-    /// writes spoken audio at 24 kHz. The whole text is spoken as one
-    /// utterance; a very long one runs into the engine's frame ceiling and the
-    /// result then reports `truncated`. The
-    /// voice is one of the model's preset speakers (see --voice) and the
-    /// language is set independently of it (see --language), so any voice can
-    /// speak any of the supported languages, Russian included. Generation
-    /// samples by default, which makes each run differ slightly; pass --seed
-    /// to repeat a run exactly, or --greedy for deterministic output. The
-    /// first use of a model downloads its checkpoint into the model directory
-    /// (~/.trakktor by default; see --model-dir), and later runs reuse it.
+    /// Reads the text as an argument, from a file with --text-file, or from
+    /// standard input (--text-file -), and writes spoken audio at 24 kHz. Text
+    /// of any length works: it is split into paragraphs (plain text or
+    /// Markdown, see --text-format), spoken paragraph by paragraph, and joined
+    /// into one file with a configurable pause between them (--pause-ms). A
+    /// paragraph too long for one utterance is split further with a local
+    /// sentence model, downloaded on first need. The voice is one of the
+    /// model's preset speakers (see --voice) and the language is set
+    /// independently of it (see --language), so any voice can speak any of the
+    /// supported languages, Russian included. Generation samples by default,
+    /// which makes each run differ slightly; pass --seed to repeat a run
+    /// exactly, or --greedy for deterministic output. The first use of a model
+    /// downloads its checkpoint into the model directory (~/.trakktor by
+    /// default; see --model-dir), and later runs reuse it.
     #[command(name = "qwen3-tts")]
     Qwen3Tts(Qwen3TtsArgs),
 }
@@ -254,16 +260,58 @@ pub(crate) struct Qwen3TtsArgs {
     #[arg(id = "speech", value_name = "text")]
     pub(crate) text: Option<String>,
 
-    /// Read the text to speak from a UTF-8 file instead of the argument.
-    /// Line breaks and repeated spaces are collapsed, so hard-wrapped text
-    /// reads as running prose; the whole file is spoken as one utterance.
-    #[arg(long, value_name = "path")]
+    /// Read the text to speak from a UTF-8 file instead of the argument, or
+    /// from standard input with `-`. Text of any length works: it is spoken
+    /// paragraph by paragraph and joined into one file (see --text-format and
+    /// --pause-ms).
+    #[arg(long, value_name = "path|-")]
     pub(crate) text_file: Option<PathBuf>,
 
-    /// Where to write the audio; the extension picks the format (`.wav` or
-    /// `.flac`).
+    /// How to read the input: where paragraphs end and whether it carries
+    /// markup. `txt` takes one paragraph per line; `md` separates paragraphs
+    /// with blank lines and strips Markdown markup (headings, list and quote
+    /// markers, emphasis, links — the text of a table or a code block is
+    /// kept). `auto` decides by the file extension, then by the text
+    /// itself, and falls back to `md`.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = TextFormatArg::Auto,
+        value_name = "format"
+    )]
+    pub(crate) text_format: TextFormatArg,
+
+    /// Silence inserted between paragraphs, in milliseconds. Each paragraph is
+    /// first trimmed of the silence the model leaves at its edges (a few tens
+    /// of milliseconds are kept as breathing room), so the gap is this value
+    /// rather than whatever the model happened to add. Pieces of a single
+    /// split paragraph get half of it.
+    #[arg(long, default_value_t = 500, value_name = "ms")]
+    pub(crate) pause_ms: u32,
+
+    /// Where to write the audio; the extension picks the format. `.wav` and
+    /// `.flac` are written directly, anything ffmpeg knows (mp3, m4a, opus,
+    /// ogg, …) through it — see --audio-encoder.
     #[arg(long, short, default_value = "speech.wav", value_name = "path")]
     pub(crate) output: PathBuf,
+
+    /// Encoder for the output file. `auto` (the default) writes wav and flac
+    /// with the built-in pure-Rust encoder and hands any other extension to an
+    /// installed `ffmpeg`; `builtin` refuses anything but wav/flac; `ffmpeg`
+    /// always shells out.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = AudioEncoderArg::Auto,
+        value_name = "encoder"
+    )]
+    pub(crate) audio_encoder: AudioEncoderArg,
+
+    /// Target bitrate for lossy ffmpeg formats, such as `192k` or `320k` (sets
+    /// ffmpeg's `-b:a`). Ignored by the built-in encoder; omit for ffmpeg's
+    /// own default.
+    #[arg(long, value_name = "rate")]
+    pub(crate) bitrate: Option<String>,
 
     /// Language to speak in, as an English name: russian, english, german,
     /// spanish, chinese, japanese, french, korean, italian, or portuguese.
@@ -304,7 +352,10 @@ pub(crate) struct Qwen3TtsArgs {
     pub(crate) greedy: bool,
 
     /// Inference runtime executing the model. The burn runtime computes in
-    /// f32 only, so pair it with `--precision f32`.
+    /// f32 only, so pair it with `--precision f32`; it is also several times
+    /// slower here, especially on a long text and on its first run on a
+    /// machine, where it compiles and tunes its GPU kernels. Prefer the
+    /// default for anything longer than a phrase.
     #[arg(
         long,
         value_enum,
@@ -331,6 +382,29 @@ pub(crate) struct Qwen3TtsArgs {
     /// always runs in full precision either way.
     #[arg(long, value_enum, value_name = "precision")]
     pub(crate) precision: Option<TtsPrecisionArg>,
+}
+
+/// The `--text-format` value of `tts`.
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum TextFormatArg {
+    /// Decide from the file extension, then from the text (the default).
+    Auto,
+    /// Plain text: one paragraph per line.
+    Txt,
+    /// Markdown: paragraphs separated by blank lines, markup stripped.
+    Md,
+}
+
+impl TextFormatArg {
+    /// The core-side format this stands for.
+    pub(crate) fn to_core(self) -> trakktor_core::tts::text::TextFormat {
+        use trakktor_core::tts::text::TextFormat;
+        match self {
+            TextFormatArg::Auto => TextFormat::Auto,
+            TextFormatArg::Txt => TextFormat::Plain,
+            TextFormatArg::Md => TextFormat::Markdown,
+        }
+    }
 }
 
 /// The `--precision` value of `tts qwen3-tts`.
@@ -1080,7 +1154,7 @@ pub(crate) struct StructifyArgs {
     /// breaks instead.
     #[arg(
         long,
-        default_value = "sat-12l-no-limited-lookahead",
+        default_value = trakktor_core::structify::DEFAULT_MODEL,
         value_name = "name|dir"
     )]
     pub(crate) model: String,
@@ -1239,7 +1313,8 @@ pub(crate) struct VadShapeArgs {
     /// Encoder for the output. `builtin` (the default) is pure Rust and writes
     /// wav/flac with no external tools; `ffmpeg` shells out to an installed
     /// `ffmpeg` and writes the many formats it supports (mp3, aac, opus, m4a,
-    /// …). The samples are re-encoded, so cuts stay sample-accurate.
+    /// …); `auto` picks between them by `--format`. The samples are
+    /// re-encoded, so cuts stay sample-accurate.
     #[arg(
         long,
         value_enum,
@@ -1320,10 +1395,12 @@ pub(crate) enum KeepArg {
     NonSpeech,
 }
 
-/// The `--audio-encoder` value of `vad cut`/`vad split`.
+/// The `--audio-encoder` value of the commands that write audio.
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum AudioEncoderArg {
-    /// Built-in pure-Rust encoder (the default): writes wav or flac.
+    /// Pick by the format: built-in for wav and flac, ffmpeg for the rest.
+    Auto,
+    /// Built-in pure-Rust encoder: writes wav or flac.
     Builtin,
     /// An external `ffmpeg` process; writes many more formats (mp3, aac, …).
     Ffmpeg,

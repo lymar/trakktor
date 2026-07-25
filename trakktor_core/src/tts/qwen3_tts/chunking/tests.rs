@@ -59,3 +59,18 @@ fn a_long_decode_primes_every_chunk_after_the_first() {
 fn an_empty_decode_has_no_chunks() {
     assert!(chunk_plan(0).is_empty());
 }
+
+#[cfg(feature = "tts-burn")]
+#[test]
+fn a_chunk_is_decoded_at_a_rounded_length() {
+    // A full chunk plus its context already lands on the step.
+    assert_eq!(aligned_span(DECODE_ALIGN), DECODE_ALIGN);
+    // Anything shorter is rounded up, so a run's leftover frames never
+    // introduce a shape of their own.
+    assert_eq!(aligned_span(1), DECODE_ALIGN);
+    assert_eq!(aligned_span(DECODE_ALIGN + 1), 2 * DECODE_ALIGN);
+    // The rounding never loses frames.
+    for span in [1, 25, 190, 300, 325] {
+        assert!(aligned_span(span) >= span);
+    }
+}

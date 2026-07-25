@@ -90,6 +90,8 @@ impl SpeechModel for CandleSpeech {
 
     fn sample_rate(&self) -> u32 { self.codec.sample_rate() }
 
+    fn samples_per_frame(&self) -> usize { self.codec.samples_per_frame() }
+
     fn prime(
         &mut self,
         positions: &[Position],

@@ -576,17 +576,40 @@ runs entirely locally.
 ```bash
 trakktor tts qwen3-tts "Привет! Это синтез речи." --language russian -o hello.wav
 
-# or read the text from a file instead of the argument
-trakktor tts qwen3-tts --text-file article.txt --language russian -o article.wav
+# a whole article — plain text or Markdown, any length
+trakktor tts qwen3-tts --text-file article.md --language russian -o article.mp3
+
+# or from a pipe, saying how to read it
+cat notes.md | trakktor tts qwen3-tts --text-file - --text-format md -o notes.wav
 ```
 
-The text comes either as the positional argument or from `--text-file` — one of
-the two, never both. A file is read as UTF-8 with its line breaks and repeated
-spaces collapsed, so hard-wrapped prose reads naturally; the whole file is
-spoken as **one utterance**, so a long document runs into the engine's frame
-ceiling (about 2.7 minutes of audio) and the result then carries
-`"truncated": true`. Splitting long text into sentences before synthesis is not
-done for you yet.
+The text comes as the positional argument, from `--text-file`, or from standard
+input (`--text-file -`) — exactly one of them.
+
+**Long text is spoken whole.** One utterance is capped at two minutes of speech
+(the checkpoints would allow more, but a single derailed generation costs
+minutes and the model was trained on utterances, not chapters), so the text is
+split into paragraphs, each is spoken separately, and the pieces are joined
+into one file:
+
+- `--text-format <auto|txt|md>` says where paragraphs end. `txt` takes one
+  paragraph per line; `md` separates them with blank lines and strips the
+  markup — headings, list and quote markers, emphasis, inline code, links (the
+  link text is kept, the URL is not), front matter, HTML comments. Tables and
+  code blocks keep their **text**: removing markup is not the same as deciding
+  what you did not want to hear. `auto` (the default) reads the file extension,
+  then the text itself, and falls back to `md`.
+- A paragraph still too long for one utterance is split further with
+  [`text structify`](#text-structify--split-text-into-paragraphs), which is
+  already a boundary model — it picks the coarsest cut that fits, so the text
+  breaks as few times as possible. That model is downloaded and loaded **only**
+  if some paragraph actually needs it.
+- `--pause-ms <ms>` (default 500) sets the gap between paragraphs. Each piece
+  is trimmed of the silence the model leaves at its edges and faded at the
+  join, so the pause is exactly what you asked for and the seams do not click;
+  pieces of one split paragraph get half the gap.
+- Every piece is sampled from a seed derived from `--seed`, so the same run
+  reproduces the same file.
 
 The audio is always written to a file — raw samples on stdout would not survive
 the machine-readable contract — and `stdout` carries the metadata:
@@ -597,6 +620,7 @@ the machine-readable contract — and `stdout` carries the metadata:
   "format": "wav",
   "sample_rate": 24000,
   "duration": 2.16,
+  "chunks": 1,
   "language": "russian",
   "voice": { "kind": "preset", "name": "serena" },
   "engine": { "name": "qwen3-tts", "model": "0.6b-customvoice", "runtime": "candle" },
@@ -604,8 +628,16 @@ the machine-readable contract — and `stdout` carries the metadata:
 }
 ```
 
+`chunks` is how many pieces were spoken and stitched together, and `frames`
+their total. Should a piece still run into the two-minute cap, it is cut down
+and spoken again (twice at most); if even that does not help, the engine block
+carries `"truncated": true` and the tail of that piece is missing.
+
 The container follows the `--output` extension: `.wav` (32-bit float, exactly
-as synthesized) or `.flac` (quantized to 24 bits).
+as synthesized) and `.flac` (quantized to 24 bits) are written by the built-in
+encoder, and anything else — mp3, m4a, opus, ogg — is handed to an installed
+`ffmpeg` (`--audio-encoder` forces the choice, `--bitrate` sets `-b:a` for
+lossy formats).
 
 ### `tts qwen3-tts` — Qwen3-TTS engine
 
@@ -620,6 +652,11 @@ the finished frames into a 24 kHz waveform.
 | `--voice <name>` | `serena` | Preset timbre: `serena`, `vivian`, `uncle_fu`, `ryan`, `aiden`, `ono_anna`, `sohee`, `eric`, `dylan`. |
 | `--language <lang>` | `auto` | Target language, set independently of the voice: `russian`, `english`, `german`, `spanish`, `chinese`, `japanese`, `french`, `korean`, `italian`, `portuguese`. |
 | `--model <name\|dir>` | `0.6b-customvoice` | `0.6b-customvoice` or `1.7b-customvoice` (larger, slower), or a checkpoint directory. |
+| `--text-file <path\|->` | — | Read the text from a file, or from standard input with `-`. |
+| `--text-format <auto\|txt\|md>` | `auto` | Where paragraphs end and whether markup is stripped. |
+| `--pause-ms <ms>` | `500` | Gap between paragraphs (half that inside a split paragraph). |
+| `--audio-encoder <auto\|builtin\|ffmpeg>` | `auto` | Who writes the file: the built-in wav/flac encoder, or ffmpeg for everything else. |
+| `--bitrate <rate>` | — | `-b:a` for lossy ffmpeg formats, e.g. `192k`. |
 | `--seed <int>` | `0` | Makes a sampled run repeatable. |
 | `--temperature`, `--top-k`, `--repetition-penalty` | `0.9`, `50`, `1.05` | Sampling controls. |
 | `--greedy` | off | Take the most likely code instead of sampling — deterministic, usually flatter. |
@@ -667,6 +704,15 @@ passes, which suits candle's lower per-operation overhead, so burn is around
 1.25× slower per frame and slower to load. What burn can do and candle cannot
 is run `1.7b-customvoice` in **full precision on Metal** within 16 GB — for
 that, `--runtime burn --precision f32`.
+
+For **long text, candle is the runtime to use.** burn's kernels are compiled
+and autotuned per shape, and the first pass over a shape it has not seen pays
+for that — a page of text runs a few times slower than on candle, most of the
+gap on the first run of a given machine. (The decoder used to make this worse:
+its last chunk was whatever frames were left over, so nearly every paragraph
+introduced a new shape and stalled for tens of seconds. It now decodes at a
+rounded-up length and drops the extra samples — the network is causal, so the
+waveform is unchanged to within 1e-6.)
 
 ## `vad` — voice-activity audio editing
 
@@ -800,6 +846,10 @@ breaks are collapsed first (a transcript's segment breaks are not paragraph
 breaks), then a local **SaT** (Segment any Text) model — an XLM-RoBERTa network
 that scores each position for a boundary — re-groups the text into paragraphs.
 It is multilingual, Russian and English included.
+
+The same model doubles as trakktor's splitter elsewhere: `tts` calls it to cut
+a paragraph too long to speak in one utterance, picking the coarsest boundaries
+that fit.
 
 #### Models
 

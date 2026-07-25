@@ -668,6 +668,7 @@ pub fn print_synthesis(
         object
             .insert("sample_rate".into(), json!(synthesis.speech.sample_rate));
         insert_f64(&mut object, "duration", duration);
+        object.insert("chunks".into(), json!(synthesis.chunks));
         insert_opt(&mut object, "language", synthesis.language.as_deref());
         object.insert("voice".into(), Value::Object(voice));
         object.insert(
@@ -681,10 +682,12 @@ pub fn print_synthesis(
 
     println!("{}", output.display());
     println!(
-        "{:.2}s\t{} Hz\t{} frames\tvoice {}{}",
+        "{:.2}s\t{} Hz\t{} frames\t{} chunk{}\tvoice {}{}",
         duration,
         synthesis.speech.sample_rate,
         synthesis.frames,
+        synthesis.chunks,
+        if synthesis.chunks == 1 { "" } else { "s" },
         match &synthesis.voice {
             Voice::Preset { name } => name.as_str(),
             other => other.kind(),

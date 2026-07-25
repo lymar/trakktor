@@ -26,6 +26,11 @@ pub trait SpeechModel {
     /// The sample rate of the waveform the codec decoder produces.
     fn sample_rate(&self) -> u32;
 
+    /// How many waveform samples one frame of codes decodes to — with
+    /// [`sample_rate`](Self::sample_rate), the seconds of speech a frame
+    /// carries, which is how a frame count becomes a position in the audio.
+    fn samples_per_frame(&self) -> usize;
+
     /// Starts a run: forgets any cached state, feeds the laid-out prompt, and
     /// returns the codebook-0 logits of the first frame.
     ///
