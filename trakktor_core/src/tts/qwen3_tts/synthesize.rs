@@ -336,7 +336,14 @@ impl Synthesizer {
         }
 
         Ok(Synthesis {
-            speech: tts::stitch(&spoken, &pauses, Join::default()),
+            speech: tts::stitch(
+                &spoken,
+                &pauses,
+                Join {
+                    match_levels: options.match_levels,
+                    ..Join::default()
+                },
+            ),
             voice: Voice::Preset {
                 name: options.voice.clone(),
             },

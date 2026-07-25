@@ -20,7 +20,8 @@ use trakktor_core::{
 
 use crate::{
     cli::{
-        AudioEncoderArg, DeviceArg, Qwen3TtsArgs, RuntimeArg, TtsPrecisionArg,
+        AudioEncoderArg, DeviceArg, LevelsArg, Qwen3TtsArgs, RuntimeArg,
+        TtsPrecisionArg,
     },
     error::CliError,
 };
@@ -104,6 +105,7 @@ pub(crate) fn run_qwen3_tts(
             language,
             sampling,
             pause: f64::from(args.pause_ms) / 1000.0,
+            match_levels: matches!(args.levels, LevelsArg::Match),
         },
         &mut |text, budget| splitter.split(text, budget),
         &mut |progress| report.update(progress),

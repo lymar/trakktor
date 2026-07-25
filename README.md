@@ -608,6 +608,14 @@ into one file:
   is trimmed of the silence the model leaves at its edges and faded at the
   join, so the pause is exactly what you asked for and the seams do not click;
   pieces of one split paragraph get half the gap.
+- `--levels match` (the default) brings the paragraphs to a common loudness
+  before joining. Each is spoken as its own utterance and the model picks a
+  level for it anew — measured 3.4 dB of spread on `serena` and 7.1 dB on
+  `uncle_fu` across one five-paragraph run, which is heard as the reading
+  jumping in volume. Matching moves each piece to the median level, by at most
+  6 dB and never into clipping. `--levels keep` leaves them as synthesized.
+  (Pace and delivery drift too, and that part cannot be fixed after the fact —
+  lowering the temperature does not help either.)
 - Every piece is sampled from a seed derived from `--seed`, so the same run
   reproduces the same file.
 
@@ -655,6 +663,7 @@ the finished frames into a 24 kHz waveform.
 | `--text-file <path\|->` | — | Read the text from a file, or from standard input with `-`. |
 | `--text-format <auto\|txt\|md>` | `auto` | Where paragraphs end and whether markup is stripped. |
 | `--pause-ms <ms>` | `500` | Gap between paragraphs (half that inside a split paragraph). |
+| `--levels <match\|keep>` | `match` | Bring the paragraphs to a common loudness before joining, or keep the levels the model gave them. |
 | `--audio-encoder <auto\|builtin\|ffmpeg>` | `auto` | Who writes the file: the built-in wav/flac encoder, or ffmpeg for everything else. |
 | `--bitrate <rate>` | — | `-b:a` for lossy ffmpeg formats, e.g. `192k`. |
 | `--seed <int>` | `0` | Makes a sampled run repeatable. |

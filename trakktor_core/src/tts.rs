@@ -111,6 +111,14 @@ pub struct Join {
     /// not cut back to the first sample of speech: a breath of room before a
     /// word sounds natural, an abrupt start does not.
     pub edge: f64,
+    /// Whether pieces are brought to a common loudness before joining.
+    ///
+    /// Each piece is spoken as its own utterance, and the model picks a level
+    /// for it anew; measured across five paragraphs, the pieces of one run
+    /// land 3–7 dB apart, which is heard as the reading jumping in volume
+    /// from paragraph to paragraph. Matching them is the one part of that
+    /// drift that can be fixed after the fact — pace and delivery cannot.
+    pub match_levels: bool,
 }
 
 impl Default for Join {
@@ -118,9 +126,18 @@ impl Default for Join {
         Self {
             fade: 0.01,
             edge: 0.03,
+            match_levels: true,
         }
     }
 }
+
+/// How far a piece may be pushed or pulled to match the others, in decibels.
+/// Past this the difference is not a level to correct but a piece that came out
+/// wrong, and amplifying it would only make that louder.
+const MAX_LEVEL_SHIFT_DB: f64 = 6.0;
+
+/// Peak a matched piece must stay under, so raising one cannot clip it.
+const PEAK_CEILING: f32 = 0.99;
 
 /// Joins `pieces` in order, putting `pauses[i]` seconds of silence between
 /// piece `i` and piece `i + 1`.
@@ -142,6 +159,11 @@ pub fn stitch(pieces: &[Speech], pauses: &[f64], join: Join) -> Speech {
     };
     let sample_rate = first.sample_rate;
     let seconds = |value: f64| (value * f64::from(sample_rate)) as usize;
+    let gains = if join.match_levels {
+        level_gains(pieces)
+    } else {
+        vec![1.0; pieces.len()]
+    };
 
     let mut samples: Vec<f32> = Vec::new();
     for (index, piece) in pieces.iter().enumerate() {
@@ -151,13 +173,72 @@ pub fn stitch(pieces: &[Speech], pauses: &[f64], join: Join) -> Speech {
         }
         let trimmed = trim_to_speech(&piece.samples, seconds(join.edge));
         let start = samples.len();
-        samples.extend_from_slice(trimmed);
+        let gain = gains[index];
+        samples.extend(trimmed.iter().map(|sample| sample * gain));
         fade_edges(&mut samples[start..], seconds(join.fade));
     }
     Speech {
         samples,
         sample_rate,
     }
+}
+
+/// The gain that brings each piece to the run's common loudness.
+///
+/// The target is the **median** of the pieces' levels, not their mean: a run
+/// where one paragraph came out unusually loud should pull the others toward
+/// the ordinary level, not toward the outlier. Each gain is clamped to
+/// [`MAX_LEVEL_SHIFT_DB`] and then held below whatever would clip the piece.
+fn level_gains(pieces: &[Speech]) -> Vec<f32> {
+    let levels: Vec<f32> = pieces.iter().map(|piece| level(piece)).collect();
+    let mut sorted: Vec<f32> = levels
+        .iter()
+        .copied()
+        .filter(|level| *level > 0.0)
+        .collect();
+    sorted.sort_by(f32::total_cmp);
+    let Some(&target) = sorted.get(sorted.len() / 2) else {
+        // Nothing but silence: there is no level to match.
+        return vec![1.0; pieces.len()];
+    };
+
+    let limit = 10f32.powf(MAX_LEVEL_SHIFT_DB as f32 / 20.0);
+    levels
+        .iter()
+        .zip(pieces)
+        .map(|(&level, piece)| {
+            if level <= 0.0 {
+                return 1.0;
+            }
+            let gain = (target / level).clamp(1.0 / limit, limit);
+            let peak = piece
+                .samples
+                .iter()
+                .fold(0.0f32, |peak, sample| peak.max(sample.abs()));
+            if peak * gain > PEAK_CEILING {
+                PEAK_CEILING / peak
+            } else {
+                gain
+            }
+        })
+        .collect()
+}
+
+/// A piece's loudness: the root mean square of its speech, with the silence at
+/// its edges left out — that silence is what the join trims away anyway, and
+/// counting it would make a piece with long pauses read as quieter than it is.
+fn level(piece: &Speech) -> f32 {
+    let speech: Vec<f32> = piece
+        .samples
+        .iter()
+        .copied()
+        .filter(|sample| sample.abs() > SILENCE_LEVEL)
+        .collect();
+    if speech.is_empty() {
+        return 0.0;
+    }
+    let sum: f64 = speech.iter().map(|s| f64::from(*s) * f64::from(*s)).sum();
+    (sum / speech.len() as f64).sqrt() as f32
 }
 
 /// The span of `samples` holding speech, widened by `edge` samples on each

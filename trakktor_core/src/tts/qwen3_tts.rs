@@ -110,6 +110,9 @@ pub struct SynthesisOptions {
     /// Silence between paragraphs, in seconds, when a text is spoken in
     /// several pieces.
     pub pause: f64,
+    /// Whether the pieces are brought to a common loudness before they are
+    /// joined ([`crate::tts::Join::match_levels`]).
+    pub match_levels: bool,
 }
 
 /// What a piece is busy with. Generation reports every frame; turning the

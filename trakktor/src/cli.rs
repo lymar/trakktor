@@ -289,6 +289,19 @@ pub(crate) struct Qwen3TtsArgs {
     #[arg(long, default_value_t = 500, value_name = "ms")]
     pub(crate) pause_ms: u32,
 
+    /// What to do with the loudness of each paragraph. Every paragraph is
+    /// spoken as its own utterance and the model picks a level for it anew, so
+    /// a long text drifts by several decibels from one to the next; `match`
+    /// (the default) brings them to a common level before joining, `keep`
+    /// leaves them exactly as synthesized.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = LevelsArg::Match,
+        value_name = "what"
+    )]
+    pub(crate) levels: LevelsArg,
+
     /// Where to write the audio; the extension picks the format. `.wav` and
     /// `.flac` are written directly, anything ffmpeg knows (mp3, m4a, opus,
     /// ogg, …) through it — see --audio-encoder.
@@ -382,6 +395,15 @@ pub(crate) struct Qwen3TtsArgs {
     /// always runs in full precision either way.
     #[arg(long, value_enum, value_name = "precision")]
     pub(crate) precision: Option<TtsPrecisionArg>,
+}
+
+/// The `--levels` value of `tts`.
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum LevelsArg {
+    /// Bring the paragraphs to a common loudness (the default).
+    Match,
+    /// Leave each paragraph at the level the model gave it.
+    Keep,
 }
 
 /// The `--text-format` value of `tts`.
