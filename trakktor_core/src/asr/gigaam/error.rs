@@ -49,3 +49,9 @@ pub enum GigaamError {
     )]
     HomeDirUnknown,
 }
+
+impl From<crate::download::DownloadError> for GigaamError {
+    fn from(error: crate::download::DownloadError) -> Self {
+        Self::ModelDownload(error.to_string())
+    }
+}

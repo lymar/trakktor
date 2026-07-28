@@ -2,6 +2,8 @@
 //! already cached would download, so the tests cover only the paths that
 //! resolve or fail before any request.
 
+use std::fs;
+
 use super::*;
 
 /// A progress sink for calls that must not reach the network.

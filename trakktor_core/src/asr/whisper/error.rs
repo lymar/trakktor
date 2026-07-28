@@ -53,3 +53,9 @@ pub enum WhisperError {
     )]
     HomeDirUnknown,
 }
+
+impl From<crate::download::DownloadError> for WhisperError {
+    fn from(error: crate::download::DownloadError) -> Self {
+        Self::ModelDownload(error.to_string())
+    }
+}

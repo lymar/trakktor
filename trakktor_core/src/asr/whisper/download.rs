@@ -9,14 +9,10 @@
 #[cfg(test)]
 mod tests;
 
-use std::{
-    fs,
-    io::{Read, Write},
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::path::{Path, PathBuf};
 
 use super::error::WhisperError;
+use crate::download::{self, Download, Progress};
 
 /// Published model names and their repository slugs.
 pub const KNOWN_MODELS: &[(&str, &str)] = &[
@@ -63,7 +59,7 @@ pub struct ResolvedModel {
 pub fn resolve_model(
     models_dir: &Path,
     model: &str,
-    progress: &mut dyn FnMut(&str, u64, Option<u64>),
+    progress: Progress<'_>,
 ) -> Result<ResolvedModel, WhisperError> {
     // A path to a local checkpoint directory wins over the name table.
     let as_path = Path::new(model);
@@ -95,85 +91,17 @@ pub fn resolve_model(
         });
     }
 
-    fs::create_dir_all(&dir).map_err(|e| {
-        WhisperError::ModelDownload(format!("creating {}: {e}", dir.display()))
-    })?;
-
-    let client = reqwest::blocking::Client::builder()
-        .connect_timeout(Duration::from_secs(30))
-        // Model files are large; only the connection phase is bounded.
-        .timeout(None)
-        .build()
-        .map_err(|e| {
-            WhisperError::ModelDownload(format!("building http client: {e}"))
-        })?;
-
     for file in CHECKPOINT_FILES {
         let target = dir.join(file);
         if target.is_file() {
             continue;
         }
-        let url =
-            format!("https://huggingface.co/openai/{repo}/resolve/main/{file}");
-        download_file(&client, &url, &target, file, progress)?;
+        let url = download::hugging_face_url(&format!("openai/{repo}"), file);
+        Download::new(&url, &target).fetch(&mut *progress)?;
     }
 
     Ok(ResolvedModel {
         dir,
         name: Some(name),
     })
-}
-
-/// Streams `url` into `target` via a temporary file, so an interrupted
-/// download never leaves a half-written checkpoint behind.
-fn download_file(
-    client: &reqwest::blocking::Client,
-    url: &str,
-    target: &Path,
-    label: &str,
-    progress: &mut dyn FnMut(&str, u64, Option<u64>),
-) -> Result<(), WhisperError> {
-    let failed = |stage: &str, detail: String| {
-        WhisperError::ModelDownload(format!("{stage} {url}: {detail}"))
-    };
-
-    let mut response = client
-        .get(url)
-        .send()
-        .map_err(|e| failed("requesting", e.to_string()))?;
-    if !response.status().is_success() {
-        return Err(failed(
-            "requesting",
-            format!("http status {}", response.status()),
-        ));
-    }
-    let total = response.content_length();
-
-    let temp = target.with_extension("partial");
-    let mut output = fs::File::create(&temp)
-        .map_err(|e| failed("writing", e.to_string()))?;
-
-    let mut buffer = vec![0u8; 1 << 20];
-    let mut done: u64 = 0;
-    loop {
-        let read = response
-            .read(&mut buffer)
-            .map_err(|e| failed("reading", e.to_string()))?;
-        if read == 0 {
-            break;
-        }
-        output
-            .write_all(&buffer[..read])
-            .map_err(|e| failed("writing", e.to_string()))?;
-        done += read as u64;
-        progress(label, done, total);
-    }
-    output
-        .flush()
-        .map_err(|e| failed("writing", e.to_string()))?;
-    drop(output);
-
-    fs::rename(&temp, target)
-        .map_err(|e| failed("finalizing", e.to_string()))?;
-    Ok(())
 }

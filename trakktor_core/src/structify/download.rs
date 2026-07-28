@@ -6,14 +6,10 @@
 //! downloaded from the official repository on first use. The XLM-R tokenizer is
 //! shared across models and cached once as `text/structify/tokenizer.json`.
 
-use std::{
-    fs,
-    io::{Read, Write},
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::path::{Path, PathBuf};
 
 use super::error::StructifyError;
+use crate::download::{self, Download, Progress};
 
 /// The weight-file names a checkpoint may carry: the `-sm` models publish
 /// safetensors, the base models only a PyTorch checkpoint (loaded via candle's
@@ -85,7 +81,7 @@ fn feature_dir(models_dir: &Path) -> PathBuf {
 pub fn resolve_model(
     models_dir: &Path,
     model: &str,
-    progress: &mut dyn FnMut(&str, u64, Option<u64>),
+    progress: Progress<'_>,
 ) -> Result<ResolvedModel, StructifyError> {
     // A path to a local checkpoint directory wins over the name table.
     let as_path = Path::new(model);
@@ -119,23 +115,16 @@ pub fn resolve_model(
         });
     }
 
-    fs::create_dir_all(&dir).map_err(|e| {
-        StructifyError::ModelDownload(format!(
-            "creating {}: {e}",
-            dir.display()
-        ))
-    })?;
-
-    let client = http_client()?;
     for file in files {
         let target = dir.join(file);
         if target.is_file() {
             continue;
         }
-        let url = format!(
-            "https://huggingface.co/segment-any-text/{name}/resolve/main/{file}"
+        let url = download::hugging_face_url(
+            &format!("segment-any-text/{name}"),
+            file,
         );
-        download_file(&client, &url, &target, file, progress)?;
+        Download::new(&url, &target).fetch(&mut *progress)?;
     }
 
     Ok(ResolvedModel {
@@ -152,89 +141,13 @@ pub fn resolve_model(
 /// Returns [`StructifyError::ModelDownload`] when fetching the tokenizer fails.
 pub fn resolve_tokenizer(
     models_dir: &Path,
-    progress: &mut dyn FnMut(&str, u64, Option<u64>),
+    progress: Progress<'_>,
 ) -> Result<PathBuf, StructifyError> {
-    let dir = feature_dir(models_dir);
-    let target = dir.join(TOKENIZER_FILE);
+    let target = feature_dir(models_dir).join(TOKENIZER_FILE);
     if target.is_file() {
         return Ok(target);
     }
-    fs::create_dir_all(&dir).map_err(|e| {
-        StructifyError::ModelDownload(format!(
-            "creating {}: {e}",
-            dir.display()
-        ))
-    })?;
-    let client = http_client()?;
-    let url = format!(
-        "https://huggingface.co/{TOKENIZER_REPO}/resolve/main/{TOKENIZER_FILE}"
-    );
-    download_file(&client, &url, &target, TOKENIZER_FILE, progress)?;
+    let url = download::hugging_face_url(TOKENIZER_REPO, TOKENIZER_FILE);
+    Download::new(&url, &target).fetch(progress)?;
     Ok(target)
-}
-
-/// Builds the blocking HTTP client used for downloads.
-fn http_client() -> Result<reqwest::blocking::Client, StructifyError> {
-    reqwest::blocking::Client::builder()
-        .connect_timeout(Duration::from_secs(30))
-        // Model files are large; only the connection phase is bounded.
-        .timeout(None)
-        .build()
-        .map_err(|e| {
-            StructifyError::ModelDownload(format!("building http client: {e}"))
-        })
-}
-
-/// Streams `url` into `target` via a temporary file, so an interrupted download
-/// never leaves a half-written file behind.
-fn download_file(
-    client: &reqwest::blocking::Client,
-    url: &str,
-    target: &Path,
-    label: &str,
-    progress: &mut dyn FnMut(&str, u64, Option<u64>),
-) -> Result<(), StructifyError> {
-    let failed = |stage: &str, detail: String| {
-        StructifyError::ModelDownload(format!("{stage} {url}: {detail}"))
-    };
-
-    let mut response = client
-        .get(url)
-        .send()
-        .map_err(|e| failed("requesting", e.to_string()))?;
-    if !response.status().is_success() {
-        return Err(failed(
-            "requesting",
-            format!("http status {}", response.status()),
-        ));
-    }
-    let total = response.content_length();
-
-    let temp = target.with_extension("partial");
-    let mut output = fs::File::create(&temp)
-        .map_err(|e| failed("writing", e.to_string()))?;
-
-    let mut buffer = vec![0u8; 1 << 20];
-    let mut done: u64 = 0;
-    loop {
-        let read = response
-            .read(&mut buffer)
-            .map_err(|e| failed("reading", e.to_string()))?;
-        if read == 0 {
-            break;
-        }
-        output
-            .write_all(&buffer[..read])
-            .map_err(|e| failed("writing", e.to_string()))?;
-        done += read as u64;
-        progress(label, done, total);
-    }
-    output
-        .flush()
-        .map_err(|e| failed("writing", e.to_string()))?;
-    drop(output);
-
-    fs::rename(&temp, target)
-        .map_err(|e| failed("finalizing", e.to_string()))?;
-    Ok(())
 }

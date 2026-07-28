@@ -7,8 +7,11 @@
 
 use std::{io::Read, time::Duration};
 
-/// User-Agent sent with every request: `trakktor/<version>`.
-const USER_AGENT: &str = concat!("trakktor/", env!("CARGO_PKG_VERSION"));
+/// User-Agent sent with every request: `trakktor/<version>`. Shared with the
+/// [downloader](crate::download), which speaks to a different kind of endpoint
+/// under a different policy but identifies itself the same way.
+pub(crate) const USER_AGENT: &str =
+    concat!("trakktor/", env!("CARGO_PKG_VERSION"));
 /// Connection timeout.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Overall request timeout.

@@ -58,3 +58,9 @@ pub enum Qwen3TtsError {
     )]
     HomeDirUnknown,
 }
+
+impl From<crate::download::DownloadError> for Qwen3TtsError {
+    fn from(error: crate::download::DownloadError) -> Self {
+        Self::ModelDownload(error.to_string())
+    }
+}

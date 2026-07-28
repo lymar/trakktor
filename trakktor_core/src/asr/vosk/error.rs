@@ -45,3 +45,9 @@ pub enum VoskError {
     )]
     HomeDirUnknown,
 }
+
+impl From<crate::download::DownloadError> for VoskError {
+    fn from(error: crate::download::DownloadError) -> Self {
+        Self::ModelDownload(error.to_string())
+    }
+}

@@ -31,7 +31,7 @@ whisper-runtime = ["dep:candle-core", "dep:candle-nn", "dep:serde_json"]
 whisper-burn = ["whisper-runtime", "dep:burn"]
 # The candle-backed GigaAM runtime (Conformer encoder + CTC/RNN-T heads). Off
 # the default set this crate builds without the GigaAM stack.
-gigaam-runtime = ["dep:candle-core", "dep:candle-nn", "dep:serde_json", "dep:md-5"]
+gigaam-runtime = ["dep:candle-core", "dep:candle-nn", "dep:serde_json"]
 # The burn-backed alternative GigaAM runtime, selectable at run time next to
 # the candle one. Builds on top of the candle runtime (shared checkpoint
 # reader and model plumbing).
@@ -123,7 +123,9 @@ feedparser-rs.workspace = true
 flacenc = { workspace = true, optional = true }
 flate2.workspace = true
 hound = { workspace = true, optional = true }
-md-5 = { workspace = true, optional = true }
+# One of the two digests the shared downloader verifies models against (blake3
+# is the other): which one to expect is the publisher's choice, not a feature.
+md-5.workspace = true
 rand.workspace = true
 realfft.workspace = true
 reqwest.workspace = true

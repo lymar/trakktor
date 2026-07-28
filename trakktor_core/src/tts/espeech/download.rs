@@ -11,12 +11,11 @@
 
 use std::{
     fs,
-    io::{Read, Write},
     path::{Path, PathBuf},
-    time::Duration,
 };
 
 use super::error::EspeechError;
+use crate::download::{self, Download, Progress};
 
 /// The converted weights inside a variant's directory.
 pub const MODEL_WEIGHTS: &str = "model.safetensors";
@@ -132,7 +131,7 @@ fn engine_dir(models_dir: &Path) -> PathBuf {
 pub fn resolve_model(
     models_dir: &Path,
     model: &str,
-    progress: &mut dyn FnMut(&str, u64, Option<u64>),
+    progress: Progress<'_>,
 ) -> Result<ResolvedModel, EspeechError> {
     let vocoder_dir = engine_dir(models_dir).join(VOCODER_DIR);
 
@@ -172,36 +171,25 @@ pub fn resolve_model(
 fn ensure_variant(
     dir: &Path,
     known: KnownModel,
-    progress: &mut dyn FnMut(&str, u64, Option<u64>),
+    progress: Progress<'_>,
 ) -> Result<(), EspeechError> {
     let weights = dir.join(MODEL_WEIGHTS);
     let vocab = dir.join(VOCAB_FILE);
     if weights.is_file() && vocab.is_file() {
         return Ok(());
     }
-    create_dir(dir)?;
-    let client = http_client()?;
     if !vocab.is_file() {
-        download_file(
-            &client,
-            &url(known.repo, VOCAB_FILE),
-            &vocab,
-            VOCAB_FILE,
-            progress,
-        )?;
+        let url = download::hugging_face_url(known.repo, VOCAB_FILE);
+        Download::new(&url, &vocab).fetch(&mut *progress)?;
     }
     if !weights.is_file() {
         // The archive lands next to the weights it becomes and is removed once
-        // the conversion succeeds.
+        // the conversion succeeds — so a conversion that fails does not cost
+        // the download a second time.
         let archive = dir.join(known.file);
         if !archive.is_file() {
-            download_file(
-                &client,
-                &url(known.repo, known.file),
-                &archive,
-                known.file,
-                progress,
-            )?;
+            let url = download::hugging_face_url(known.repo, known.file);
+            Download::new(&url, &archive).fetch(progress)?;
         }
         convert_checkpoint(&archive, &weights)?;
         let _ = fs::remove_file(&archive);
@@ -212,22 +200,16 @@ fn ensure_variant(
 /// Makes sure the shared vocoder is present and converted.
 fn ensure_vocoder(
     dir: &Path,
-    progress: &mut dyn FnMut(&str, u64, Option<u64>),
+    progress: Progress<'_>,
 ) -> Result<(), EspeechError> {
     let weights = dir.join(VOCODER_WEIGHTS);
     if weights.is_file() {
         return Ok(());
     }
-    create_dir(dir)?;
     let archive = dir.join(VOCODER_SOURCE);
     if !archive.is_file() {
-        download_file(
-            &http_client()?,
-            &url(VOCODER_REPO, VOCODER_SOURCE),
-            &archive,
-            VOCODER_SOURCE,
-            progress,
-        )?;
+        let url = download::hugging_face_url(VOCODER_REPO, VOCODER_SOURCE);
+        Download::new(&url, &archive).fetch(progress)?;
     }
     convert_vocoder(&archive, &weights)?;
     let _ = fs::remove_file(&archive);
@@ -313,84 +295,6 @@ fn write_safetensors(
             out.display()
         ))
     })
-}
-
-/// Creates a directory, reporting failure the way a download does.
-fn create_dir(dir: &Path) -> Result<(), EspeechError> {
-    fs::create_dir_all(dir).map_err(|e| {
-        EspeechError::ModelDownload(format!("creating {}: {e}", dir.display()))
-    })
-}
-
-/// The download URL of `file` in `repo`.
-fn url(repo: &str, file: &str) -> String {
-    format!("https://huggingface.co/{repo}/resolve/main/{file}")
-}
-
-/// Builds the blocking HTTP client used for downloads.
-fn http_client() -> Result<reqwest::blocking::Client, EspeechError> {
-    reqwest::blocking::Client::builder()
-        .connect_timeout(Duration::from_secs(30))
-        // Model files are large; only the connection phase is bounded.
-        .timeout(None)
-        .build()
-        .map_err(|e| {
-            EspeechError::ModelDownload(format!("building http client: {e}"))
-        })
-}
-
-/// Streams `url` into `target` via a temporary file, so an interrupted download
-/// never leaves a half-written file behind.
-fn download_file(
-    client: &reqwest::blocking::Client,
-    url: &str,
-    target: &Path,
-    label: &str,
-    progress: &mut dyn FnMut(&str, u64, Option<u64>),
-) -> Result<(), EspeechError> {
-    let failed = |stage: &str, detail: String| {
-        EspeechError::ModelDownload(format!("{stage} {url}: {detail}"))
-    };
-
-    let mut response = client
-        .get(url)
-        .send()
-        .map_err(|e| failed("requesting", e.to_string()))?;
-    if !response.status().is_success() {
-        return Err(failed(
-            "requesting",
-            format!("http status {}", response.status()),
-        ));
-    }
-    let total = response.content_length();
-
-    let temp = target.with_extension("partial");
-    let mut output = fs::File::create(&temp)
-        .map_err(|e| failed("writing", e.to_string()))?;
-
-    let mut buffer = vec![0u8; 1 << 20];
-    let mut done: u64 = 0;
-    loop {
-        let read = response
-            .read(&mut buffer)
-            .map_err(|e| failed("reading", e.to_string()))?;
-        if read == 0 {
-            break;
-        }
-        output
-            .write_all(&buffer[..read])
-            .map_err(|e| failed("writing", e.to_string()))?;
-        done += read as u64;
-        progress(label, done, total);
-    }
-    output
-        .flush()
-        .map_err(|e| failed("writing", e.to_string()))?;
-    drop(output);
-
-    fs::rename(&temp, target)
-        .map_err(|e| failed("finalizing", e.to_string()))?;
-    Ok(())
 }
 
 #[cfg(test)]

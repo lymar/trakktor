@@ -7,6 +7,7 @@
 pub mod asr;
 #[cfg(feature = "audio")]
 pub mod audio;
+pub mod download;
 pub mod feed;
 pub mod http;
 #[cfg(feature = "punctuate-runtime")]

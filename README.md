@@ -140,11 +140,21 @@ error. The default build never needs ffmpeg.
 ### Model storage
 
 Models are downloaded **on first use** and reused on later runs; first-run
-download progress is printed to stderr. The weights are large and **shared
-across projects**: they live under the **model directory** — `~/.trakktor` by
-default — *not* in the per-project `--work-dir`, each engine under its own
-path (`asr/whisper/<name>/`, `asr/gigaam/<name>.ckpt`,
-`asr/vosk/<name>/`). Override the root with
+download progress is printed to stderr.
+
+A checkpoint is gigabytes, so the download is built to survive the trip. It
+runs over four parallel connections — measurably about three times faster than
+one — and **resumes** if it is interrupted: a run that dies at 90 % costs the
+remaining 10 % next time, not the whole file again. Transient failures (a
+dropped connection, a stalled transfer, a 5xx) are retried, and a file only
+gets its final name once it is complete and matches its published checksum, so
+an interrupted download can never be mistaken for a usable model. Interrupt one
+with `Ctrl-C` and start it again to see it pick up where it stopped.
+
+The weights are large and **shared across projects**: they live under the
+**model directory** — `~/.trakktor` by default — *not* in the per-project
+`--work-dir`, each engine under its own path (`asr/whisper/<name>/`,
+`asr/gigaam/<name>.ckpt`, `asr/vosk/<name>/`). Override the root with
 `--model-dir <path>` or `TRAKKTOR_MODEL_DIR` (precedence: flag > env >
 `~/.trakktor`); to reuse weights already downloaded elsewhere, point it at
 that root — e.g. `TRAKKTOR_MODEL_DIR=/data/models` looks for

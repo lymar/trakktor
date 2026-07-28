@@ -51,3 +51,9 @@ pub enum EspeechError {
     #[error("{0}")]
     Io(String),
 }
+
+impl From<crate::download::DownloadError> for EspeechError {
+    fn from(error: crate::download::DownloadError) -> Self {
+        Self::ModelDownload(error.to_string())
+    }
+}

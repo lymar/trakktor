@@ -43,3 +43,9 @@ pub enum StructifyError {
     )]
     HomeDirUnknown,
 }
+
+impl From<crate::download::DownloadError> for StructifyError {
+    fn from(error: crate::download::DownloadError) -> Self {
+        Self::ModelDownload(error.to_string())
+    }
+}

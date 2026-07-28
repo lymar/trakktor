@@ -11,10 +11,10 @@ use std::{
     fs,
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    time::Duration,
 };
 
 use super::{error::PunctuateError, runtime::WEIGHTS_FILE};
+use crate::download::{self, Download, Progress};
 
 /// The SentencePiece model file name, in the repo and in the cache.
 pub(super) const SPE_FILE: &str = "sp.model";
@@ -77,7 +77,7 @@ fn feature_dir(models_dir: &Path) -> PathBuf {
 pub fn resolve_model(
     models_dir: &Path,
     model: &str,
-    progress: &mut dyn FnMut(&str, u64, Option<u64>),
+    progress: Progress<'_>,
 ) -> Result<ResolvedModel, PunctuateError> {
     // A local directory that already holds the weights wins over the name
     // table.
@@ -106,23 +106,19 @@ pub fn resolve_model(
         });
     }
 
-    fs::create_dir_all(&dir).map_err(|e| {
-        PunctuateError::ModelDownload(format!(
-            "creating {}: {e}",
-            dir.display()
-        ))
-    })?;
-
-    let client = http_client()?;
     if !spe.is_file() {
-        let url = repo_url(spec.repo, SPE_FILE);
-        download_file(&client, &url, &spe, SPE_FILE, progress)?;
+        let url = download::hugging_face_url(spec.repo, SPE_FILE);
+        Download::new(&url, &spe).fetch(&mut *progress)?;
     }
     if !weights.is_file() {
-        // Fetch the NeMo archive, extract just the weights, then drop it.
+        // Fetch the NeMo archive, extract just the weights, then drop it. The
+        // archive is only removed once the extraction has succeeded, so a
+        // failure there does not cost the download again.
         let nemo = dir.join(spec.nemo);
-        let url = repo_url(spec.repo, spec.nemo);
-        download_file(&client, &url, &nemo, spec.nemo, progress)?;
+        if !nemo.is_file() {
+            let url = download::hugging_face_url(spec.repo, spec.nemo);
+            Download::new(&url, &nemo).fetch(progress)?;
+        }
         extract_weights(&nemo, &weights)?;
         let _ = fs::remove_file(&nemo);
     }
@@ -131,11 +127,6 @@ pub fn resolve_model(
         dir,
         name: Some(spec.name),
     })
-}
-
-/// The HF resolve URL for a repo file.
-fn repo_url(repo: &str, file: &str) -> String {
-    format!("https://huggingface.co/{repo}/resolve/main/{file}")
 }
 
 /// Extracts `model_weights.ckpt` from a NeMo archive (`*.nemo`, a plain or gzip
@@ -183,70 +174,4 @@ fn extract_weights(nemo: &Path, target: &Path) -> Result<(), PunctuateError> {
         }
     }
     Err(failed(format!("no {WEIGHTS_FILE} member")))
-}
-
-/// Builds the blocking HTTP client used for downloads.
-fn http_client() -> Result<reqwest::blocking::Client, PunctuateError> {
-    reqwest::blocking::Client::builder()
-        .connect_timeout(Duration::from_secs(30))
-        // Model files are large; only the connection phase is bounded.
-        .timeout(None)
-        .build()
-        .map_err(|e| {
-            PunctuateError::ModelDownload(format!("building http client: {e}"))
-        })
-}
-
-/// Streams `url` into `target` via a temporary file, so an interrupted download
-/// never leaves a half-written file behind.
-fn download_file(
-    client: &reqwest::blocking::Client,
-    url: &str,
-    target: &Path,
-    label: &str,
-    progress: &mut dyn FnMut(&str, u64, Option<u64>),
-) -> Result<(), PunctuateError> {
-    let failed = |stage: &str, detail: String| {
-        PunctuateError::ModelDownload(format!("{stage} {url}: {detail}"))
-    };
-
-    let mut response = client
-        .get(url)
-        .send()
-        .map_err(|e| failed("requesting", e.to_string()))?;
-    if !response.status().is_success() {
-        return Err(failed(
-            "requesting",
-            format!("http status {}", response.status()),
-        ));
-    }
-    let total = response.content_length();
-
-    let temp = target.with_extension("partial");
-    let mut output = fs::File::create(&temp)
-        .map_err(|e| failed("writing", e.to_string()))?;
-
-    let mut buffer = vec![0u8; 1 << 20];
-    let mut done: u64 = 0;
-    loop {
-        let read = response
-            .read(&mut buffer)
-            .map_err(|e| failed("reading", e.to_string()))?;
-        if read == 0 {
-            break;
-        }
-        output
-            .write_all(&buffer[..read])
-            .map_err(|e| failed("writing", e.to_string()))?;
-        done += read as u64;
-        progress(label, done, total);
-    }
-    output
-        .flush()
-        .map_err(|e| failed("writing", e.to_string()))?;
-    drop(output);
-
-    fs::rename(&temp, target)
-        .map_err(|e| failed("finalizing", e.to_string()))?;
-    Ok(())
 }

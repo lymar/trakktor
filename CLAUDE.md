@@ -104,6 +104,16 @@ published separately). Rationale: `../trakktor_project/docs/adr/0002-cargo-works
   `progress::live_reporter` and closes with `progress::finish_line`; model
   downloads use `progress::download_progress`. Do not reintroduce a local
   `transcribe_progress`/`clock`/`download_progress`.
+- **Every model, checkpoint, and downloaded asset comes through the shared
+  `trakktor_core::download` module — never a per-engine copy.** One
+  `Download::new(url, target).fetch(progress)` gets resume after an
+  interruption, retries with backoff, an atomic rename, optional BLAKE3/MD5
+  verification, and parallel range requests; a local `download.rs` with its own
+  `reqwest` client would get none of it and would drift. Progress is reported
+  **only** through that module's `Progress` type, which the CLI draws with
+  `progress::download_progress`. Do not reintroduce a per-engine
+  `download_file`/`http_client`, and do not point the feed HTTP client at large
+  files — it is built for small, size-capped responses.
 - **Any burn run on a GPU device must call `burn_notice::announce_cold_gpu_start`
   before loading the model** — it prints the kernel compile/autotune heads-up
   (burn autotunes per kernel shape, so a not-yet-tuned model re-tunes even when

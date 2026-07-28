@@ -44,3 +44,9 @@ pub enum PunctuateError {
     )]
     HomeDirUnknown,
 }
+
+impl From<crate::download::DownloadError> for PunctuateError {
+    fn from(error: crate::download::DownloadError) -> Self {
+        Self::ModelDownload(error.to_string())
+    }
+}

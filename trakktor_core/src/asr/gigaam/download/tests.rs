@@ -1,14 +1,4 @@
-use super::{resolve_model, verify_md5};
-
-#[test]
-fn verify_md5_accepts_known_digest() {
-    let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("data.bin");
-    std::fs::write(&file, b"abc").unwrap();
-    // md5("abc") = 900150983cd24fb0d6963f7d28e17f72
-    verify_md5(&file, "900150983cd24fb0d6963f7d28e17f72").unwrap();
-    assert!(verify_md5(&file, "00000000000000000000000000000000").is_err());
-}
+use super::resolve_model;
 
 #[test]
 fn resolve_unknown_name_errors() {
