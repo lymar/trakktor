@@ -162,8 +162,9 @@ each work's copyright and permission notice as its license (MIT, Apache-2.0,
 etc.) requires. Attribute ported/adapted code at its source too, in the module
 `//!` doc-comment (name the upstream project and its license) — but **not** in
 clap `///` doc-comments, which are agent-facing (see the leak rule above). When
-a feature has a user-facing home, add a short credit to the `README`
-(`## Acknowledgments`) and, for academic models that request it, the citation.
+a feature has a user-facing home, add a credit to `docs/acknowledgments.md`
+(summarized in the `README`'s `## Acknowledgments`, which links there) and,
+for academic models that request it, the citation.
 
 ## Rust module and test layout
 
