@@ -10,6 +10,7 @@
 //! described and what one synthesis run returns. Everything engine-specific
 //! (model variants, sampling, runtime plumbing) belongs to the engine.
 
+pub mod espeech;
 pub mod qwen3_tts;
 pub mod text;
 

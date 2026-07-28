@@ -20,8 +20,8 @@ use trakktor_core::{
 
 use crate::{
     cli::{
-        AudioEncoderArg, DeviceArg, LevelsArg, Qwen3TtsArgs, RuntimeArg,
-        TtsPrecisionArg,
+        AudioEncoderArg, DeviceArg, EspeechArgs, LevelsArg, Qwen3TtsArgs,
+        RuntimeArg, TtsPrecisionArg,
     },
     error::CliError,
 };
@@ -87,14 +87,19 @@ pub(crate) fn run_qwen3_tts(
 
     // Splitting an over-budget paragraph needs a second model; it is loaded
     // only if a paragraph actually turns out to need one.
+    let tokenizer = TextTokenizer::load(
+        &resolved.dir.join("vocab.json"),
+        &resolved.dir.join("merges.txt"),
+    )?;
     let mut splitter = split::Splitter::new(
         model_dir,
         args.runtime,
         args.device,
-        TextTokenizer::load(
-            &resolved.dir.join("vocab.json"),
-            &resolved.dir.join("merges.txt"),
-        )?,
+        // A piece whose cost cannot be measured is treated as too expensive,
+        // so the search keeps cutting rather than accepting it.
+        Box::new(move |piece: &str| {
+            tokenizer.encode(piece).map_or(usize::MAX, |ids| ids.len())
+        }),
     );
 
     let report = progress::Reporter::start(Instant::now());
@@ -107,10 +112,14 @@ pub(crate) fn run_qwen3_tts(
             pause: f64::from(args.pause_ms) / 1000.0,
             match_levels: matches!(args.levels, LevelsArg::Match),
         },
-        &mut |text, budget| splitter.split(text, budget),
+        &mut |text, budget| {
+            splitter
+                .split(text, budget)
+                .map_err(Qwen3TtsError::InvalidModel)
+        },
         &mut |progress| report.update(progress),
     )?;
-    report.finish(&synthesis);
+    report.finish(synthesis.chunks, synthesis.speech.duration());
 
     write_audio(
         &args.output,
@@ -130,6 +139,187 @@ pub(crate) fn run_qwen3_tts(
         pretty,
     );
     Ok(())
+}
+
+/// Runs one ESpeech synthesis end to end: read the text and the reference,
+/// resolve (and if needed download and convert) the model, load it, speak the
+/// pieces in the reference's voice, write the audio, and print the result.
+pub(crate) fn run_espeech(
+    args: &EspeechArgs,
+    model_dir: &Path,
+    json: bool,
+    pretty: bool,
+) -> Result<(), CliError> {
+    use trakktor_core::tts::espeech;
+
+    // Everything that can fail without touching the network fails first, so a
+    // bad path, a bad extension, or an unsupported language does not cost a
+    // download.
+    let input = read_input(args.text.as_deref(), args.text_file.as_deref())
+        .map_err(espeech_input)?;
+    let paragraphs = text::paragraphs(
+        &input.text,
+        args.text_format
+            .to_core()
+            .resolve(input.source.as_deref(), &input.text),
+    );
+    if paragraphs.is_empty() {
+        return Err(espeech::EspeechError::TextEmpty.into());
+    }
+    let target = output_target(&args.output, args.audio_encoder)
+        .map_err(espeech_input)?;
+    let language = (!args.language.eq_ignore_ascii_case("auto"))
+        .then(|| args.language.clone());
+    espeech::Synthesizer::check_language(language.as_deref())?;
+    let ref_text = read_ref_text(args)?;
+    let reference = espeech::reference::prepare(&args.ref_audio)?;
+
+    let resolved = espeech::resolve_model(
+        model_dir,
+        &args.model,
+        &mut crate::asr::progress::download_progress(),
+    )?;
+
+    let precision = match args.precision {
+        crate::cli::EspeechPrecisionArg::F16 => espeech::Precision::F16,
+        crate::cli::EspeechPrecisionArg::F32 => espeech::Precision::F32,
+    };
+    let model: Box<dyn espeech::SpeechModel> = match args.runtime {
+        RuntimeArg::Candle => Box::new(espeech::runtime::load(
+            &resolved.dir,
+            &resolved.vocoder_dir,
+            espeech::runtime::device(matches!(args.device, DeviceArg::Metal))?,
+            precision,
+        )?),
+        RuntimeArg::Burn => {
+            load_espeech_burn(&resolved, args.device, precision)?
+        },
+    };
+
+    let mut synthesizer = espeech::Synthesizer::load(
+        &resolved.dir,
+        model,
+        reference,
+        &ref_text,
+        &args.ref_audio.display().to_string(),
+    )?;
+
+    let options = espeech::SynthesisOptions {
+        nfe_step: args.nfe_step,
+        cfg_strength: args.cfg_strength,
+        speed: args.speed,
+        seed: args.seed,
+        pause: f64::from(args.pause_ms) / 1000.0,
+        match_levels: matches!(args.levels, LevelsArg::Match),
+    };
+    // The budget is in bytes of UTF-8 — the unit the duration estimate is
+    // stated in — so that is what a candidate piece is measured in too.
+    let mut splitter = split::Splitter::new(
+        model_dir,
+        args.runtime,
+        args.device,
+        Box::new(str::len),
+    );
+
+    let report = progress::Reporter::start(Instant::now());
+    let synthesis = synthesizer.speak_paragraphs(
+        &paragraphs,
+        &options,
+        &mut |text, budget| {
+            splitter
+                .split(text, budget)
+                .map_err(espeech::EspeechError::Checkpoint)
+        },
+        &mut |progress| report.update(progress),
+    )?;
+    report.finish(synthesis.chunks, synthesis.speech.duration());
+
+    write_audio(
+        &args.output,
+        &synthesis.speech,
+        target,
+        args.bitrate.as_deref(),
+    )?;
+
+    crate::output::print_espeech_synthesis(
+        &synthesis,
+        &args.output,
+        &format_name(&args.output),
+        &resolved.label(),
+        runtime_name(args.runtime),
+        &options,
+        language.as_deref(),
+        json,
+        pretty,
+    );
+    Ok(())
+}
+
+/// Re-reports an input failure of the shared helpers in the ESpeech vocabulary.
+fn espeech_input(
+    err: Qwen3TtsError,
+) -> trakktor_core::tts::espeech::EspeechError {
+    use trakktor_core::tts::espeech::EspeechError;
+    match err {
+        Qwen3TtsError::TextEmpty => EspeechError::TextEmpty,
+        Qwen3TtsError::Io(message) => EspeechError::Io(message),
+        other => EspeechError::InvalidOptions(other.to_string()),
+    }
+}
+
+/// Resolves the reference transcript: the argument or a UTF-8 file.
+fn read_ref_text(args: &EspeechArgs) -> Result<String, CliError> {
+    use trakktor_core::tts::espeech::EspeechError;
+    if let Some(text) = &args.ref_text {
+        return Ok(text.clone());
+    }
+    // clap enforces that exactly one of the two is given; this guards the
+    // library-level contract rather than the command line.
+    let path = args
+        .ref_text_file
+        .as_deref()
+        .ok_or_else(|| CliError::from(EspeechError::RefTextRequired))?;
+    std::fs::read_to_string(path).map_err(|e| {
+        CliError::from(EspeechError::Io(format!(
+            "reading {}: {e}",
+            path.display()
+        )))
+    })
+}
+
+/// Loads the ESpeech model on the burn runtime (builds with the `burn`
+/// feature).
+#[cfg(feature = "burn")]
+fn load_espeech_burn(
+    resolved: &trakktor_core::tts::espeech::ResolvedModel,
+    device: DeviceArg,
+    precision: trakktor_core::tts::espeech::Precision,
+) -> Result<Box<dyn trakktor_core::tts::espeech::SpeechModel>, CliError> {
+    use trakktor_core::tts::espeech::runtime_burn;
+    let load = match device {
+        DeviceArg::Cpu => runtime_burn::load_cpu,
+        DeviceArg::Metal => {
+            crate::burn_notice::announce_cold_gpu_start();
+            runtime_burn::load_metal
+        },
+    };
+    Ok(load(&resolved.dir, &resolved.vocoder_dir, precision)?)
+}
+
+/// Without the `burn` feature, `--runtime burn` is a validation error.
+#[cfg(not(feature = "burn"))]
+fn load_espeech_burn(
+    _resolved: &trakktor_core::tts::espeech::ResolvedModel,
+    _device: DeviceArg,
+    _precision: trakktor_core::tts::espeech::Precision,
+) -> Result<Box<dyn trakktor_core::tts::espeech::SpeechModel>, CliError> {
+    Err(CliError::from(
+        trakktor_core::tts::espeech::EspeechError::InvalidOptions(
+            "this build has no burn runtime; install or build trakktor with \
+             the `burn` feature"
+                .into(),
+        ),
+    ))
 }
 
 /// Loads the model on the burn runtime (builds with the `burn` feature); the

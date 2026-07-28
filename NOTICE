@@ -109,6 +109,34 @@ Qwen3-TTS — Apache License 2.0
   downloaded from Hugging Face at runtime and are not redistributed in this
   repository. Technical report: https://arxiv.org/abs/2601.15621
 
+F5-TTS — MIT License
+  Copyright (c) 2024 Yushen Chen
+  https://github.com/SWivid/F5-TTS
+  The `tts espeech` engine ports the F5-TTS synthesis pipeline: the
+  diffusion-transformer (DiT) backbone with its ConvNeXt-V2 text encoder, the
+  flow-matching sampler (Euler solver, sway-sampled timesteps, classifier-free
+  guidance), and the inference-side duration estimate and chunk budget.
+  Paper: https://arxiv.org/abs/2410.06885
+
+ESpeech-TTS-1 — Apache License 2.0
+  Copyright (c) 2025 ESpeech
+  https://huggingface.co/ESpeech
+  The Russian checkpoints the `tts espeech` engine runs (`ESpeech-TTS-1_RL-V2`,
+  `_RL-V1`, `_SFT-256K`, `_SFT-95K`, `_podcaster`, each with its character
+  vocabulary) are trained on the F5-TTS architecture. They are downloaded from
+  Hugging Face at runtime, converted in place to the moving-average weights
+  inference uses, and are not redistributed in this repository.
+
+Vocos — MIT License
+  Copyright (c) 2023 Charactr Inc. / gemelo.ai
+  https://github.com/gemelo-ai/vocos
+  The `tts espeech` engine ports the Vocos vocoder — its ConvNeXt backbone and
+  the head that predicts a complex spectrum — and takes the mel filterbank and
+  analysis window from its checkpoint. The weights
+  (`charactr/vocos-mel-24khz`, MIT) are downloaded from Hugging Face at runtime
+  and are not redistributed in this repository.
+  Paper: https://arxiv.org/abs/2306.00814
+
 candle / candle-transformers — Apache-2.0 OR MIT License
   Copyright (c) The candle authors (Hugging Face)
   https://github.com/huggingface/candle
@@ -123,9 +151,10 @@ burn — Apache-2.0 OR MIT License
   Copyright (c) 2022 Nathaniel Simard & Burn Framework Contributors
   https://github.com/tracel-ai/burn
   The alternative `asr whisper`, `asr gigaam`, `asr vosk`, `text structify`,
-  `text punctuate`, and `tts qwen3-tts` runtimes (`--runtime burn`) execute the
-  Whisper, GigaAM, Zipformer2, SaT, punctuation, and Qwen3-TTS networks on
-  burn's ndarray (CPU) and wgpu/Metal backends.
+  `text punctuate`, `tts qwen3-tts`, and `tts espeech` runtimes
+  (`--runtime burn`) execute the Whisper, GigaAM, Zipformer2, SaT, punctuation,
+  Qwen3-TTS, and F5-TTS/Vocos networks on burn's ndarray (CPU) and wgpu/Metal
+  backends.
 
 XLM-RoBERTa (FacebookAI/xlm-roberta-base) — MIT License
   https://huggingface.co/FacebookAI/xlm-roberta-base
@@ -172,6 +201,6 @@ MIT License (applies to the MIT-licensed works listed in section 1)
   SOFTWARE.
 
 Apache License 2.0 (applies to the Apache-licensed works listed in section 1 —
-Vosk/icefall/sherpa-onnx, the 1-800-BAD-CODE punctuation model, Qwen3-TTS, and,
-at your option, candle and burn): see
+Vosk/icefall/sherpa-onnx, the 1-800-BAD-CODE punctuation model, Qwen3-TTS,
+ESpeech-TTS-1, and, at your option, candle and burn): see
 https://www.apache.org/licenses/LICENSE-2.0

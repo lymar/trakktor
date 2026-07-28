@@ -1,28 +1,29 @@
 //! Live progress reporting for a synthesis run.
 //!
-//! Generation runs at a few times slower than real time, so a page of text is
-//! minutes of work and silence is not an option. The line shows which
-//! paragraph is being spoken, how much audio exists so far, and how much
-//! longer it will take.
+//! Synthesis runs at a few times slower than real time, so a page of text is
+//! minutes of work and silence is not an option. The line shows which piece is
+//! being spoken, how much audio exists so far, and how much longer it will
+//! take.
 //!
-//! The estimate needs an expected total, which no one knows in advance — the
-//! model decides how long a sentence takes. It is inferred instead: the
-//! finished pieces give seconds of audio per unit of text, that rate carried
-//! over the text still to come gives the audio left, and the observed
-//! generation speed turns it into wall time. Until the first piece is done, a
-//! measured constant stands in.
+//! **One line, two engines.** The ticker, the stall notice and the off-terminal
+//! announcements are shared; what differs is the measure of progress each
+//! engine can honestly report, so only the text of the line is per-engine.
+//! Qwen3-TTS knows how much audio it has produced but not how much is left, and
+//! has to infer the total from the rate so far. ESpeech knows the length of a
+//! piece before it starts and takes a fixed number of steps, so its fraction
+//! done is a fact rather than an extrapolation.
 //!
-//! Speed is measured from the first frame rather than from the start of the
-//! run: loading the weights takes seconds, and charging that to the first
-//! frame would put a wildly pessimistic number on the line just as the user
-//! starts reading it.
+//! Speed is measured from the first advance rather than from the start of the
+//! run: loading the weights takes seconds, and charging that to the first step
+//! would put a wildly pessimistic number on the line just as the user starts
+//! reading it.
 //!
 //! **The line is drawn by a ticker thread, not by the progress callback.**
-//! Frames do not arrive at a steady pace: the codec decodes a finished piece
-//! in one go, and on a GPU backend that compiles and autotunes its kernels the
+//! Progress does not arrive at a steady pace: a vocoder or codec runs as one
+//! long call, and on a GPU backend that compiles and autotunes its kernels the
 //! first pass over a new shape can take several seconds. A line drawn only on
-//! frames would freeze during those, which reads as a hang — so the ticker
-//! keeps drawing and says outright how long it has been since the last frame.
+//! callbacks would freeze during those, which reads as a hang — so the ticker
+//! keeps drawing and says outright how long it has been since anything moved.
 
 use std::{
     io::{IsTerminal, Write},
@@ -34,7 +35,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use trakktor_core::tts::qwen3_tts::{SpeechProgress, Stage, Synthesis};
+use trakktor_core::tts::{espeech, qwen3_tts};
 
 use crate::asr::progress::clock;
 
@@ -44,32 +45,197 @@ const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '�
 /// How often the line is redrawn on a terminal.
 const TICK: Duration = Duration::from_millis(250);
 
-/// How long generation has to be quiet before the line says so. Below this a
-/// gap is just the pace of the model; above it, the user deserves to know that
-/// nothing has arrived.
+/// How long a run has to be quiet before the line says so. Below this a gap is
+/// just the pace of the model; above it, the user deserves to know that nothing
+/// has arrived.
 const STALL_NOTICE: Duration = Duration::from_secs(3);
 
-/// Seconds of speech one unit of text (an engine token) is worth, used only
-/// until a piece has actually finished. Measured on Russian prose at 0.17–0.20;
-/// the estimate corrects itself after the first paragraph.
+/// Seconds of speech one unit of text is worth, used only until a piece has
+/// actually finished. Measured on Russian prose at 0.17–0.20 seconds per engine
+/// token; the estimate corrects itself after the first paragraph.
 const SECONDS_PER_UNIT: f64 = 0.19;
 
-/// Audio that has to be generated before the speed is worth extrapolating
-/// from. Below it the ratio is dominated by whatever the first frames paid
-/// for.
-const SPEED_WARMUP_SECONDS: f64 = 1.0;
+/// Progress that has to be made before the speed is worth extrapolating from.
+/// Below it the ratio is dominated by whatever the first work paid for.
+const WARMUP: f64 = 1.0;
+
+/// What one engine reported, in its own terms.
+#[derive(Clone, Copy)]
+pub(crate) enum Progress {
+    /// A frame-by-frame run: audio accumulates, the total is unknown.
+    Qwen3(qwen3_tts::SpeechProgress),
+    /// A fixed-step run: the length of each piece is known before it starts.
+    Espeech(espeech::SpeechProgress),
+}
+
+impl From<qwen3_tts::SpeechProgress> for Progress {
+    fn from(progress: qwen3_tts::SpeechProgress) -> Self {
+        Progress::Qwen3(progress)
+    }
+}
+
+impl From<espeech::SpeechProgress> for Progress {
+    fn from(progress: espeech::SpeechProgress) -> Self {
+        Progress::Espeech(progress)
+    }
+}
+
+impl Progress {
+    /// The measure whose advance means the run is alive, and which the speed is
+    /// extrapolated from: seconds of audio for one engine, fraction of the work
+    /// for the other.
+    fn measure(self) -> f64 {
+        match self {
+            Progress::Qwen3(progress) => progress.audio,
+            Progress::Espeech(progress) => Self::fraction(progress) * 100.0,
+        }
+    }
+
+    /// Which piece and stage this is — the granularity an off-terminal log
+    /// announces at.
+    fn step(self) -> (usize, u8) {
+        match self {
+            Progress::Qwen3(progress) => (
+                progress.chunk,
+                match progress.stage {
+                    qwen3_tts::Stage::Generating => 0,
+                    qwen3_tts::Stage::Decoding => 1,
+                },
+            ),
+            Progress::Espeech(progress) => (
+                progress.chunk,
+                match progress.stage {
+                    espeech::Stage::Solving => 0,
+                    espeech::Stage::Vocoding => 1,
+                },
+            ),
+        }
+    }
+
+    /// How much of the whole text is done, for a fixed-step engine.
+    ///
+    /// The steps of one piece are equal work, and the pieces are weighted by
+    /// the text they hold; the piece in flight is charged its share of what is
+    /// left, since its own cost is not reported.
+    fn fraction(progress: espeech::SpeechProgress) -> f64 {
+        if progress.total_cost == 0 {
+            return 0.0;
+        }
+        let left = progress.total_cost.saturating_sub(progress.done_cost);
+        let pieces_left = progress.chunks.saturating_sub(progress.chunk) + 1;
+        let current = left as f64 / pieces_left.max(1) as f64;
+        let within = if progress.steps == 0 {
+            0.0
+        } else {
+            progress.step as f64 / progress.steps as f64
+        };
+        ((progress.done_cost as f64 + current * within) /
+            progress.total_cost as f64)
+            .clamp(0.0, 1.0)
+    }
+
+    /// The line itself: position, elapsed time, estimate — and, when nothing
+    /// has moved for a while, how long ago it last did.
+    fn render(self, state: &Shared, started: Instant) -> String {
+        let quiet = state.moved_at.elapsed();
+        let elapsed = started.elapsed().as_secs_f64();
+        let spent =
+            state.anchor.map(|(since, _)| since.elapsed().as_secs_f64());
+        match self {
+            Progress::Qwen3(progress) => {
+                let advanced =
+                    state.anchor.map(|(_, from)| progress.audio - from);
+                let (verb, tail) = match progress.stage {
+                    // The codec runs as one call per piece, so the only honest
+                    // thing to show is that it is running and for how long.
+                    qwen3_tts::Stage::Decoding => (
+                        "decoding",
+                        format!(" · {:.0}s so far", quiet.as_secs_f64()),
+                    ),
+                    qwen3_tts::Stage::Generating if quiet >= STALL_NOTICE => (
+                        "synthesizing",
+                        format!(
+                            " · no new audio for {:.0}s",
+                            quiet.as_secs_f64()
+                        ),
+                    ),
+                    qwen3_tts::Stage::Generating => (
+                        "synthesizing",
+                        format!(
+                            " · ~{} left",
+                            spent
+                                .zip(advanced)
+                                .and_then(|(spent, advanced)| {
+                                    remaining_by_rate(
+                                        &progress, spent, advanced,
+                                    )
+                                })
+                                .map_or_else(|| "--:--".to_owned(), clock)
+                        ),
+                    ),
+                };
+                format!(
+                    "{verb} {}/{} · {} audio · {} elapsed{tail}",
+                    progress.chunk,
+                    progress.chunks,
+                    clock(progress.audio),
+                    clock(elapsed),
+                )
+            },
+            Progress::Espeech(progress) => {
+                let done = Self::fraction(progress);
+                let (verb, tail) = match progress.stage {
+                    espeech::Stage::Vocoding => (
+                        "vocoding",
+                        format!(" · {:.0}s so far", quiet.as_secs_f64()),
+                    ),
+                    espeech::Stage::Solving if quiet >= STALL_NOTICE => (
+                        "solving",
+                        format!(" · quiet for {:.0}s", quiet.as_secs_f64()),
+                    ),
+                    espeech::Stage::Solving => (
+                        "solving",
+                        format!(
+                            " · ~{} left",
+                            spent
+                                .zip(state.anchor.map(|(_, from)| from))
+                                .and_then(
+                                    |(spent, from)| remaining_by_fraction(
+                                        done,
+                                        from / 100.0,
+                                        spent
+                                    )
+                                )
+                                .map_or_else(|| "--:--".to_owned(), clock)
+                        ),
+                    ),
+                };
+                format!(
+                    "{verb} {}/{} · step {}/{} · {:.0}% · {} audio · {} \
+                     elapsed{tail}",
+                    progress.chunk,
+                    progress.chunks,
+                    progress.step,
+                    progress.steps,
+                    done * 100.0,
+                    clock(progress.audio),
+                    clock(elapsed),
+                )
+            },
+        }
+    }
+}
 
 /// What the ticker draws from: the newest progress and when it last moved.
 struct Shared {
-    latest: Option<SpeechProgress>,
-    /// When the audio position last advanced — the clock a stall is measured
-    /// against.
+    latest: Option<Progress>,
+    /// When the measure last advanced — the clock a stall is measured against.
     moved_at: Instant,
-    /// Time and audio at the first frame, the baseline for generation speed.
+    /// Time and measure at the first advance, the baseline for speed.
     anchor: Option<(Instant, f64)>,
     /// The last piece and stage announced off a terminal, where the line is
     /// printed on change rather than redrawn.
-    announced: Option<(usize, Stage)>,
+    announced: Option<(usize, u8)>,
 }
 
 /// A running progress line.
@@ -83,7 +249,7 @@ pub(crate) struct Reporter {
 
 impl Reporter {
     /// Starts reporting. On a terminal a ticker thread redraws one line in
-    /// place; off a terminal a line is printed per paragraph, so logs stay
+    /// place; off a terminal a line is printed per piece, so logs stay
     /// readable.
     pub(crate) fn start(started: Instant) -> Self {
         let interactive = std::io::stderr().is_terminal();
@@ -106,7 +272,7 @@ impl Reporter {
                     let Some(progress) = state.latest else {
                         continue;
                     };
-                    let line = render(&progress, &state, started);
+                    let line = progress.render(&state, started);
                     drop(state);
                     let spin = SPINNER[frame % SPINNER.len()];
                     frame = frame.wrapping_add(1);
@@ -126,29 +292,34 @@ impl Reporter {
         }
     }
 
-    /// Records the newest progress. Called once per generated frame, so it
-    /// only touches shared state — the drawing happens on the ticker.
-    pub(crate) fn update(&self, progress: SpeechProgress) {
+    /// Records the newest progress. Called on every step, so it only touches
+    /// shared state — the drawing happens on the ticker.
+    pub(crate) fn update(&self, progress: impl Into<Progress>) {
+        let progress = progress.into();
         let mut state = self.shared.lock().expect("progress state");
-        let moved = state.latest.is_none_or(|last| progress.audio > last.audio);
+        let moved = state
+            .latest
+            .is_none_or(|last| progress.measure() > last.measure());
         if moved {
             state.moved_at = Instant::now();
-            state.anchor.get_or_insert((Instant::now(), progress.audio));
+            state
+                .anchor
+                .get_or_insert((Instant::now(), progress.measure()));
         }
         state.latest = Some(progress);
 
-        // Off a terminal there is no ticker; announce each new paragraph and
-        // each change of stage, so a log still shows what the run is doing.
-        let step = (progress.chunk, progress.stage);
+        // Off a terminal there is no ticker; announce each new piece and each
+        // change of stage, so a log still shows what the run is doing.
+        let step = progress.step();
         if !self.interactive && state.announced != Some(step) {
             state.announced = Some(step);
-            let line = render(&progress, &state, self.started);
+            let line = progress.render(&state, self.started);
             eprintln!("{line}");
         }
     }
 
     /// Stops the ticker and closes the line with what was produced.
-    pub(crate) fn finish(mut self, synthesis: &Synthesis) {
+    pub(crate) fn finish(mut self, chunks: usize, duration: f64) {
         self.running.store(false, Ordering::Relaxed);
         if let Some(ticker) = self.ticker.take() {
             let _ = ticker.join();
@@ -157,10 +328,9 @@ impl Reporter {
             return;
         }
         eprintln!(
-            "\r✓ synthesized {} paragraph{} · {} audio · {} elapsed\x1b[K",
-            synthesis.chunks,
-            if synthesis.chunks == 1 { "" } else { "s" },
-            clock(synthesis.speech.duration()),
+            "\r✓ synthesized {chunks} piece{} · {} audio · {} elapsed\x1b[K",
+            if chunks == 1 { "" } else { "s" },
+            clock(duration),
             clock(self.started.elapsed().as_secs_f64()),
         );
     }
@@ -175,62 +345,14 @@ impl Drop for Reporter {
     }
 }
 
-/// The line itself: position, elapsed time, estimate — and, when frames have
-/// stopped arriving, how long ago the last one did.
-fn render(
-    progress: &SpeechProgress,
-    state: &Shared,
-    started: Instant,
-) -> String {
-    let speed = state.anchor.map(|(since, audio_then)| Speed {
-        spent: since.elapsed().as_secs_f64(),
-        generated: progress.audio - audio_then,
-    });
-    let quiet = state.moved_at.elapsed();
-    let (verb, tail) = match progress.stage {
-        // The codec runs as one call per piece, so the only honest thing to
-        // show is that it is running and for how long.
-        Stage::Decoding => {
-            ("decoding", format!(" · {:.0}s so far", quiet.as_secs_f64()))
-        },
-        // Generation reports every frame; a gap between them is worth naming
-        // rather than leaving the line frozen (a GPU backend compiling a
-        // kernel on its first pass can take seconds).
-        Stage::Generating if quiet >= STALL_NOTICE => (
-            "synthesizing",
-            format!(" · no new audio for {:.0}s", quiet.as_secs_f64()),
-        ),
-        Stage::Generating => (
-            "synthesizing",
-            format!(
-                " · ~{} left",
-                speed
-                    .and_then(|speed| remaining(progress, speed))
-                    .map_or_else(|| "--:--".to_owned(), clock)
-            ),
-        ),
-    };
-    format!(
-        "{verb} {}/{} · {} audio · {} elapsed{tail}",
-        progress.chunk,
-        progress.chunks,
-        clock(progress.audio),
-        clock(started.elapsed().as_secs_f64()),
-    )
-}
-
-/// How fast generation is running: wall seconds spent producing this much
-/// audio, both measured from the first frame.
-#[derive(Clone, Copy)]
-struct Speed {
+/// Wall seconds still to come for an engine that only knows its rate: the audio
+/// it is likely to still produce, at the speed it has been producing audio.
+fn remaining_by_rate(
+    progress: &qwen3_tts::SpeechProgress,
     spent: f64,
-    generated: f64,
-}
-
-/// Wall seconds still to come, or `None` before there is anything to
-/// extrapolate from.
-fn remaining(progress: &SpeechProgress, speed: Speed) -> Option<f64> {
-    if speed.generated < SPEED_WARMUP_SECONDS || progress.total_cost == 0 {
+    advanced: f64,
+) -> Option<f64> {
+    if advanced < WARMUP || progress.total_cost == 0 {
         return None;
     }
     // Seconds of speech per unit of text: measured on what is already done,
@@ -243,5 +365,14 @@ fn remaining(progress: &SpeechProgress, speed: Speed) -> Option<f64> {
     let expected_audio =
         (rate * progress.total_cost as f64).max(progress.audio);
     let audio_left = expected_audio - progress.audio;
-    Some(audio_left * speed.spent / speed.generated)
+    Some(audio_left * spent / advanced)
+}
+
+/// Wall seconds still to come for an engine that knows its fraction done.
+fn remaining_by_fraction(done: f64, from: f64, spent: f64) -> Option<f64> {
+    let covered = done - from;
+    if covered <= 0.0 || done >= 1.0 {
+        return None;
+    }
+    Some(spent * (1.0 - done) / covered)
 }

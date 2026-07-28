@@ -8,34 +8,34 @@
 
 use std::path::{Path, PathBuf};
 
-use trakktor_core::{
-    structify::{
-        self, BoundaryModel, SatRuntime, Structifier, StructifyOptions,
-        XlmrTokenizer,
-    },
-    tts::qwen3_tts::{Qwen3TtsError, TextTokenizer},
+use trakktor_core::structify::{
+    self, BoundaryModel, SatRuntime, Structifier, StructifyOptions,
+    XlmrTokenizer,
 };
 
 use crate::cli::{DeviceArg, RuntimeArg};
 
+/// How a candidate piece is measured against the budget. Each engine states its
+/// own unit — one counts its text tokens, another the bytes of UTF-8 — so the
+/// splitter takes the measure rather than owning it.
+pub(crate) type Cost<'a> = Box<dyn Fn(&str) -> usize + 'a>;
+
 /// Splits over-budget paragraphs, loading the model on first use.
-pub(crate) struct Splitter {
+pub(crate) struct Splitter<'a> {
     model_dir: PathBuf,
     runtime: RuntimeArg,
     device: DeviceArg,
-    /// The engine's own tokenizer: the budget counts its tokens, so the cost
-    /// of a candidate piece has to be measured with it.
-    cost: TextTokenizer,
+    cost: Cost<'a>,
     loaded: Option<Structifier>,
 }
 
-impl Splitter {
+impl<'a> Splitter<'a> {
     /// Prepares a splitter; nothing is loaded or downloaded yet.
     pub(crate) fn new(
         model_dir: &Path,
         runtime: RuntimeArg,
         device: DeviceArg,
-        cost: TextTokenizer,
+        cost: Cost<'a>,
     ) -> Self {
         Self {
             model_dir: model_dir.to_path_buf(),
@@ -46,18 +46,18 @@ impl Splitter {
         }
     }
 
-    /// Splits `text` into pieces of at most `budget` engine tokens.
+    /// Splits `text` into pieces of at most `budget`, in the caller's unit.
     ///
     /// # Errors
     ///
-    /// Reports a failure to load or run the model as
-    /// [`Qwen3TtsError::InvalidModel`] — from the caller's point of view this
-    /// is one synthesis run, and its error contract is the engine's.
+    /// Returns the failure as a message, for the calling engine to report in
+    /// its own error vocabulary — from the caller's point of view this is one
+    /// synthesis run, and the splitter an implementation detail of it.
     pub(crate) fn split(
         &mut self,
         text: &str,
         budget: usize,
-    ) -> Result<Vec<String>, Qwen3TtsError> {
+    ) -> Result<Vec<String>, String> {
         if self.loaded.is_none() {
             eprintln!(
                 "a paragraph is longer than one utterance; loading the \
@@ -68,13 +68,13 @@ impl Splitter {
         let structifier =
             self.loaded.as_ref().expect("the splitter was just loaded");
 
-        let cost = |piece: &str| {
-            // A piece whose cost cannot be measured is treated as too
-            // expensive, so the search keeps cutting rather than accepting it.
-            self.cost.encode(piece).map_or(usize::MAX, |ids| ids.len())
-        };
         structifier
-            .split_to_budget(text, budget, &cost, &StructifyOptions::default())
+            .split_to_budget(
+                text,
+                budget,
+                &self.cost,
+                &StructifyOptions::default(),
+            )
             .map_err(splitter_failed)
     }
 
@@ -119,10 +119,9 @@ impl Splitter {
     }
 }
 
-/// Reports a splitter failure in the engine's error vocabulary: the run is a
-/// synthesis, and the splitter is an implementation detail of it.
-fn splitter_failed(err: structify::StructifyError) -> Qwen3TtsError {
-    Qwen3TtsError::InvalidModel(format!("splitting a long paragraph: {err}"))
+/// Phrases a splitter failure for the engine to wrap.
+fn splitter_failed(err: structify::StructifyError) -> String {
+    format!("splitting a long paragraph: {err}")
 }
 
 /// Loads the boundary model on Metal (builds with the `metal` feature).

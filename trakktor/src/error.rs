@@ -13,7 +13,7 @@ use trakktor_core::{
     punctuate::PunctuateError,
     skill::SkillError,
     structify::StructifyError,
-    tts::qwen3_tts::Qwen3TtsError,
+    tts::{espeech::EspeechError, qwen3_tts::Qwen3TtsError},
     vad::VadError,
 };
 
@@ -40,6 +40,8 @@ pub enum CliError {
     Punctuate(PunctuateError),
     /// An error from the Qwen3-TTS engine.
     Qwen3Tts(Qwen3TtsError),
+    /// An error from the ESpeech engine.
+    Espeech(EspeechError),
 }
 
 impl CliError {
@@ -57,6 +59,7 @@ impl CliError {
             CliError::Structify(err) => structify_code(err),
             CliError::Punctuate(err) => punctuate_code(err),
             CliError::Qwen3Tts(err) => qwen3_tts_code(err),
+            CliError::Espeech(err) => espeech_code(err),
         }
     }
 }
@@ -74,6 +77,7 @@ impl std::fmt::Display for CliError {
             CliError::Structify(err) => write!(f, "{err}"),
             CliError::Punctuate(err) => write!(f, "{err}"),
             CliError::Qwen3Tts(err) => write!(f, "{err}"),
+            CliError::Espeech(err) => write!(f, "{err}"),
         }
     }
 }
@@ -112,6 +116,10 @@ impl From<StructifyError> for CliError {
 
 impl From<PunctuateError> for CliError {
     fn from(err: PunctuateError) -> Self { CliError::Punctuate(err) }
+}
+
+impl From<EspeechError> for CliError {
+    fn from(err: EspeechError) -> Self { CliError::Espeech(err) }
 }
 
 impl From<Qwen3TtsError> for CliError {
@@ -221,6 +229,22 @@ fn punctuate_code(err: &PunctuateError) -> &'static str {
         PunctuateError::InvalidOptions(_) => "invalid_options",
         PunctuateError::Io(_) => "io_error",
         PunctuateError::HomeDirUnknown => "no_home_dir",
+    }
+}
+
+/// Maps an [`EspeechError`] to its stable `code`.
+fn espeech_code(err: &EspeechError) -> &'static str {
+    match err {
+        EspeechError::TextEmpty => "text_empty",
+        EspeechError::RefTextRequired => "ref_text_required",
+        EspeechError::RefAudioDecode(_) => "ref_audio_decode_failed",
+        EspeechError::RefAudioTooShort(_) => "ref_audio_too_short",
+        EspeechError::UnsupportedLanguage(_) => "unsupported_language",
+        EspeechError::InvalidModel(_) |
+        EspeechError::ModelDownload(_) |
+        EspeechError::Checkpoint(_) => "model_unavailable",
+        EspeechError::InvalidOptions(_) => "invalid_options",
+        EspeechError::Io(_) => "io_error",
     }
 }
 

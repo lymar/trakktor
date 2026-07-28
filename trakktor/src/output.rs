@@ -21,6 +21,9 @@ use trakktor_core::{
     structify::Paragraph,
     tts::{
         Voice,
+        espeech::{
+            Synthesis as EspeechSynthesis, SynthesisOptions as EspeechOptions,
+        },
         qwen3_tts::{Sampling, Synthesis},
     },
     vad::{Keep, SpeechSegment},
@@ -694,6 +697,93 @@ pub fn print_synthesis(
         },
         if synthesis.truncated {
             "\ttruncated"
+        } else {
+            ""
+        }
+    );
+}
+
+/// Prints the result of one `tts espeech` run.
+///
+/// The envelope is the shared one; what differs from the other engine is the
+/// namespaced block — a flow-matching run has no sampling and cannot be
+/// truncated, and instead reports the solver's settings and the reference the
+/// voice came from.
+#[allow(clippy::too_many_arguments)]
+pub fn print_espeech_synthesis(
+    synthesis: &EspeechSynthesis,
+    output: &Path,
+    format: &str,
+    model: &str,
+    runtime: &str,
+    options: &EspeechOptions,
+    language: Option<&str>,
+    json: bool,
+    pretty: bool,
+) {
+    let duration = synthesis.speech.duration();
+    if json {
+        let mut voice = Map::new();
+        voice.insert(
+            "kind".into(),
+            Value::String(synthesis.voice.kind().into()),
+        );
+        if let Voice::Clone { mode, ref_audio } = &synthesis.voice {
+            voice.insert("mode".into(), Value::String(mode.as_str().into()));
+            voice.insert("ref_audio".into(), Value::String(ref_audio.clone()));
+        }
+
+        let mut engine_block = Map::new();
+        engine_block.insert("frames".into(), json!(synthesis.frames));
+        engine_block.insert("nfe_step".into(), json!(options.nfe_step));
+        insert_f64(
+            &mut engine_block,
+            "cfg_strength",
+            f64::from(options.cfg_strength),
+        );
+        insert_f64(&mut engine_block, "speed", f64::from(options.speed));
+        engine_block.insert("seed".into(), json!(options.seed));
+        insert_f64(&mut engine_block, "ref_seconds", synthesis.ref_seconds);
+        if synthesis.ref_clipped {
+            engine_block.insert("ref_clipped".into(), json!(true));
+        }
+
+        let mut object = Map::new();
+        object.insert(
+            "output".into(),
+            Value::String(output.display().to_string()),
+        );
+        object.insert("format".into(), Value::String(format.into()));
+        object
+            .insert("sample_rate".into(), json!(synthesis.speech.sample_rate));
+        insert_f64(&mut object, "duration", duration);
+        object.insert("chunks".into(), json!(synthesis.chunks));
+        insert_opt(&mut object, "language", language);
+        object.insert("voice".into(), Value::Object(voice));
+        object.insert(
+            "engine".into(),
+            json!({ "name": "espeech", "model": model, "runtime": runtime }),
+        );
+        object.insert("espeech".into(), Value::Object(engine_block));
+        print_json(&Value::Object(object), pretty);
+        return;
+    }
+
+    println!("{}", output.display());
+    println!(
+        "{:.2}s\t{} Hz\t{} frames\t{} chunk{}\tcloned from {} ({:.2}s{})",
+        duration,
+        synthesis.speech.sample_rate,
+        synthesis.frames,
+        synthesis.chunks,
+        if synthesis.chunks == 1 { "" } else { "s" },
+        match &synthesis.voice {
+            Voice::Clone { ref_audio, .. } => ref_audio.as_str(),
+            other => other.kind(),
+        },
+        synthesis.ref_seconds,
+        if synthesis.ref_clipped {
+            ", clipped"
         } else {
             ""
         }

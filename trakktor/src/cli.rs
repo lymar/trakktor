@@ -30,9 +30,10 @@ const DEFAULT_MODEL_DIR_NAME: &str = ".trakktor";
 /// machine-readable output, stable flags, and meaningful exit codes. Reach for
 /// it when a task needs one of these helpers, such as fetching a feed's unread
 /// items, transcribing an audio file to timestamped text, reading a text or
-/// Markdown file aloud into an audio file, cutting the silence out of a
-/// recording, restoring punctuation to a raw transcript, or splitting a
-/// transcript into readable paragraphs.
+/// Markdown file aloud into an audio file — in a preset voice or in one cloned
+/// from a sample recording — cutting the silence out of a recording, restoring
+/// punctuation to a raw transcript, or splitting a transcript into readable
+/// paragraphs.
 ///
 /// Output is JSON by default (`--pretty` indents it); pass `--text` for
 /// human-readable text. Results go to stdout, errors to stderr. Exit codes are
@@ -246,6 +247,207 @@ pub(crate) enum TtsCommand {
     /// default; see --model-dir), and later runs reuse it.
     #[command(name = "qwen3-tts")]
     Qwen3Tts(Qwen3TtsArgs),
+
+    /// Synthesize Russian speech in a cloned voice with an ESpeech model.
+    ///
+    /// The voice is not chosen from a list: it is taken from a recording you
+    /// pass with --ref-audio, together with a transcript of what is said in it
+    /// (--ref-text). A few seconds of clean speech are enough, and more than
+    /// twelve are not used. Reads the text as an argument, from a file with
+    /// --text-file, or from standard input (--text-file -), and writes spoken
+    /// audio at 24 kHz. Text of any length works: it is split into paragraphs
+    /// (plain text or Markdown, see --text-format), and a paragraph too long
+    /// for one utterance is split further — with a local sentence model,
+    /// downloaded on first need, and at punctuation where that is not enough.
+    /// Russian stress goes in the text itself: put `+` before the stressed
+    /// vowel (`з+амок` is a lock, `зам+ок` a castle), in the text to speak and
+    /// in the reference transcript alike. Without a mark the model guesses,
+    /// and on ambiguous words it guesses wrong. The reading is repeatable:
+    /// --seed fixes it, and the same seed gives the same file. The first use
+    /// of a model downloads its checkpoint into the model directory
+    /// (~/.trakktor by default; see --model-dir), and later runs reuse it.
+    Espeech(EspeechArgs),
+}
+
+/// Flags of `tts espeech`.
+#[derive(Args)]
+// Exactly one source of text, and the error names both when neither is given.
+#[command(group(clap::ArgGroup::new("espeech_source").required(true).args(["speech", "text_file"])))]
+#[command(group(clap::ArgGroup::new("espeech_ref_text").required(true).args(["ref_text", "ref_text_file"])))]
+pub(crate) struct EspeechArgs {
+    /// The text to speak. Omit it when reading the text from a file with
+    /// --text-file.
+    // The id must differ from the global `--text` flag, which clap would
+    // otherwise take this for.
+    #[arg(id = "speech", value_name = "text")]
+    pub(crate) text: Option<String>,
+
+    /// Recording of the voice to speak in. Any audio file the built-in decoder
+    /// reads; a few seconds of clean, uninterrupted speech work best. Silence
+    /// at the edges is trimmed, and anything past twelve seconds is left
+    /// unused — the model conditions on no more than that.
+    #[arg(long, value_name = "path")]
+    pub(crate) ref_audio: PathBuf,
+
+    /// What is said in --ref-audio, word for word. The model aligns the
+    /// recording against this text, so a wrong transcript costs quality; mark
+    /// stress in it with `+` as you would in the text to speak.
+    #[arg(long, value_name = "text")]
+    pub(crate) ref_text: Option<String>,
+
+    /// Read the reference transcript from a UTF-8 file instead of --ref-text.
+    #[arg(long, value_name = "path")]
+    pub(crate) ref_text_file: Option<PathBuf>,
+
+    /// Read the text to speak from a UTF-8 file instead of the argument, or
+    /// from standard input with `-`. Text of any length works: it is spoken
+    /// piece by piece and joined into one file (see --text-format and
+    /// --pause-ms).
+    #[arg(long, value_name = "path|-")]
+    pub(crate) text_file: Option<PathBuf>,
+
+    /// How to read the input: where paragraphs end and whether it carries
+    /// markup. `txt` takes one paragraph per line; `md` separates paragraphs
+    /// with blank lines and strips Markdown markup (headings, list and quote
+    /// markers, emphasis, links — the text of a table or a code block is
+    /// kept). `auto` decides by the file extension, then by the text itself,
+    /// and falls back to `md`.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = TextFormatArg::Auto,
+        value_name = "format"
+    )]
+    pub(crate) text_format: TextFormatArg,
+
+    /// Silence inserted between paragraphs, in milliseconds. Each paragraph is
+    /// first trimmed of the silence the model leaves at its edges (a few tens
+    /// of milliseconds are kept as breathing room), so the gap is this value
+    /// rather than whatever the model happened to add. Pieces of a single
+    /// split paragraph get half of it.
+    #[arg(long, default_value_t = 500, value_name = "ms")]
+    pub(crate) pause_ms: u32,
+
+    /// What to do with the loudness of each piece. Every piece is spoken as
+    /// its own utterance, so a long text can drift from one to the next;
+    /// `match` (the default) brings the pieces to a common level before
+    /// joining, `keep` leaves them exactly as synthesized.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = LevelsArg::Match,
+        value_name = "what"
+    )]
+    pub(crate) levels: LevelsArg,
+
+    /// Where to write the audio; the extension picks the format. `.wav` and
+    /// `.flac` are written directly, anything ffmpeg knows (mp3, m4a, opus,
+    /// ogg, …) through it — see --audio-encoder.
+    #[arg(long, short, default_value = "speech.wav", value_name = "path")]
+    pub(crate) output: PathBuf,
+
+    /// Encoder for the output file. `auto` (the default) writes wav and flac
+    /// with the built-in pure-Rust encoder and hands any other extension to an
+    /// installed `ffmpeg`; `builtin` refuses anything but wav/flac; `ffmpeg`
+    /// always shells out.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = AudioEncoderArg::Auto,
+        value_name = "encoder"
+    )]
+    pub(crate) audio_encoder: AudioEncoderArg,
+
+    /// Target bitrate for lossy ffmpeg formats, such as `192k` or `320k` (sets
+    /// ffmpeg's `-b:a`). Ignored by the built-in encoder; omit for ffmpeg's
+    /// own default.
+    #[arg(long, value_name = "rate")]
+    pub(crate) bitrate: Option<String>,
+
+    /// Language to speak in. These checkpoints are Russian only, so the value
+    /// is accepted for symmetry with the other engines and rejected unless it
+    /// spells Russian (`russian`, `ru`, `rus`) or is `auto`.
+    #[arg(long, default_value = "auto", value_name = "lang")]
+    pub(crate) language: String,
+
+    /// Model: a published name, downloaded on first use, or a path to a
+    /// checkpoint directory. Names: rl-v2 (the default), rl-v1, sft-256k,
+    /// sft-95k, podcaster (trained on podcast delivery). All are the same size
+    /// and differ in training, so the choice is one of manner, not of quality
+    /// against speed.
+    #[arg(long, default_value = "rl-v2", value_name = "name|dir")]
+    pub(crate) model: String,
+
+    /// Steps the solver takes per piece, and the time scales with it exactly:
+    /// measured 33, 62 and 91 seconds for 16, 32 and 48 steps. Intelligibility
+    /// does not scale with it — all three transcribe back identically — so 16
+    /// halves the time honestly, and past 48 there is nothing measurable to
+    /// gain.
+    #[arg(long, default_value_t = 32, value_name = "int")]
+    pub(crate) nfe_step: usize,
+
+    /// How strongly the reading is pushed toward the text and the reference
+    /// voice. Zero switches off the second, unguided pass — exactly twice as
+    /// fast, and not worth it for speech: measured on the test phrase, words
+    /// come out mangled and half-swallowed. Lower it only if you know why.
+    #[arg(long, default_value_t = 2.0, value_name = "float")]
+    pub(crate) cfg_strength: f32,
+
+    /// Speech rate as a multiplier: below 1 speaks slower, above 1 faster. It
+    /// works by deciding how much time the words are given, so extreme values
+    /// crowd or stretch the reading rather than only changing its pace.
+    #[arg(long, default_value_t = 1.0, value_name = "float")]
+    pub(crate) speed: f32,
+
+    /// Seed of the noise the reading starts from, making a run repeatable.
+    /// Different seeds give different readings of the same text in the same
+    /// voice.
+    #[arg(long, default_value_t = 0, value_name = "int")]
+    pub(crate) seed: u64,
+
+    /// Inference runtime executing the model.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = RuntimeArg::Candle,
+        value_name = "runtime"
+    )]
+    pub(crate) runtime: RuntimeArg,
+
+    /// Compute device. `metal` needs a build with the `metal` feature enabled,
+    /// and is only available on macOS.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = DeviceArg::Cpu,
+        value_name = "device"
+    )]
+    pub(crate) device: DeviceArg,
+
+    /// Compute precision of the model. `f32` (the default) is the reference
+    /// point every comparison is made against; `f16` halves the memory traffic
+    /// and is what the reference implementation itself runs on a GPU. The
+    /// vocoder and the spectrogram always run in full precision.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = EspeechPrecisionArg::F32,
+        value_name = "precision"
+    )]
+    pub(crate) precision: EspeechPrecisionArg,
+}
+
+/// The `--precision` value of `tts espeech`.
+///
+/// Deliberately not the shared [`PrecisionArg`] and not the other engine's
+/// either: this checkpoint is stored in `f32` and its reference runs `f16` on a
+/// GPU, so those are the two values that mean anything here.
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum EspeechPrecisionArg {
+    /// Half precision: less memory traffic, and what the reference runs on GPU.
+    F16,
+    /// Full precision (the default).
+    F32,
 }
 
 /// Flags of `tts qwen3-tts`.
@@ -1593,6 +1795,12 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
         },
         Command::Tts { command } => match command {
             TtsCommand::Qwen3Tts(args) => crate::tts::run_qwen3_tts(
+                args,
+                &global.model_dir()?,
+                global.json(),
+                global.pretty,
+            ),
+            TtsCommand::Espeech(args) => crate::tts::run_espeech(
                 args,
                 &global.model_dir()?,
                 global.json(),
