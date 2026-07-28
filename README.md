@@ -678,13 +678,16 @@ the finished frames into a 24 kHz waveform.
 | `--seed <int>` | `0` | Makes a sampled run repeatable. |
 | `--temperature`, `--top-k`, `--repetition-penalty` | `0.9`, `50`, `1.05` | Sampling controls. |
 | `--greedy` | off | Take the most likely code instead of sampling — deterministic, usually flatter. |
-| `--precision <bf16\|f32>` | `bf16` on candle, `f32` on burn | **Runtime-dependent default.** `bf16` is the format the weights are stored in and what the reference runs — and what keeps `1.7b-customvoice` within a 16 GB machine on Metal; `f32` doubles the memory and is reproducible, and is the *only* precision the burn runtime serves. The codec always runs in full precision either way. |
+| `--precision <bf16\|f32>` | `bf16` on candle + Metal, `f32` elsewhere | **Runtime- and device-dependent default.** `bf16` is the format the weights are stored in and what the reference runs — and what keeps `1.7b-customvoice` within a 16 GB machine on Metal; only candle on Metal serves it (the burn runtime and candle's CPU backend compute in `f32`, and asking them for `bf16` is an error rather than a silent downgrade). `f32` doubles the memory and is reproducible. The codec always runs in full precision either way. |
 | `--runtime <candle\|burn>` | `candle` | Inference runtime; burn needs the `burn` build feature and computes in f32 only. |
 | `--device <cpu\|metal>` | `cpu` | Compute device; `metal` needs the `metal` build feature (burn brings its own). |
 
 Any voice can speak any supported language: the language is a separate
 conditioning token, not a property of the timbre. Russian is supported
-first-class.
+first-class. Two presets are dialect voices — with `--language auto` (the
+default) or `chinese`, `eric` speaks Sichuan Mandarin and `dylan` Beijing
+Mandarin, exactly as the reference resolves them; any other explicit language
+overrides the dialect.
 
 Generation **samples** by default, so two runs of the same text differ slightly;
 `--seed` pins a run, and `--greedy` removes the randomness altogether. The
@@ -698,21 +701,22 @@ recommended way to run it — the CPU path is impractically slow for anything
 past a short phrase.
 
 `1.7b-customvoice` needs roughly 4.5 GB of memory in `bf16` and about twice
-that in `f32`; on a 16 GB machine only `bf16` is practical for it on candle,
-which is why `bf16` is the default there — including on Metal, where it is what
-keeps the large model in memory. (burn is the exception: it runs the same model
-in `f32` on Metal within 16 GB; see Runtime below.)
+that in `f32`; on a 16 GB machine only `bf16` is practical for it on candle
+with Metal, which is why `bf16` is the default there — it is what keeps the
+large model in memory. On the CPU candle computes in `f32` (its CPU backend
+has no `bf16` arithmetic), and burn does so everywhere; burn still runs the
+same model in `f32` on Metal within 16 GB — see Runtime below.
 
 #### Runtime
 
 The alternative [burn](https://github.com/tracel-ai/burn) runtime (see the
 Runtime section under `asr`) runs this engine too, with one restriction: **it
-computes in f32 only**. You need not pass `--precision` for it — the default is
-runtime-dependent, `f32` whenever `--runtime burn` is selected and `bf16` on
-candle. Half precision is unavailable on burn from below: its Metal backend
-cannot compile `bf16` kernels, and `f16` is excluded by the model itself — so
-`--precision bf16 --runtime burn` is a validation error rather than a silent
-downgrade.
+computes in f32 only**. You need not pass `--precision` for it — the default
+follows the runtime and device, `f32` whenever `--runtime burn` is selected
+(and on candle's CPU path) and `bf16` on candle with Metal. Half precision is
+unavailable on burn from below: its Metal backend cannot compile `bf16`
+kernels, and `f16` is excluded by the model itself — so `--precision bf16
+--runtime burn` is a validation error rather than a silent downgrade.
 
 Both runtimes pick the same codes in `--greedy --precision f32`, and the
 waveforms are indistinguishable (cosine 1.0000000000); burn additionally

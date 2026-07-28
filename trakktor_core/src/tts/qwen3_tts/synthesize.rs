@@ -410,8 +410,10 @@ impl Synthesizer {
             return Err(Qwen3TtsError::TextEmpty);
         }
         let speaker_id = self.config.talker.speaker_id(&options.voice)?;
-        let language_id =
-            self.config.language_id(options.language.as_deref())?;
+        let language_id = self.config.language_id_for_voice(
+            options.language.as_deref(),
+            &options.voice,
+        )?;
 
         let text_ids = self.tokenizer.encode(text)?;
         let positions = prompt::build(
@@ -462,6 +464,10 @@ impl Synthesizer {
 
         let eos = self.config.talker.codec_eos_token_id;
         let mut frames: Vec<Vec<u32>> = Vec::new();
+        // Distinct codes said so far. The penalty applies once per code
+        // however often it was said — the reference gathers the original
+        // scores and scatters them back, so repeats collapse into a single
+        // application — which keeping the history unique reproduces.
         let mut history: Vec<u32> = Vec::new();
         let mut truncated = false;
 
@@ -486,7 +492,9 @@ impl Synthesizer {
                 truncated = true;
                 break;
             }
-            history.push(first);
+            if !history.contains(&first) {
+                history.push(first);
+            }
 
             // The code predictor fills the rest of this frame, conditioned on
             // the talker's state and the code it just picked.

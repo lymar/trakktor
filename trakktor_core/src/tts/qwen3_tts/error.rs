@@ -11,7 +11,7 @@ pub enum Qwen3TtsError {
     #[error("the text to synthesize is empty")]
     TextEmpty,
 
-    /// The model checkpoint is malformed or unsupported (`invalid_model`).
+    /// The model checkpoint is malformed or unsupported (`model_unavailable`).
     ///
     /// Covers geometry the pipeline cannot serve and backend failures while
     /// loading or running the network.

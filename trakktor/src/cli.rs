@@ -535,7 +535,9 @@ pub(crate) struct Qwen3TtsArgs {
     pub(crate) language: String,
 
     /// Preset voice: serena, vivian, uncle_fu, ryan, aiden, ono_anna, sohee,
-    /// eric, or dylan.
+    /// eric, or dylan. The last two are dialect voices: with the language
+    /// left to `auto` (or set to `chinese`) eric speaks Sichuan and dylan
+    /// Beijing Mandarin; any other explicit --language overrides that.
     #[arg(long, default_value = "serena", value_name = "name")]
     pub(crate) voice: String,
 
@@ -562,8 +564,11 @@ pub(crate) struct Qwen3TtsArgs {
     pub(crate) repetition_penalty: f32,
 
     /// Always take the most likely code instead of sampling. Deterministic,
-    /// and usually flatter; mainly for reproducible comparisons.
-    #[arg(long, conflicts_with_all = ["seed", "temperature", "top_k"])]
+    /// and usually flatter; mainly for reproducible comparisons. The
+    /// checkpoint's own repetition penalty still applies.
+    #[arg(long, conflicts_with_all = [
+        "seed", "temperature", "top_k", "repetition_penalty"
+    ])]
     pub(crate) greedy: bool,
 
     /// Inference runtime executing the model. The burn runtime computes in
@@ -590,11 +595,12 @@ pub(crate) struct Qwen3TtsArgs {
     pub(crate) device: DeviceArg,
 
     /// Compute precision of the speech model. The default depends on the
-    /// runtime: `bf16` on candle (about half the memory, and the format the
-    /// weights are stored in — this is what keeps the larger model within a
-    /// 16 GB machine on Metal), `f32` on burn, which computes in `f32` only.
-    /// Pass `f32` for full precision and reproducible results. The codec
-    /// always runs in full precision either way.
+    /// runtime and device: `bf16` on candle with Metal (about half the
+    /// memory, the format the weights are stored in, and what keeps the
+    /// larger model within a 16 GB machine), and `f32` everywhere else — the
+    /// burn runtime and candle's CPU backend compute in `f32` only. Pass
+    /// `f32` for full precision and reproducible results. The codec always
+    /// runs in full precision either way.
     #[arg(long, value_enum, value_name = "precision")]
     pub(crate) precision: Option<TtsPrecisionArg>,
 }
@@ -639,9 +645,11 @@ impl TextFormatArg {
 /// generation and the run degenerates into babble.
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum TtsPrecisionArg {
-    /// Half precision, as the weights are stored (the candle default).
+    /// Half precision, as the weights are stored (the default on candle with
+    /// Metal, the one backend that serves it).
     Bf16,
-    /// Full precision: reproducible, at twice the memory (the burn default).
+    /// Full precision: reproducible, at twice the memory (the default
+    /// everywhere else).
     F32,
 }
 

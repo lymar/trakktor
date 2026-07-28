@@ -285,6 +285,51 @@ impl ModelConfig {
                 ))
             })
     }
+
+    /// Resolves the target language for a synthesis with `voice`, applying the
+    /// checkpoint's dialect override exactly as the reference does: a voice
+    /// that implies a dialect pulls `chinese` — and the model's own choice —
+    /// to that dialect's token, because the dialect is what the voice was
+    /// trained to speak. An explicit other language always wins.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Qwen3TtsError::UnsupportedLanguage`] as
+    /// [`language_id`](Self::language_id) does, and
+    /// [`Qwen3TtsError::InvalidModel`] when the checkpoint names a dialect its
+    /// language table does not carry.
+    pub fn language_id_for_voice(
+        &self,
+        language: Option<&str>,
+        voice: &str,
+    ) -> Result<Option<u32>, Qwen3TtsError> {
+        let language_id = self.language_id(language)?;
+        let overridable = match language {
+            None => true,
+            Some(name) => {
+                let key = name.to_lowercase();
+                key == "auto" || key == "chinese"
+            },
+        };
+        if !overridable {
+            return Ok(language_id);
+        }
+        let Some(Some(dialect)) =
+            self.talker.spk_is_dialect.get(&voice.to_lowercase())
+        else {
+            return Ok(language_id);
+        };
+        self.talker
+            .codec_language_id
+            .get(dialect)
+            .map(|&id| Some(id))
+            .ok_or_else(|| {
+                Qwen3TtsError::InvalidModel(format!(
+                    "the checkpoint gives `{voice}` the dialect `{dialect}`, \
+                     which its language table does not carry"
+                ))
+            })
+    }
 }
 
 /// The file holding the codec's geometry inside a checkpoint directory.

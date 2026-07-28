@@ -46,41 +46,72 @@ fn neither_source_is_an_options_error() {
 }
 
 #[test]
-fn the_precision_default_follows_the_runtime() {
-    use crate::cli::{RuntimeArg, TtsPrecisionArg};
+fn the_precision_default_follows_the_runtime_and_device() {
+    use crate::cli::{DeviceArg, RuntimeArg, TtsPrecisionArg};
 
-    // Unspecified: candle keeps bf16, burn falls to the only precision it
-    // serves.
+    let resolve = |precision, runtime, device| {
+        resolve_precision(precision, runtime, device)
+    };
+
+    // Unspecified: bf16 only where it is served — candle on Metal; the burn
+    // runtime and candle's CPU backend fall to the one precision they have.
     assert_eq!(
-        resolve_precision(None, RuntimeArg::Candle).expect("candle default"),
+        resolve(None, RuntimeArg::Candle, DeviceArg::Metal)
+            .expect("candle metal default"),
         Precision::Bf16
     );
     assert_eq!(
-        resolve_precision(None, RuntimeArg::Burn).expect("burn default"),
+        resolve(None, RuntimeArg::Candle, DeviceArg::Cpu)
+            .expect("candle cpu default"),
+        Precision::F32
+    );
+    assert_eq!(
+        resolve(None, RuntimeArg::Burn, DeviceArg::Metal)
+            .expect("burn default"),
         Precision::F32
     );
 
-    // An explicit choice is honored on candle, either way.
+    // An explicit choice is honored where the backend serves it.
     assert_eq!(
-        resolve_precision(Some(TtsPrecisionArg::F32), RuntimeArg::Candle)
-            .expect("candle f32"),
+        resolve(
+            Some(TtsPrecisionArg::F32),
+            RuntimeArg::Candle,
+            DeviceArg::Cpu
+        )
+        .expect("candle f32"),
         Precision::F32
     );
     assert_eq!(
-        resolve_precision(Some(TtsPrecisionArg::Bf16), RuntimeArg::Candle)
-            .expect("candle bf16"),
+        resolve(
+            Some(TtsPrecisionArg::Bf16),
+            RuntimeArg::Candle,
+            DeviceArg::Metal
+        )
+        .expect("candle metal bf16"),
         Precision::Bf16
     );
-
-    // f32 is fine on burn; bf16 is rejected rather than downgraded.
     assert_eq!(
-        resolve_precision(Some(TtsPrecisionArg::F32), RuntimeArg::Burn)
+        resolve(Some(TtsPrecisionArg::F32), RuntimeArg::Burn, DeviceArg::Cpu)
             .expect("burn f32"),
         Precision::F32
     );
+
+    // Where bf16 does not exist it is rejected rather than downgraded.
     assert!(
-        resolve_precision(Some(TtsPrecisionArg::Bf16), RuntimeArg::Burn)
-            .is_err()
+        resolve(
+            Some(TtsPrecisionArg::Bf16),
+            RuntimeArg::Candle,
+            DeviceArg::Cpu
+        )
+        .is_err()
+    );
+    assert!(
+        resolve(
+            Some(TtsPrecisionArg::Bf16),
+            RuntimeArg::Burn,
+            DeviceArg::Metal
+        )
+        .is_err()
     );
 }
 

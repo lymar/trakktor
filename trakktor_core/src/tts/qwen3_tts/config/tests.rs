@@ -101,6 +101,53 @@ fn resolves_languages_and_leaves_auto_to_the_model() {
 }
 
 #[test]
+fn a_dialect_voice_overrides_the_open_and_chinese_language_choices() {
+    let config = ModelConfig::parse(CUSTOM_VOICE_0B6).expect("parses");
+    let sichuan = Some(2062);
+
+    // With the language left to the model — or set to the dialect's parent —
+    // a dialect voice speaks its dialect, as the reference resolves it.
+    assert_eq!(config.language_id_for_voice(None, "eric").unwrap(), sichuan);
+    assert_eq!(
+        config.language_id_for_voice(Some("auto"), "eric").unwrap(),
+        sichuan
+    );
+    assert_eq!(
+        config
+            .language_id_for_voice(Some("chinese"), "Eric")
+            .unwrap(),
+        sichuan
+    );
+    assert_eq!(
+        config.language_id_for_voice(None, "dylan").unwrap(),
+        Some(2074)
+    );
+
+    // An explicit other language wins over the voice's dialect.
+    assert_eq!(
+        config
+            .language_id_for_voice(Some("russian"), "eric")
+            .unwrap(),
+        Some(2069)
+    );
+
+    // A voice without a dialect changes nothing.
+    assert_eq!(config.language_id_for_voice(None, "serena").unwrap(), None);
+    assert_eq!(
+        config
+            .language_id_for_voice(Some("chinese"), "serena")
+            .unwrap(),
+        Some(2055)
+    );
+
+    // An unknown language still fails the same way.
+    assert!(matches!(
+        config.language_id_for_voice(Some("klingon"), "eric"),
+        Err(Qwen3TtsError::UnsupportedLanguage(_))
+    ));
+}
+
+#[test]
 fn parses_the_codec_geometry() {
     let codec = CodecConfig::parse(CODEC).expect("parses");
 

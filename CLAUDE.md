@@ -84,6 +84,15 @@ published separately). Rationale: `../trakktor_project/docs/adr/0002-cargo-works
 - Format with `cargo fmt` before committing. `rustfmt.toml` uses unstable
   features (e.g. `format_strings`, `wrap_comments`, edition 2024), so formatting
   requires **nightly** rustfmt (`cargo +nightly fmt`).
+- **Build and test the bin with `-p trakktor`** when enabling the `metal`/`burn`
+  features: they are features of the **bin crate**, so from the workspace root
+  `cargo build --release --features metal,burn` fails ("package does not have
+  these features") — and piping the output (e.g. through `tail`) swallows the
+  non-zero exit, leaving a stale binary that looks freshly built; check the
+  binary's mtime when in doubt. Use
+  `cargo build --release -p trakktor --features metal,burn`. `trakktor_core`
+  has per-engine feature names instead (e.g.
+  `cargo test -p trakktor_core --features tts-burn`).
 - Keep `trakktor` (bin) thin; put real logic in `trakktor_core`.
 - Machine-readable output (e.g. JSON) is a first-class requirement — the primary
   consumers are agents (see `conventions/output.md`).

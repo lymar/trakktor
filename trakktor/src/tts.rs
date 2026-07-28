@@ -52,7 +52,28 @@ pub(crate) fn run_qwen3_tts(
         return Err(Qwen3TtsError::TextEmpty.into());
     }
     let target = output_target(&args.output, args.audio_encoder)?;
-    let precision = resolve_precision(args.precision, args.runtime)?;
+    let precision =
+        resolve_precision(args.precision, args.runtime, args.device)?;
+    let sampling = if args.greedy {
+        Sampling::Greedy
+    } else {
+        // The reference validates this too: zero would divide the logits away,
+        // and "no randomness" is what --greedy is for.
+        if args.temperature <= 0.0 {
+            return Err(Qwen3TtsError::InvalidOptions(
+                "temperature must be positive; for deterministic output use \
+                 --greedy"
+                    .into(),
+            )
+            .into());
+        }
+        Sampling::TopK {
+            top_k: args.top_k,
+            temperature: args.temperature,
+            repetition_penalty: args.repetition_penalty,
+            seed: args.seed,
+        }
+    };
 
     let resolved = qwen3_tts::resolve_model(
         model_dir,
@@ -69,17 +90,6 @@ pub(crate) fn run_qwen3_tts(
         RuntimeArg::Burn => load_burn(&resolved.dir, args.device, precision)?,
     };
     let mut synthesizer = Synthesizer::load(&resolved.dir, model)?;
-
-    let sampling = if args.greedy {
-        Sampling::Greedy
-    } else {
-        Sampling::TopK {
-            top_k: args.top_k,
-            temperature: args.temperature,
-            repetition_penalty: args.repetition_penalty,
-            seed: args.seed,
-        }
-    };
     // `auto` is how the CLI spells "let the model decide", which the engine
     // expresses as no language at all.
     let language = (!args.language.eq_ignore_ascii_case("auto"))
@@ -341,28 +351,43 @@ fn load_burn(
     Ok(load(model_dir, precision)?)
 }
 
-/// Resolves the compute precision, whose default depends on the runtime: burn
-/// serves `f32` only, so that is its default; candle keeps the reference's
-/// `bf16`. Asking burn for `bf16` explicitly is rejected rather than quietly
+/// Resolves the compute precision, whose default depends on the runtime and
+/// the device. burn serves `f32` only; candle keeps the reference's `bf16` on
+/// Metal — where it is what holds the larger model in memory — but its CPU
+/// backend has no `bf16` arithmetic, so the CPU default is `f32`. Asking for
+/// a pairing the backend cannot serve is rejected rather than quietly
 /// downgraded.
 fn resolve_precision(
     precision: Option<TtsPrecisionArg>,
     runtime: RuntimeArg,
+    device: DeviceArg,
 ) -> Result<Precision, CliError> {
-    Ok(match (precision, runtime) {
-        (Some(TtsPrecisionArg::F32), _) => Precision::F32,
-        (Some(TtsPrecisionArg::Bf16), RuntimeArg::Candle) => Precision::Bf16,
-        (Some(TtsPrecisionArg::Bf16), RuntimeArg::Burn) => {
+    Ok(match (precision, runtime, device) {
+        (Some(TtsPrecisionArg::F32), _, _) => Precision::F32,
+        (Some(TtsPrecisionArg::Bf16), RuntimeArg::Candle, DeviceArg::Metal) => {
+            Precision::Bf16
+        },
+        (Some(TtsPrecisionArg::Bf16), RuntimeArg::Candle, DeviceArg::Cpu) => {
             return Err(Qwen3TtsError::InvalidOptions(
-                "the burn runtime computes in f32 only; use `--precision \
-                 f32`, or `--runtime candle` for bf16"
+                "candle on the CPU computes in f32 only (its CPU backend has \
+                 no bf16 arithmetic); use `--precision f32`, or `--device \
+                 metal` for bf16"
                     .into(),
             )
             .into());
         },
-        // Unspecified: burn serves only f32; candle keeps the reference's bf16.
-        (None, RuntimeArg::Burn) => Precision::F32,
-        (None, RuntimeArg::Candle) => Precision::Bf16,
+        (Some(TtsPrecisionArg::Bf16), RuntimeArg::Burn, _) => {
+            return Err(Qwen3TtsError::InvalidOptions(
+                "the burn runtime computes in f32 only; use `--precision \
+                 f32`, or `--runtime candle --device metal` for bf16"
+                    .into(),
+            )
+            .into());
+        },
+        // Unspecified: bf16 where it is served, f32 everywhere else.
+        (None, RuntimeArg::Candle, DeviceArg::Metal) => Precision::Bf16,
+        (None, RuntimeArg::Candle, DeviceArg::Cpu) |
+        (None, RuntimeArg::Burn, _) => Precision::F32,
     })
 }
 
