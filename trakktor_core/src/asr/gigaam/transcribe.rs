@@ -56,27 +56,27 @@ pub(crate) struct ChunkResult {
 
 /// Runs one chunk through feature extraction, the encoder, the model's head,
 /// and greedy decoding.
+///
+/// Words are always resolved, whatever the caller asked for in the output: a
+/// chunk hears past the span it owns, and their timings are what tells its own
+/// words from the neighbour's context. They cost a walk over the emitted
+/// tokens, the frames being a by-product of decoding either head.
 pub(crate) fn transcribe_chunk(
     model: &dyn AsrModel,
     tokenizer: &Tokenizer,
     chunk: &[f32],
-    options: &TranscribeOptions,
 ) -> Result<ChunkResult, GigaamError> {
     let mel = model.feature().log_mel(chunk);
     let emitted = model.emissions(&mel)?;
 
     let text = tokenizer.decode(&emitted.token_ids);
-    let words = if options.word_timestamps {
-        let shift =
-            chunk.len() as f64 / SAMPLE_RATE as f64 / emitted.enc_frames as f64;
-        frames_to_words(
-            tokenizer,
-            &emitted.token_ids,
-            &emitted.token_frames,
-            shift,
-        )
-    } else {
-        Vec::new()
-    };
+    let shift =
+        chunk.len() as f64 / SAMPLE_RATE as f64 / emitted.enc_frames as f64;
+    let words = frames_to_words(
+        tokenizer,
+        &emitted.token_ids,
+        &emitted.token_frames,
+        shift,
+    );
     Ok(ChunkResult { text, words })
 }

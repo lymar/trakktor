@@ -90,29 +90,30 @@ pub(crate) fn transcribe_chunk(
     let mut state = DecodeState::new(head, options.decoding);
     state.decode_block(head, &encoded, frames);
     let emitted = state.finish(head);
-    Ok(emissions_to_chunk(tokenizer, &emitted, 0.0, options))
+    Ok(emissions_to_chunk(tokenizer, &emitted, 0.0))
 }
 
-/// Renders emissions into text plus (optionally) words, shifting frame
-/// times by `offset_s` onto the original timeline.
+/// Renders emissions into text plus words, shifting frame times by `offset_s`
+/// onto the original timeline.
+///
+/// Words are always resolved, whatever the caller asked for in the output: an
+/// offline chunk hears past the span it owns, and their timings are what tells
+/// its own words from the neighbour's context. They cost a walk over the
+/// emitted tokens, the frames being a by-product of the transducer search.
 pub(crate) fn emissions_to_chunk(
     tokenizer: &Tokenizer,
     emitted: &Emissions,
     offset_s: f64,
-    options: &TranscribeOptions,
 ) -> ChunkResult {
-    let text = tokenizer.decode(&emitted.token_ids);
-    let words = if options.word_timestamps {
-        tokens_to_words(
+    ChunkResult {
+        text: tokenizer.decode(&emitted.token_ids),
+        words: tokens_to_words(
             tokenizer,
             &emitted.token_ids,
             &emitted.token_frames,
             offset_s,
-        )
-    } else {
-        Vec::new()
-    };
-    ChunkResult { text, words }
+        ),
+    }
 }
 
 /// Groups emitted tokens into words along the `▁` word-start markers,

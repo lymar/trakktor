@@ -30,7 +30,10 @@
 mod tests;
 
 use super::{
-    super::segment::{BOUNDARY_CONTEXT_S, Chunk, ChunkPlanner, Interval},
+    super::segment::{
+        BOUNDARY_CONTEXT_S, Chunk, ChunkPlanner, DecodedWord, Interval,
+        own_words,
+    },
     constants::{LONGFORM_THRESHOLD_S, SAMPLE_RATE},
     decode::Word,
     error::GigaamError,
@@ -70,6 +73,9 @@ pub struct StreamTranscriber<'m> {
     fed: usize,
     /// VAD windows whose probabilities have been consumed.
     windows: u64,
+    /// Time spans of the words the previous chunk kept — what the seam
+    /// reconciliation of the next chunk tests against.
+    prev_kept: Vec<(f64, f64)>,
     segments: Vec<Segment>,
     texts: Vec<String>,
 }
@@ -103,6 +109,7 @@ impl<'m> StreamTranscriber<'m> {
             segments: Vec::new(),
             texts: Vec::new(),
             windows: 0,
+            prev_kept: Vec::new(),
         })
     }
 
@@ -158,6 +165,8 @@ impl<'m> StreamTranscriber<'m> {
                     Chunk {
                         start: 0.0,
                         end: total,
+                        keep_start: 0.0,
+                        keep_end: total,
                         window_start: 0.0,
                         window_end: total,
                     },
@@ -243,26 +252,29 @@ impl<'m> StreamTranscriber<'m> {
             chunk.window_start
         );
         let pcm = &self.buf[a - self.base..b - self.base];
-        let result =
-            transcribe_chunk(self.model, self.tokenizer, pcm, &self.options)?;
-        if !result.text.is_empty() {
-            self.texts.push(result.text.clone());
-        }
+        let result = transcribe_chunk(self.model, self.tokenizer, pcm)?;
         let origin = a as f64 / sr;
+        let (text, words) = own_words(
+            result.words,
+            origin,
+            &chunk,
+            &self.prev_kept,
+            result.text,
+        );
+        self.prev_kept = words.iter().map(DecodedWord::span).collect();
+        if !text.is_empty() {
+            self.texts.push(text.clone());
+        }
         self.segments.push(Segment {
             id: self.segments.len(),
             start: chunk.start,
             end: chunk.end,
-            text: result.text,
-            words: result
-                .words
-                .into_iter()
-                .map(|w| Word {
-                    text: w.text,
-                    start: w.start + origin,
-                    end: w.end + origin,
-                })
-                .collect(),
+            text,
+            words: if self.options.word_timestamps {
+                words
+            } else {
+                Vec::new()
+            },
         });
         progress(TranscribeProgress {
             processed_seconds: chunk.end,
@@ -301,6 +313,17 @@ impl<'m> StreamTranscriber<'m> {
             self.base = sample;
         }
     }
+}
+
+impl DecodedWord for Word {
+    fn span(&self) -> (f64, f64) { (self.start, self.end) }
+
+    fn shift(&mut self, offset: f64) {
+        self.start += offset;
+        self.end += offset;
+    }
+
+    fn text(&self) -> &str { &self.text }
 }
 
 /// A detector segment as a planner interval.

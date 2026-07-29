@@ -29,7 +29,10 @@
 mod tests;
 
 use super::{
-    super::segment::{BOUNDARY_CONTEXT_S, Chunk, ChunkPlanner, Interval},
+    super::segment::{
+        BOUNDARY_CONTEXT_S, Chunk, ChunkPlanner, DecodedWord, Interval,
+        own_words,
+    },
     constants::{ENCODER_FRAME_S, LONGFORM_THRESHOLD_S, SAMPLE_RATE},
     decode::{DecodeState, TransducerHead},
     error::VoskError,
@@ -66,6 +69,9 @@ struct OfflineRun {
     planner: ChunkPlanner,
     /// VAD windows whose probabilities have been consumed.
     windows: u64,
+    /// Time spans of the words the previous chunk kept — what the seam
+    /// reconciliation of the next chunk tests against.
+    prev_kept: Vec<(f64, f64)>,
     segments: Vec<Segment>,
     texts: Vec<String>,
 }
@@ -137,6 +143,7 @@ impl<'m> StreamTranscriber<'m> {
                 detector: Some(SpeechDetector::new(&VadOptions::default())),
                 planner: ChunkPlanner::new(),
                 windows: 0,
+                prev_kept: Vec::new(),
                 segments: Vec::new(),
                 texts: Vec::new(),
             })),
@@ -237,6 +244,8 @@ impl<'m> StreamTranscriber<'m> {
                     Chunk {
                         start: 0.0,
                         end: total,
+                        keep_start: 0.0,
+                        keep_end: total,
                         window_start: 0.0,
                         window_end: total,
                     },
@@ -337,26 +346,27 @@ impl<'m> StreamTranscriber<'m> {
             &self.options,
         )?;
         let origin = a as f64 / sr;
+        let want_words = self.options.word_timestamps;
         let Mode::Offline(run) = &mut self.mode else {
             unreachable!()
         };
-        if !result.text.is_empty() {
-            run.texts.push(result.text.clone());
+        let (text, words) = own_words(
+            result.words,
+            origin,
+            &chunk,
+            &run.prev_kept,
+            result.text,
+        );
+        run.prev_kept = words.iter().map(DecodedWord::span).collect();
+        if !text.is_empty() {
+            run.texts.push(text.clone());
         }
         run.segments.push(Segment {
             id: run.segments.len(),
             start: chunk.start,
             end: chunk.end,
-            text: result.text,
-            words: result
-                .words
-                .into_iter()
-                .map(|w| Word {
-                    text: w.text,
-                    start: w.start + origin,
-                    end: w.end + origin,
-                })
-                .collect(),
+            text,
+            words: if want_words { words } else { Vec::new() },
         });
         progress(TranscribeProgress {
             processed_seconds: chunk.end,
@@ -508,6 +518,17 @@ impl<'m> StreamTranscriber<'m> {
             duration: total,
         })
     }
+}
+
+impl DecodedWord for Word {
+    fn span(&self) -> (f64, f64) { (self.start, self.end) }
+
+    fn shift(&mut self, offset: f64) {
+        self.start += offset;
+        self.end += offset;
+    }
+
+    fn text(&self) -> &str { &self.text }
 }
 
 /// A detector segment as a planner interval.
