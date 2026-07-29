@@ -31,7 +31,6 @@ pub mod onnx;
 pub mod runtime;
 #[cfg(feature = "vosk-burn")]
 pub mod runtime_burn;
-pub mod segment;
 #[cfg(all(feature = "vosk-runtime", feature = "vad"))]
 pub mod stream;
 pub mod tokenizer;

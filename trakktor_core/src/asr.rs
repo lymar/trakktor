@@ -11,8 +11,11 @@
 //! voice-activity detection ([`crate::vad`]), which finds speech and drops
 //! non-speech before transcription. The detector lives in the shared
 //! [`crate::vad`] module (it is not ASR-specific), and this domain uses it as a
-//! preprocessing stage.
+//! preprocessing stage. The second is [`segment`]: turning the detected speech
+//! into the chunks a whole-utterance model can take, shared by every engine
+//! that chunks long audio.
 
 pub mod gigaam;
+pub mod segment;
 pub mod vosk;
 pub mod whisper;

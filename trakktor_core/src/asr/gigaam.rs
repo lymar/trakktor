@@ -25,7 +25,6 @@ pub mod rnnt;
 pub mod runtime;
 #[cfg(feature = "gigaam-burn")]
 pub mod runtime_burn;
-pub mod segment;
 #[cfg(all(feature = "gigaam-runtime", feature = "vad"))]
 pub mod stream;
 pub mod tokenizer;
@@ -45,7 +44,6 @@ pub use feature::{FeatureExtractor, Mel, MelConfig};
 pub use runtime::{AsrModel, Emissions, GigaamModel, Precision};
 #[cfg(feature = "gigaam-burn")]
 pub use runtime_burn::GigaamBurnModel;
-pub use segment::Interval;
 #[cfg(all(feature = "gigaam-runtime", feature = "vad"))]
 pub use stream::{StreamTranscriber, transcribe, transcribe_with_progress};
 pub use tokenizer::Tokenizer;
@@ -53,3 +51,5 @@ pub use tokenizer::Tokenizer;
 pub use transcribe::{
     Segment, TranscribeOptions, TranscribeProgress, Transcription,
 };
+
+pub use super::segment::Interval;
