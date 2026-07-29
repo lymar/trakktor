@@ -50,6 +50,13 @@ Apache-licensed:
   [XLM-RoBERTa](https://huggingface.co/FacebookAI/xlm-roberta-base) (MIT)
   tokenizer, on the same candle runtime with the same optional burn runtime.
   Please cite the SaT paper if you use these models.
+- [**`text stress`**](features/text/README.md#text-stress--mark-the-stress-in-russian-text) —
+  [Silero Stress](https://github.com/snakers4/silero-stress) (MIT) by the Silero
+  Team: the n-gram accentor with its stress and `ё` heads and the
+  `rubert-tiny`-class homograph solver, ported to the same candle runtime with
+  the same optional burn runtime. The model is downloaded at runtime. Also used
+  by [`tts espeech`](features/tts/espeech.md), which marks its text with it
+  before speaking.
 - [**`text punctuate`**](features/text/README.md#text-punctuate--restore-punctuation-and-casing) — the
   [1-800-BAD-CODE multilingual punctuation/true-casing model](https://huggingface.co/1-800-BAD-CODE/xlm-roberta_punctuation_fullstop_truecase)
   (Apache-2.0), an [XLM-RoBERTa](https://huggingface.co/FacebookAI/xlm-roberta-base)

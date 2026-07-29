@@ -13,6 +13,8 @@ pub mod http;
 #[cfg(feature = "punctuate-runtime")]
 pub mod punctuate;
 pub mod skill;
+#[cfg(feature = "stress-runtime")]
+pub mod stress;
 #[cfg(feature = "structify-runtime")]
 pub mod structify;
 #[cfg(feature = "tts-runtime")]

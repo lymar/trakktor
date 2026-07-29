@@ -36,24 +36,44 @@ trakktor tts espeech --text-file chapter.md --ref-audio narrator.wav \
 | `--cfg-strength <float>` | `2.0` | How strongly the reading is pushed toward the text and the reference voice. `0` switches off the second, unguided pass — exactly twice as fast, and not worth it: measured, the words come out mangled and half-swallowed (transcribing the result back no longer matches what went in). |
 | `--speed <float>` | `1.0` | Speech rate as a multiplier on the predicted duration: below 1 gives the words more room. |
 | `--seed <int>` | `0` | The noise the reading starts from. Same seed, same file; another seed, another reading of the same text in the same voice. |
+| `--stress <auto\|off>` | `auto` | Whether to mark the stress before speaking (see below). `auto` marks the text **and the reference transcript**; `off` speaks them exactly as given. |
 | `--text-file`, `--text-format`, `--pause-ms`, `--levels`, `--audio-encoder`, `--bitrate` | — | The [shared `tts` options](README.md). |
 | `--precision <f32\|f16>` | `f32` | `f16` is what the reference itself runs on a GPU and about 16 % faster here, but it is **not** the same run in fewer bits: over 32 steps the small differences compound into a slightly different — equally good — reading. The vocoder and the spectrogram always run in full precision. |
 | `--runtime <candle\|burn>` | `candle` | burn needs the `burn` build feature, computes in f32 only, and measured ~1.7× slower here. |
 | `--device <cpu\|metal>` | `cpu` | `metal` needs the `metal` build feature and is ~3.5× faster than the CPU. |
 
-**Stress goes in the text.** Russian stress is written with `+` before the
-stressed vowel — `з+амок` is a lock, `зам+ок` a castle — in the text to speak and
-in the reference transcript alike. trakktor passes the text through as you wrote
-it and never guesses for you.
+## Stress
 
-Unmarked text is still read fluently, and the mark is worth reaching for more
-often than only for homographs. Measured by transcribing the result back with
+Russian stress is written with `+` before the stressed vowel — `з+амок` is a
+lock, `зам+ок` a castle — in the text to speak and in the reference transcript
+alike. This model reads that mark as a real input, and it matters more often
+than only for homographs. Measured by transcribing the result back with
 [`asr gigaam`](../asr/gigaam.md), three seeds each: `На ф+орзаце была наклеена старая карта.` comes
 back with "форзеце" every time, and the same sentence unmarked comes back with
 "ф**а**рзаци" every time — with the stress elsewhere the first vowel reduces,
 exactly as an unstressed Russian vowel does. Across a wider set of rare words the
 mark never made one worse; it also cannot rescue a word the model simply does not
 know how to say.
+
+**So the engine marks the text for you, by default.** `--stress auto` runs
+[`text stress`](../text/README.md#text-stress--mark-the-stress-in-russian-text)
+over the text and over `--ref-text` before synthesis; its model is downloaded on
+first use (54 MB) and loaded lazily, on the same `--runtime` and `--device` as
+the synthesis. Marks **you** wrote are never moved, so marking part of the text
+by hand and leaving the rest to the model is the normal way to work. What the
+model ended up reading is reported as `espeech.stressed_text` and
+`espeech.stressed_ref_text` — without that, a bad reading is indistinguishable
+from a bad mark.
+
+`--stress off` restores the old behavior: the text goes to the model exactly as
+you wrote it, and nothing is downloaded.
+
+```bash
+# mark it yourself, look at it, fix it, then speak it
+trakktor text stress chapter.txt --text > chapter.stressed.txt
+trakktor tts espeech --text-file chapter.stressed.txt --stress off \
+  --ref-audio narrator.wav --ref-text-file narrator.txt -o chapter.wav
+```
 
 ## Preparing the reference recording
 
@@ -116,7 +136,9 @@ The engine reports what it used:
   "voice": { "kind": "clone", "mode": "icl", "ref_audio": "narrator.wav" },
   "engine": { "name": "espeech", "model": "rl-v2", "runtime": "candle" },
   "espeech": { "frames": 927, "nfe_step": 32, "cfg_strength": 2.0,
-               "speed": 1.0, "seed": 0, "ref_seconds": 8.91 }
+               "speed": 1.0, "seed": 0, "ref_seconds": 8.91,
+               "stressed_text": "Втор+ая глав+а начин+ается с опис+ания дор+оги.",
+               "stressed_ref_text": "В+етер ст+их т+олько к +утру, +и ст+ало сл+ышно р+еку." }
 }
 ```
 

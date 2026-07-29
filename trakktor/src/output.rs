@@ -607,6 +607,41 @@ pub fn print_punctuate(
     println!("{text}");
 }
 
+/// Prints the result of a stress-marking run. JSON: the model, the mark form,
+/// the marked text, what the run did, and the words it left unmarked. Text: the
+/// marked text alone — that is the thing the caller came for.
+///
+/// `unstressed` is the actionable half of the output: those are exactly the
+/// words a `--dict` entry would fix, so the list is always present, even empty.
+pub fn print_stress(
+    model: &str,
+    marked: &trakktor_core::stress::Stressed,
+    json: bool,
+    pretty: bool,
+) {
+    if json {
+        let stats = &marked.stats;
+        print_json(
+            &json!({
+                "model": model,
+                "marker": marked.marker.as_str(),
+                "text": marked.text,
+                "stats": {
+                    "words": stats.words,
+                    "stressed": stats.stressed,
+                    "yo_restored": stats.yo_restored,
+                    "homographs": stats.homographs,
+                    "from_dictionary": stats.from_dictionary,
+                },
+                "unstressed": marked.unstressed,
+            }),
+            pretty,
+        );
+        return;
+    }
+    println!("{}", marked.text);
+}
+
 // ---------------------------------------------------------------------------
 // tts
 // ---------------------------------------------------------------------------
@@ -718,6 +753,7 @@ pub fn print_espeech_synthesis(
     runtime: &str,
     options: &EspeechOptions,
     language: Option<&str>,
+    stressed: Option<&crate::tts::stress::Marked>,
     json: bool,
     pretty: bool,
 ) {
@@ -746,6 +782,16 @@ pub fn print_espeech_synthesis(
         insert_f64(&mut engine_block, "ref_seconds", synthesis.ref_seconds);
         if synthesis.ref_clipped {
             engine_block.insert("ref_clipped".into(), json!(true));
+        }
+        // What the model actually read, when the marks are not the caller's:
+        // without this it is impossible to tell a bad reading from a bad mark.
+        if let Some(marked) = stressed {
+            engine_block.insert(
+                "stressed_text".into(),
+                json!(marked.paragraphs.join("\n")),
+            );
+            engine_block
+                .insert("stressed_ref_text".into(), json!(marked.ref_text));
         }
 
         let mut object = Map::new();

@@ -11,6 +11,7 @@ mod error;
 mod output;
 mod punctuate;
 mod skill;
+mod stress;
 mod structify;
 mod tts;
 mod vad;

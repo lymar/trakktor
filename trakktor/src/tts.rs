@@ -28,6 +28,7 @@ use crate::{
 
 mod progress;
 mod split;
+pub(crate) mod stress;
 
 /// Runs one synthesis end to end: read the text, resolve (and if needed
 /// download) the model, load it, speak the paragraphs, write the audio, and
@@ -190,6 +191,15 @@ pub(crate) fn run_espeech(
         &mut crate::asr::progress::download_progress(),
     )?;
 
+    // Marking comes after the engine's own model is resolved — a bad `--model`
+    // should not cost a download first — but before anything that measures the
+    // text: the marks are characters, and the piece budget counts its bytes.
+    let marked = stress::mark(args, model_dir, &paragraphs, &ref_text)?;
+    let (paragraphs, ref_text) = match &marked {
+        Some(marked) => (&marked.paragraphs, &marked.ref_text),
+        None => (&paragraphs, &ref_text),
+    };
+
     let precision = match args.precision {
         crate::cli::EspeechPrecisionArg::F16 => espeech::Precision::F16,
         crate::cli::EspeechPrecisionArg::F32 => espeech::Precision::F32,
@@ -233,7 +243,7 @@ pub(crate) fn run_espeech(
 
     let report = progress::Reporter::start(Instant::now());
     let synthesis = synthesizer.speak_paragraphs(
-        &paragraphs,
+        paragraphs,
         &options,
         &mut |text, budget| {
             splitter
@@ -259,6 +269,7 @@ pub(crate) fn run_espeech(
         runtime_name(args.runtime),
         &options,
         language.as_deref(),
+        marked.as_ref(),
         json,
         pretty,
     );

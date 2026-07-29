@@ -22,6 +22,34 @@ repo.
   the user decide when (and whether) to commit.
 - When in doubt, do not commit — stop and ask.
 
+## NEVER put the user's own material into this repository
+
+**This repository is (potentially) public. Nothing from the user's machine ever
+goes into it.** This is absolute — there is no "just a short quote", no "it is
+only an example", no "the file is gitignored anyway".
+
+Off limits, in every direction:
+
+- **Content.** Not one sentence, phrase, or word copied out of `tmp/`,
+  `~/.trakktor`, `~/.cache`, a transcript, a recording, a reference text, a
+  scratch file, a chat message, or anything else the user made or supplied.
+  Not as a doc example, not as a test fixture string, not in a code comment,
+  not in clap prose, not in a commit message.
+- **Names.** Not the file names of that material either — a test that needs a
+  local fixture reads it from the feature's own `tmp/<feature>/…` directory
+  under a neutral name (`prose.txt`), never from the user's own file.
+- **Measurements phrased through it.** Write "on a page of ordinary prose", not
+  "on <their file>". The measurement belongs in the docs repo, which is
+  private; the public repo states the property, not the corpus.
+
+**Every example in this repository must be invented here**, and then **actually
+run** so what it shows is true. Reuse the examples already in the repo, or the
+upstream project's own published ones — nothing else.
+
+Two places make this easy to get wrong, so check them by name before finishing:
+`docs/` and `README.md` (read by anyone), and clap `///` doc-comments (rendered
+into `--help` and reproduced verbatim by `trakktor skill show`).
+
 ## Source of truth: the design docs
 
 The project's design, specifications, and decisions live in a **separate

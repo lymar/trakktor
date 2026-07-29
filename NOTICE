@@ -70,6 +70,18 @@ Silero-VAD — MIT License
   (trakktor_core/src/vad/assets/silero_vad_16k.safetensors, ~1.24 MB) are
   embedded in the binary.
 
+Silero Stress — MIT License
+  Copyright (c) 2020-present Silero Team
+  https://github.com/snakers4/silero-stress
+  The `text stress` operation — and, through it, the automatic stress marking of
+  the `tts espeech` engine — ports the Russian accentor of Silero Stress: the
+  character-n-gram embedding bag with its stress and `yo` heads, the
+  `rubert-tiny`-class homograph solver with its `[HOMO]`-marker head, the
+  word-level marking rules, and the lookup tables that go with them. The model
+  (`accentor.pt`, tag v1.4) is downloaded from GitHub at runtime, converted in
+  place into the layout the runtimes read, and is not redistributed in this
+  repository.
+
 whisper.cpp / ggml — MIT License
   Copyright (c) 2023-2026 The ggml authors
   https://github.com/ggerganov/whisper.cpp

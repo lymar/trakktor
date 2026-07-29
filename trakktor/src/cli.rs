@@ -26,14 +26,15 @@ const DEFAULT_MODEL_DIR_NAME: &str = ".trakktor";
 
 /// A predictable, automation-friendly CLI toolbox for coding agents (Claude
 /// Code, OpenCode, etc.): speech-to-text and text-to-speech, voice-activity
-/// audio editing, feeds, text structuring and punctuation, and more —
-/// machine-readable output, stable flags, and meaningful exit codes. Reach for
-/// it when a task needs one of these helpers, such as fetching a feed's unread
-/// items, transcribing an audio file to timestamped text, reading a text or
-/// Markdown file aloud into an audio file — in a preset voice or in one cloned
-/// from a sample recording — cutting the silence out of a recording, restoring
-/// punctuation to a raw transcript, or splitting a transcript into readable
-/// paragraphs.
+/// audio editing, feeds, text structuring, punctuation and Russian stress
+/// marking, and more — machine-readable output, stable flags, and meaningful
+/// exit codes. Reach for it when a task needs one of these helpers, such as
+/// fetching a feed's unread items, transcribing an audio file to timestamped
+/// text, reading a text or Markdown file aloud into an audio file — in a preset
+/// voice or in one cloned from a sample recording — cutting the silence out of
+/// a recording, restoring punctuation to a raw transcript, splitting a
+/// transcript into readable paragraphs, or marking where the stress falls in
+/// Russian text.
 ///
 /// Output is JSON by default (`--pretty` indents it); pass `--text` for
 /// human-readable text. Results go to stdout, errors to stderr. Exit codes are
@@ -155,7 +156,9 @@ enum Command {
     /// speech transcript whose line breaks fall on segments rather than meaning
     /// — into readable paragraphs; `punctuate` restores punctuation and
     /// capitalization in raw lowercase text, such as the output of the Vosk and
-    /// GigaAM speech engines.
+    /// GigaAM speech engines; `stress` marks the stressed vowel of every
+    /// Russian word (and restores the letter ё), which is what a speech
+    /// synthesizer needs to read the text correctly.
     Text {
         #[command(subcommand)]
         command: TextCommand,
@@ -259,10 +262,12 @@ pub(crate) enum TtsCommand {
     /// (plain text or Markdown, see --text-format), and a paragraph too long
     /// for one utterance is split further — with a local sentence model,
     /// downloaded on first need, and at punctuation where that is not enough.
-    /// Russian stress goes in the text itself: put `+` before the stressed
-    /// vowel (`з+амок` is a lock, `зам+ок` a castle), in the text to speak and
-    /// in the reference transcript alike. Without a mark the model guesses,
-    /// and on ambiguous words it guesses wrong. The reading is repeatable:
+    /// Russian stress is written with `+` before the stressed vowel (`з+амок`
+    /// is a lock, `зам+ок` a castle), and the model reads it as a real input.
+    /// By default the engine marks the text — and the reference transcript —
+    /// itself before speaking (see --stress); a `+` you wrote yourself is
+    /// never moved, so marking the odd word by hand and leaving the rest to
+    /// the model is the normal way to work. The reading is repeatable:
     /// --seed fixes it, and the same seed gives the same file. The first use
     /// of a model downloads its checkpoint into the model directory
     /// (~/.trakktor by default; see --model-dir), and later runs reuse it.
@@ -435,6 +440,29 @@ pub(crate) struct EspeechArgs {
         value_name = "precision"
     )]
     pub(crate) precision: EspeechPrecisionArg,
+
+    /// Whether to mark the stress in the text before speaking it. This model
+    /// reads `+` before a stressed vowel as a real input, and without it reads
+    /// rare words wrong often enough to hear, so `auto` (the default) marks
+    /// the text — and the reference transcript with it — using the same model
+    /// `text stress` uses, downloaded on first use. Marks you wrote yourself
+    /// are never moved. `off` speaks the text exactly as given.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = StressArg::Auto,
+        value_name = "mode"
+    )]
+    pub(crate) stress: StressArg,
+}
+
+/// The `--stress` value of `tts espeech`.
+#[derive(Clone, Copy, ValueEnum)]
+pub(crate) enum StressArg {
+    /// Mark the stress before speaking.
+    Auto,
+    /// Speak the text exactly as given.
+    Off,
 }
 
 /// The `--precision` value of `tts espeech`.
@@ -1168,6 +1196,13 @@ impl PrecisionArg {
             PrecisionArg::F32 => trakktor_core::punctuate::Precision::F32,
         }
     }
+
+    pub(crate) fn to_stress(self) -> trakktor_core::stress::Precision {
+        match self {
+            PrecisionArg::F16 => trakktor_core::stress::Precision::F16,
+            PrecisionArg::F32 => trakktor_core::stress::Precision::F32,
+        }
+    }
 }
 
 /// The `--task` value of `asr whisper`.
@@ -1309,6 +1344,135 @@ pub(crate) enum TextCommand {
     /// Russian and English. A natural pipeline is `asr vosk` → `text punctuate`
     /// → `text structify`.
     Punctuate(PunctuateArgs),
+
+    /// Mark the stressed vowel in Russian text (and restore the letter ё).
+    ///
+    /// Reads a UTF-8 text file of Russian and gives back the same text with the
+    /// stress marked — `+` before the stressed vowel by default, which is what
+    /// `tts espeech` reads — and with the letter ё written where it belongs,
+    /// fully offline. Russian writes neither, and a speech synthesizer needs
+    /// both: an unmarked word is read by guesswork, and a pair like все/всё
+    /// cannot be told apart by a stress mark at all. Words you have already
+    /// marked yourself are never re-marked, and --dict lets you fix the rest
+    /// once and for all. The first use of a model downloads it into the model
+    /// directory (~/.trakktor by default; see --model-dir), and later runs
+    /// reuse it. Output is JSON by default — the marked text, counts, and the
+    /// words left unmarked; pass --text for the marked text alone.
+    Stress(StressArgs),
+}
+
+/// Flags of `text stress`.
+#[derive(Args)]
+pub(crate) struct StressArgs {
+    /// Path to the UTF-8 text file to mark.
+    #[arg(value_name = "input")]
+    pub(crate) input: PathBuf,
+
+    /// Model: a published name, downloaded on first use, or a path to a model
+    /// directory. Names: silero-ru (Russian; an n-gram accentor with a
+    /// stress and a ё head, plus a BERT solver for words whose spelling does
+    /// not say how they are read).
+    #[arg(
+        long,
+        default_value = trakktor_core::stress::DEFAULT_MODEL,
+        value_name = "name|dir"
+    )]
+    pub(crate) model: String,
+
+    /// Form of the stress mark in the output. `plus` writes `+` before the
+    /// stressed vowel — the form the speech engines read; `acute` writes the
+    /// combining acute accent after it, the form dictionaries and corpora use.
+    /// Either form is also accepted on input and is never overwritten.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = MarkerArg::Plus,
+        value_name = "form"
+    )]
+    pub(crate) marker: MarkerArg,
+
+    /// Whether to restore the letter ё. `auto` writes it where it belongs —
+    /// which is the only way to tell все from всё; `off` leaves every letter
+    /// of the input exactly as it was and only adds marks.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = YoArg::Auto,
+        value_name = "mode"
+    )]
+    pub(crate) yo: YoArg,
+
+    /// Your own dictionary of stressed spellings, applied before the model —
+    /// one marked word per line (`ф+орзац`, `Корол+ёв`), `#` starts a comment.
+    /// Names, terms, and rare words belong here; repeat the flag for several
+    /// files. A word listed here is spelled the way you wrote it, whatever the
+    /// model would have said.
+    #[arg(long = "dict", value_name = "path")]
+    pub(crate) dictionaries: Vec<PathBuf>,
+
+    /// Inference runtime executing the model. Both produce the same text;
+    /// `burn` needs a build with the `burn` feature enabled, and on the CPU
+    /// computes in f32 only.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = RuntimeArg::Candle,
+        value_name = "runtime"
+    )]
+    pub(crate) runtime: RuntimeArg,
+
+    /// Compute device. `metal` needs a build with the `metal` feature (for the
+    /// candle runtime) or the `burn` feature (for the burn runtime) enabled,
+    /// and is only available on macOS.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = DeviceArg::Cpu,
+        value_name = "device"
+    )]
+    pub(crate) device: DeviceArg,
+
+    /// Compute precision. `f32` (the default here) computes in full precision;
+    /// `f16` uses about half the memory and is faster, but every decision this
+    /// model makes is a threshold that half precision can flip.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = PrecisionArg::F32,
+        value_name = "precision"
+    )]
+    pub(crate) precision: PrecisionArg,
+
+    /// Words per forward batch.
+    #[arg(long, default_value_t = 256, value_name = "int")]
+    pub(crate) batch_size: usize,
+}
+
+/// The `--marker` value of `text stress`.
+#[derive(Clone, Copy, ValueEnum)]
+pub(crate) enum MarkerArg {
+    /// `+` before the stressed vowel.
+    Plus,
+    /// Combining acute accent after the stressed vowel.
+    Acute,
+}
+
+impl MarkerArg {
+    pub(crate) fn to_core(self) -> trakktor_core::stress::Marker {
+        match self {
+            MarkerArg::Plus => trakktor_core::stress::Marker::Plus,
+            MarkerArg::Acute => trakktor_core::stress::Marker::Acute,
+        }
+    }
+}
+
+/// The `--yo` value of `text stress`.
+#[derive(Clone, Copy, ValueEnum)]
+pub(crate) enum YoArg {
+    /// Write ё where it belongs.
+    Auto,
+    /// Leave the letters of the input alone.
+    Off,
 }
 
 /// Flags of `text punctuate`.
@@ -1834,6 +1998,12 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                 global.pretty,
             ),
             TextCommand::Punctuate(args) => crate::punctuate::run_punctuate(
+                args,
+                &global.model_dir()?,
+                global.json(),
+                global.pretty,
+            ),
+            TextCommand::Stress(args) => crate::stress::run_stress(
                 args,
                 &global.model_dir()?,
                 global.json(),

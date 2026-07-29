@@ -20,13 +20,15 @@ Each command is documented in full on its own page under
   audio file out — plain text or Markdown, any length, fully local. Two
   engines — [`qwen3-tts`](docs/features/tts/qwen3-tts.md) (ten languages,
   nine preset voices) and [`espeech`](docs/features/tts/espeech.md) (Russian,
-  the voice cloned from a recording you supply).
+  the voice cloned from a recording you supply, stress marked automatically).
 - [**`vad` — voice-activity audio editing**](docs/features/vad/README.md):
   find the speech in an audio file and report it, cut the silence out, or
   split the recording into clips.
-- [**`text` — structure text**](docs/features/text/README.md): split a wall
-  of text into paragraphs (`structify`) and restore punctuation and casing in
-  raw transcripts (`punctuate`), fully offline.
+- [**`text` — structure and transform text**](docs/features/text/README.md):
+  split a wall of text into paragraphs (`structify`), restore punctuation and
+  casing in raw transcripts (`punctuate`), and mark the stressed vowel in
+  Russian — with the letter `ё` restored — for a speech synthesizer to read
+  (`stress`), all fully offline.
 - [**`feed` — RSS / Atom / JSON Feed**](docs/features/feed/README.md):
   discover feeds on a page and read them with per-item read state.
 - [**`skill` — generate the agent skill**](docs/features/skill/README.md):
@@ -118,8 +120,8 @@ read-state), `--model-dir <path>` (also `TRAKKTOR_MODEL_DIR`; default
 
 trakktor ports and builds on several open-source projects, all MIT- or
 Apache-licensed — Whisper, GigaAM, Vosk, Qwen3-TTS, F5-TTS and the ESpeech
-checkpoints, Vocos, Silero-VAD, SaT / wtpsplit, and the 1-800-BAD-CODE
-punctuation model, on the candle and burn runtimes. The full credits — with
+checkpoints, Vocos, Silero-VAD, Silero Stress, SaT / wtpsplit, and the
+1-800-BAD-CODE punctuation model, on the candle and burn runtimes. The full credits — with
 licenses, upstream links, and papers — live in
 [`docs/acknowledgments.md`](docs/acknowledgments.md); see [`NOTICE`](NOTICE)
 for the complete third-party attributions and license notices.

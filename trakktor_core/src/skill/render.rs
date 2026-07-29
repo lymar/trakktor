@@ -25,18 +25,18 @@ const STUB_DESCRIPTION: &str =
     "Use {name}, a predictable, automation-friendly CLI toolbox for coding \
      agents: for feeds, audio, and text. Feeds: discover the RSS/Atom/JSON \
      feeds a page declares, read unread entries as JSON, track read state. \
-     Speech: transcribe audio with a local Whisper (or translate to English), \
-     GigaAM, or Vosk model; or read text or Markdown aloud into an audio \
-     file, in a preset voice or one cloned from a sample recording. Audio: by \
+     Speech: transcribe audio with a local Whisper, GigaAM, or Vosk model, or \
+     translate it to English; read text or Markdown aloud into an audio file, \
+     in a preset voice or one cloned from a recording. Audio: by \
      voice-activity detection, report a speech/silence timeline, cut silence, \
      or split a recording per utterance. Text: restore punctuation and \
-     capitalization in a raw transcript, and split a wall of text into \
-     paragraphs — offline, multilingual (Russian included). Reach for it \
-     whenever a task involves an RSS/Atom/JSON feed or blog/news URL, polling \
-     a site for new posts, turning audio (mp3, wav, m4a) into a transcript or \
-     captions, reading an article aloud, cloning a voice from a recording, \
-     removing dead air or splitting on pauses, restoring punctuation, or \
-     grouping a transcript into paragraphs.";
+     capitalization in a raw transcript, split a wall of text into \
+     paragraphs, and mark where the stress falls in Russian words for a \
+     speech synthesizer — offline, multilingual. Reach for it whenever a task \
+     involves a feed or blog/news URL, polling a site for new posts, turning \
+     audio into a transcript or captions, reading an article aloud, cloning a \
+     voice, removing dead air, restoring punctuation, grouping text into \
+     paragraphs, or Russian stress marks.";
 
 /// Renders the agent-facing guide (`trakktor skill show`).
 ///

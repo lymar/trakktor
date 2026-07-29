@@ -74,3 +74,6 @@ tokenizers = { version = "0.22", default-features = false, features = [
     "fancy-regex",
 ] }
 url = "2"
+# Reading the published `silero-stress` model, which is a `torch.package`
+# archive (a ZIP); only the pure-Rust deflate path is needed.
+zip = { version = "8", default-features = false, features = ["deflate-flate2"] }

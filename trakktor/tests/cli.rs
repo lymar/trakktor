@@ -470,6 +470,9 @@ fn no_internal_doc_references_leak_into_user_facing_text() {
         &["--help"],
         &["skill", "show", "--help"],
         &["skill", "install", "--help"],
+        &["text", "--help"],
+        &["text", "stress", "--help"],
+        &["tts", "espeech", "--help"],
     ];
     let needles = [
         "ADR-",
@@ -519,4 +522,127 @@ fn asr_rejects_malformed_timecode() {
     // A `--start` that is neither seconds nor a clock is a usage error.
     let out = run(&["asr", "whisper", "audio.mp3", "--start", "1:2:3:4"]);
     assert_eq!(out.status.code(), Some(2));
+}
+
+// ---------------------------------------------------------------------------
+// text stress
+// ---------------------------------------------------------------------------
+
+/// Writes `text` to a file in `dir` and returns its path as a string.
+fn text_file(dir: &Path, name: &str, text: &str) -> String {
+    let path = dir.join(name);
+    std::fs::write(&path, text).expect("write");
+    path.to_str().expect("utf-8 path").to_string()
+}
+
+/// A sentence with a homograph (`замки`), a hidden `ё` (`Королев`), and words
+/// of one syllable — everything the operation has to decide about.
+const SAMPLE: &str =
+    "Меня зовут Лева Королев. Я уже готов открыть все ваши замки.";
+
+/// The marked form of [`SAMPLE`], as both runtimes produce it.
+const MARKED: &str =
+    "Мен+я зов+ут Л+ёва Корол+ёв. +Я уж+е гот+ов откр+ыть вс+е в+аши замк+и.";
+
+#[test]
+#[ignore = "needs the model in ~/.trakktor/text/stress"]
+fn text_stress_marks_the_text_on_both_runtimes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = text_file(dir.path(), "in.txt", SAMPLE);
+
+    // The choice of runtime is a choice of arithmetic, not of answers.
+    let runtimes: &[&str] = if cfg!(feature = "burn") {
+        &["candle", "burn"]
+    } else {
+        &["candle"]
+    };
+    for runtime in runtimes {
+        let out = run(&["text", "stress", &input, "--runtime", runtime]);
+        let json = stdout_json(&out);
+        assert_eq!(json["text"].as_str().unwrap(), MARKED, "runtime {runtime}");
+        assert_eq!(json["model"].as_str().unwrap(), "silero-ru");
+        assert_eq!(json["marker"].as_str().unwrap(), "plus");
+        assert_eq!(json["stats"]["homographs"].as_u64().unwrap(), 6);
+        assert_eq!(json["stats"]["yo_restored"].as_u64().unwrap(), 2);
+        assert!(json["unstressed"].is_array());
+    }
+}
+
+#[test]
+#[ignore = "needs the model in ~/.trakktor/text/stress"]
+fn text_stress_prints_the_marked_text_alone_with_text() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = text_file(dir.path(), "in.txt", SAMPLE);
+    let out = run(&["text", "stress", &input, "--text"]);
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim_end(), MARKED);
+}
+
+#[test]
+#[ignore = "needs the model in ~/.trakktor/text/stress"]
+fn text_stress_reads_back_its_own_acute_output() {
+    // The two mark forms say the same thing, so the operation accepts either.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = text_file(dir.path(), "in.txt", SAMPLE);
+    let acute = run(&["text", "stress", &input, "--text", "--marker", "acute"]);
+    assert!(acute.status.success());
+    let acute = String::from_utf8_lossy(&acute.stdout).to_string();
+    assert!(acute.contains('\u{301}'), "no acute in {acute:?}");
+    assert!(!acute.contains('+'), "a plus survived into {acute:?}");
+
+    let back = text_file(dir.path(), "acute.txt", &acute);
+    let out = run(&["text", "stress", &back, "--text"]);
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim_end(), MARKED);
+}
+
+#[test]
+#[ignore = "needs the model in ~/.trakktor/text/stress"]
+fn text_stress_with_yo_off_only_adds_marks() {
+    // The flag's whole promise: your letters come back as you wrote them.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = text_file(dir.path(), "in.txt", SAMPLE);
+    let out = run(&["text", "stress", &input, "--text", "--yo", "off"]);
+    let marked = String::from_utf8_lossy(&out.stdout).trim_end().to_string();
+    let stripped: String = marked.chars().filter(|c| *c != '+').collect();
+    assert_eq!(stripped, SAMPLE);
+}
+
+#[test]
+#[ignore = "needs the model in ~/.trakktor/text/stress"]
+fn text_stress_takes_the_users_spelling_over_the_models() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = text_file(dir.path(), "in.txt", SAMPLE);
+    let dictionary = text_file(dir.path(), "dict.txt", "# mine\nз+амки\n");
+    let out = run(&["text", "stress", &input, "--dict", &dictionary]);
+    let json = stdout_json(&out);
+    let marked = json["text"].as_str().unwrap();
+    assert!(marked.contains("з+амки"), "{marked}");
+    assert_eq!(json["stats"]["from_dictionary"].as_u64().unwrap(), 1);
+    // The word is spoken for, so the homograph solver never sees it.
+    assert_eq!(json["stats"]["homographs"].as_u64().unwrap(), 5);
+}
+
+#[test]
+fn text_stress_rejects_a_malformed_dictionary_before_touching_the_model() {
+    // The dictionary is the caller's own file, so a typo in it is reported as
+    // theirs — and before anything is downloaded.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = text_file(dir.path(), "in.txt", SAMPLE);
+    let dictionary = text_file(dir.path(), "dict.txt", "hello\n");
+    let out = run(&["text", "stress", &input, "--dict", &dictionary]);
+    assert_eq!(stderr_error_code(&out), "invalid_options");
+}
+
+#[test]
+fn text_stress_reports_an_unknown_model() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = text_file(dir.path(), "in.txt", SAMPLE);
+    let out = run(&["text", "stress", &input, "--model", "nonesuch"]);
+    assert_eq!(stderr_error_code(&out), "model_unavailable");
+}
+
+#[test]
+fn text_stress_reports_a_missing_input_file() {
+    let out = run(&["text", "stress", "no-such-file.txt"]);
+    assert_eq!(stderr_error_code(&out), "io_error");
 }

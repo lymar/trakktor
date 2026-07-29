@@ -12,6 +12,7 @@ use trakktor_core::{
     http::HttpError,
     punctuate::PunctuateError,
     skill::SkillError,
+    stress::StressError,
     structify::StructifyError,
     tts::{espeech::EspeechError, qwen3_tts::Qwen3TtsError},
     vad::VadError,
@@ -38,6 +39,8 @@ pub enum CliError {
     Structify(StructifyError),
     /// An error from the `text punctuate` feature.
     Punctuate(PunctuateError),
+    /// An error from the `text stress` feature.
+    Stress(StressError),
     /// An error from the Qwen3-TTS engine.
     Qwen3Tts(Qwen3TtsError),
     /// An error from the ESpeech engine.
@@ -58,6 +61,7 @@ impl CliError {
             CliError::Skill(err) => skill_code(err),
             CliError::Structify(err) => structify_code(err),
             CliError::Punctuate(err) => punctuate_code(err),
+            CliError::Stress(err) => stress_code(err),
             CliError::Qwen3Tts(err) => qwen3_tts_code(err),
             CliError::Espeech(err) => espeech_code(err),
         }
@@ -76,6 +80,7 @@ impl std::fmt::Display for CliError {
             CliError::Skill(err) => write!(f, "{err}"),
             CliError::Structify(err) => write!(f, "{err}"),
             CliError::Punctuate(err) => write!(f, "{err}"),
+            CliError::Stress(err) => write!(f, "{err}"),
             CliError::Qwen3Tts(err) => write!(f, "{err}"),
             CliError::Espeech(err) => write!(f, "{err}"),
         }
@@ -116,6 +121,10 @@ impl From<StructifyError> for CliError {
 
 impl From<PunctuateError> for CliError {
     fn from(err: PunctuateError) -> Self { CliError::Punctuate(err) }
+}
+
+impl From<StressError> for CliError {
+    fn from(err: StressError) -> Self { CliError::Stress(err) }
 }
 
 impl From<EspeechError> for CliError {
@@ -229,6 +238,20 @@ fn punctuate_code(err: &PunctuateError) -> &'static str {
         PunctuateError::InvalidOptions(_) => "invalid_options",
         PunctuateError::Io(_) => "io_error",
         PunctuateError::HomeDirUnknown => "no_home_dir",
+    }
+}
+
+/// Maps a [`StressError`] to its stable `code`.
+fn stress_code(err: &StressError) -> &'static str {
+    match err {
+        StressError::InvalidModel(_) |
+        StressError::ModelDownload(_) |
+        StressError::Tokenizer(_) => "model_unavailable",
+        StressError::InvalidOptions(_) | StressError::Dictionary(_) => {
+            "invalid_options"
+        },
+        StressError::Io(_) => "io_error",
+        StressError::HomeDirUnknown => "no_home_dir",
     }
 }
 
