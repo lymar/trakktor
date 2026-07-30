@@ -246,6 +246,44 @@ impl RnntHead {
         (projected, state)
     }
 
+    /// Projects every encoder frame through the joint's encoder projection,
+    /// in parallel across frames.
+    ///
+    /// The greedy loop is sequential, but this input of its is not: each
+    /// frame's projection is an independent matrix-vector product, and
+    /// splitting the *frames* across threads leaves every row's accumulation
+    /// order untouched — the results are bit-identical to the sequential
+    /// loop, only computed sooner. This is the largest
+    /// emission-independent share of the head's work, so it is the one part
+    /// worth hoisting out of the loop.
+    fn project_frames(&self, encoded: &[f32], enc_frames: usize) -> Vec<f32> {
+        let out_dim = self.enc_proj.out_dim;
+        let mut projected = vec![0.0f32; enc_frames * out_dim];
+        let workers = std::thread::available_parallelism()
+            .map_or(1, std::num::NonZeroUsize::get)
+            .min(enc_frames / 8);
+        let project = |start: usize, rows: &mut [f32]| {
+            for (j, row) in rows.chunks_mut(out_dim).enumerate() {
+                let t = start + j;
+                let frame = &encoded[t * self.d_model..(t + 1) * self.d_model];
+                self.enc_proj.forward_into(frame, row);
+            }
+        };
+        if workers <= 1 {
+            project(0, &mut projected);
+            return projected;
+        }
+        let per_worker = enc_frames.div_ceil(workers);
+        std::thread::scope(|scope| {
+            for (i, block) in
+                projected.chunks_mut(per_worker * out_dim).enumerate()
+            {
+                scope.spawn(move || project(i * per_worker, block));
+            }
+        });
+        projected
+    }
+
     /// Greedy transducer decoding over one chunk's encoder output `[T', D]`
     /// (row-major `f32`), the port of the reference `RNNTGreedyDecoding`:
     /// per frame, emit tokens until the joint picks the blank (at most
@@ -268,11 +306,11 @@ impl RnntHead {
         // deterministic).
         let mut predicted: Option<(Vec<f32>, LstmState)> = None;
 
-        let mut enc_frame = vec![0.0f32; self.enc_proj.out_dim];
+        let enc_projected = self.project_frames(encoded, enc_frames);
+        let out_dim = self.enc_proj.out_dim;
         let mut logits = vec![0.0f32; self.num_classes];
         for t in 0..enc_frames {
-            let frame = &encoded[t * self.d_model..(t + 1) * self.d_model];
-            self.enc_proj.forward_into(frame, &mut enc_frame);
+            let enc_frame = &enc_projected[t * out_dim..(t + 1) * out_dim];
             for _ in 0..MAX_SYMBOLS_PER_STEP {
                 let (pred, next_state) = match predicted.take() {
                     Some(cached) => cached,

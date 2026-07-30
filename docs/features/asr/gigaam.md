@@ -20,7 +20,7 @@ network on the alternative burn runtime (see the
 [Runtime](README.md#runtime) section).
 
 ```sh
-trakktor asr gigaam ru.mp3                       # Russian, punctuated (v3_e2e_ctc), CPU, JSON
+trakktor asr gigaam ru.mp3                       # Russian, punctuated (v3_e2e_rnnt), CPU, JSON
 trakktor asr gigaam ru.mp3 --text                # readable [start --> end] lines
 trakktor asr gigaam ru.mp3 --timestamps word     # per-word timings
 trakktor asr gigaam ru.mp3 \
@@ -30,11 +30,13 @@ trakktor asr gigaam ru.mp3 \
 Models (downloaded on first use into `~/.trakktor/asr/gigaam/<name>.ckpt`, or
 pass a path to a local `.ckpt`):
 
-- **`v3_e2e_ctc`** (default) — Russian **with punctuation and capitalization**
-  (end-to-end model with text normalization — numbers as digits, sentence
-  casing).
-- **`v3_e2e_rnnt`** — punctuated Russian like `v3_e2e_ctc`, with an RNN-T
-  (transducer) decoder; slightly slower.
+- **`v3_e2e_rnnt`** (default) — Russian **with punctuation and
+  capitalization** (end-to-end model with text normalization — numbers as
+  digits, sentence casing), decoded by an RNN-T (transducer) head. The more
+  accurate of the two punctuated models.
+- **`v3_e2e_ctc`** — the same punctuated output from a CTC decoder: faster,
+  and it ends sentences more often, at some cost in word accuracy. Worth the
+  swap when throughput or sentence structure matters more than wording.
 - **`v3_ctc`** — Russian; normalized lowercase text without punctuation.
 - **`v3_rnnt`** — Russian; like `v3_ctc` but with an RNN-T (transducer)
   decoder — usually the most accurate raw text on Russian, slightly slower.
