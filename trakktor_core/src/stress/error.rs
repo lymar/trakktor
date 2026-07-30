@@ -54,3 +54,9 @@ impl From<crate::download::DownloadError> for StressError {
         Self::ModelDownload(error.to_string())
     }
 }
+
+impl From<crate::torch_package::TorchPackageError> for StressError {
+    fn from(error: crate::torch_package::TorchPackageError) -> Self {
+        Self::ModelDownload(error.to_string())
+    }
+}

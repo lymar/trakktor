@@ -17,6 +17,8 @@ pub mod skill;
 pub mod stress;
 #[cfg(feature = "structify-runtime")]
 pub mod structify;
+#[cfg(feature = "stress-runtime")]
+pub mod torch_package;
 #[cfg(feature = "tts-runtime")]
 pub mod tts;
 #[cfg(feature = "vad")]

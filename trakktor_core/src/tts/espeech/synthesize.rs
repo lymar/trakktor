@@ -22,7 +22,7 @@ use super::{
     schedule,
     tokenizer::{self, CharTokenizer},
 };
-use crate::tts::{self, CloneMode, Join, Speech, Voice};
+use crate::tts::{self, CloneMode, Join, Speech, Voice, text};
 
 /// How the schedule is bent. Negative crowds the steps toward the start of the
 /// trajectory, where the detail is decided; the reference uses exactly this
@@ -371,7 +371,7 @@ impl Synthesizer {
             }
             let mut first = true;
             for part in parts {
-                for piece in fit(&part, budget) {
+                for piece in text::fit(&part, budget) {
                     plan.push(Piece {
                         text: piece,
                         opens_paragraph: first,
@@ -382,62 +382,6 @@ impl Synthesizer {
         }
         Ok(plan)
     }
-}
-
-/// Cuts `text` down to pieces of at most `budget` bytes, at punctuation where
-/// there is any and at a word boundary otherwise.
-///
-/// This is the floor under the caller's splitter, not a replacement for it: a
-/// sentence longer than the budget cannot be split by a sentence model, and the
-/// budget a reference recording leaves is short enough that such sentences are
-/// common.
-fn fit(text: &str, budget: usize) -> Vec<String> {
-    let text = text.trim();
-    if text.len() <= budget || budget == 0 {
-        return vec![text.to_owned()];
-    }
-    let mut pieces = Vec::new();
-    let mut rest = text;
-    while rest.len() > budget {
-        // The last break that fits: a clause boundary if there is one, else a
-        // space, else the budget itself.
-        let window = &rest[..char_boundary(rest, budget)];
-        let cut = window
-            .rfind([',', ';', ':', '.', '!', '?', '—', '–'])
-            .map(|index| {
-                index + window[index..].chars().next().map_or(1, char::len_utf8)
-            })
-            .or_else(|| window.rfind(' '))
-            .unwrap_or(window.len());
-        // A cut at zero would hand the whole remainder back and loop forever.
-        // Only a budget narrower than one character gets there, which the
-        // budget rules do not produce — but a loop is not something to
-        // leave resting on a caller's arithmetic.
-        let cut =
-            cut.max(rest.chars().next().map_or(rest.len(), char::len_utf8));
-        let (piece, tail) = rest.split_at(cut.min(rest.len()));
-        let piece = piece.trim();
-        if !piece.is_empty() {
-            pieces.push(piece.to_owned());
-        }
-        rest = tail.trim_start();
-        if rest.is_empty() {
-            break;
-        }
-    }
-    if !rest.is_empty() {
-        pieces.push(rest.to_owned());
-    }
-    pieces
-}
-
-/// The largest character boundary at or below `at`.
-fn char_boundary(text: &str, at: usize) -> usize {
-    let mut at = at.min(text.len());
-    while at > 0 && !text.is_char_boundary(at) {
-        at -= 1;
-    }
-    at
 }
 
 #[cfg(test)]

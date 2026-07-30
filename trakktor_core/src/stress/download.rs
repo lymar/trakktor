@@ -20,13 +20,15 @@ use candle_core::{Device, Tensor};
 use super::{
     error::StressError,
     model::WEIGHTS_FILE,
-    package::{self, Element, Package, StoredTensor},
     tables::{
         EXCEPTIONS_FILE, HOMOGRAPHS_FILE, NGRAMS_FILE, VOCAB_FILE,
         render_ngrams, render_vocab,
     },
 };
-use crate::download::{Download, Progress};
+use crate::{
+    download::{Download, Progress},
+    torch_package::{self as package, Element, Package, StoredTensor},
+};
 
 /// A published model: its cache name, where the archive comes from, and what
 /// it should hash to.

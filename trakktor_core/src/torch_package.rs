@@ -1,26 +1,44 @@
-//! A minimal reader for the reference's `torch.package` archive.
+//! A minimal reader for PyTorch artifacts saved as a `torch.package`.
 //!
-//! The published accentor is not a `state_dict` but a `torch.package`: a ZIP
-//! holding the reference's own Python sources, two TorchScript modules
-//! (`.data/ts_code/{0,1}/data.pkl`), an object pickle with the lookup tables
-//! (`accentor_models/accentor`), and the tensors as flat storages
-//! (`.data/<n>.storage`). candle's own `.pth` reader assumes a flat state
-//! dictionary and a different storage layout, so this module walks the archive
-//! itself — reusing candle's pickle machinery ([`Stack`]/[`Object`]) for the
-//! opcode level, which is the part worth not rewriting.
+//! Some upstreams do not publish a `state_dict` but a whole package: a ZIP
+//! holding their own Python sources, one or more TorchScript modules
+//! (`.data/ts_code/<n>/data.pkl`), an object pickle with the lookup tables, and
+//! the tensors as flat storages (`.data/<n>.storage`). In those the pickle
+//! describes a **tree of modules with custom classes**, not a flat dictionary,
+//! and candle's own `.pth` reader — which assumes the flat form and a different
+//! storage layout — cannot read them. So this module walks the archive itself,
+//! reusing candle's pickle machinery ([`Stack`]/[`Object`]) for the opcode
+//! level, which is the part worth not rewriting.
 //!
-//! It is used **once**, when a downloaded model is converted into the layout
-//! the runtimes read (`download.rs`); nothing on the hot path touches it.
+//! It is used **once per model**, when a download is converted into the layout
+//! the runtimes read; nothing on a hot path touches it. Two features read
+//! archives like this — [`stress`](crate::stress) and the Silero speech
+//! engine — which is why it lives here rather than in either of them.
+//!
+//! What it deliberately does not do: execute a line of the packaged Python,
+//! support `REDUCE` in general, or pretend to be `torch.load`. It is exactly as
+//! much as it takes to get the weights and the tables out once.
 
 use std::{collections::HashMap, io::Read, path::Path};
 
 use candle_core::pickle::{Object, Stack};
 
-use super::error::StressError;
+/// Why an archive could not be read.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct TorchPackageError(String);
+
+impl TorchPackageError {
+    /// Wraps a failure with the entry it happened on.
+    fn new(detail: impl std::fmt::Display) -> Self { Self(detail.to_string()) }
+}
+
+/// Shorthand for this module's results.
+type Result<T> = std::result::Result<T, TorchPackageError>;
 
 /// How a storage's bytes are to be read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Element {
+pub enum Element {
     /// `torch.FloatStorage` — 4 bytes, little-endian f32.
     F32,
     /// `torch.CharStorage` — one signed byte.
@@ -42,7 +60,7 @@ impl Element {
 /// A tensor as the archive describes it: which storage holds it, how to read
 /// the bytes, and what shape they form.
 #[derive(Debug, Clone)]
-pub(super) struct StoredTensor {
+pub struct StoredTensor {
     pub element: Element,
     pub shape: Vec<usize>,
     /// Element offset into the storage.
@@ -53,24 +71,24 @@ pub(super) struct StoredTensor {
 
 impl StoredTensor {
     /// Number of elements the shape holds.
-    pub fn len(&self) -> usize { self.shape.iter().product() }
+    pub fn elements(&self) -> usize { self.shape.iter().product() }
 }
 
 /// An opened `torch.package` archive.
-pub(super) struct Package {
+pub struct Package {
     zip: zip::ZipArchive<std::io::BufReader<std::fs::File>>,
     /// The single top-level directory every entry lives under.
     root: String,
 }
 
 /// Wraps a failure to make sense of the archive.
-fn broken(path: &Path, detail: impl std::fmt::Display) -> StressError {
-    StressError::ModelDownload(format!("{}: {detail}", path.display()))
+fn broken(path: &Path, detail: impl std::fmt::Display) -> TorchPackageError {
+    TorchPackageError::new(format!("{}: {detail}", path.display()))
 }
 
 impl Package {
     /// Opens `path` and locates the archive's single root directory.
-    pub fn open(path: &Path) -> Result<Self, StressError> {
+    pub fn open(path: &Path) -> Result<Self> {
         let file = std::fs::File::open(path).map_err(|e| broken(path, e))?;
         let zip = zip::ZipArchive::new(std::io::BufReader::new(file))
             .map_err(|e| broken(path, e))?;
@@ -89,29 +107,29 @@ impl Package {
     }
 
     /// Reads an entry, named relative to the archive root.
-    fn entry(&mut self, name: &str) -> Result<Vec<u8>, StressError> {
+    fn entry(&mut self, name: &str) -> Result<Vec<u8>> {
         let full = format!("{}/{name}", self.root);
         let mut file = self
             .zip
             .by_name(&full)
-            .map_err(|e| StressError::ModelDownload(format!("{full}: {e}")))?;
+            .map_err(|e| TorchPackageError::new(format!("{full}: {e}")))?;
         let mut bytes = Vec::with_capacity(file.size() as usize);
         file.read_to_end(&mut bytes)
-            .map_err(|e| StressError::ModelDownload(format!("{full}: {e}")))?;
+            .map_err(|e| TorchPackageError::new(format!("{full}: {e}")))?;
         Ok(bytes)
     }
 
     /// Parses an entry as a pickle.
-    pub fn pickle(&mut self, name: &str) -> Result<Object, StressError> {
+    pub fn pickle(&mut self, name: &str) -> Result<Object> {
         let bytes = self.entry(name)?;
         let mut stack = Stack::empty();
         let mut reader = std::io::Cursor::new(bytes);
         stack
             .read_loop(&mut reader)
-            .map_err(|e| StressError::ModelDownload(format!("{name}: {e}")))?;
+            .map_err(|e| TorchPackageError::new(format!("{name}: {e}")))?;
         stack
             .finalize()
-            .map_err(|e| StressError::ModelDownload(format!("{name}: {e}")))
+            .map_err(|e| TorchPackageError::new(format!("{name}: {e}")))
     }
 
     /// The TorchScript modules the archive carries, as entry names relative to
@@ -134,10 +152,7 @@ impl Package {
     ///
     /// `I8` storages are widened to f32 as signed bytes; the caller applies the
     /// quantization scale.
-    pub fn values(
-        &mut self,
-        tensor: &StoredTensor,
-    ) -> Result<Vec<f32>, StressError> {
+    pub fn values(&mut self, tensor: &StoredTensor) -> Result<Vec<f32>> {
         let bytes = self.raw(tensor)?;
         Ok(match tensor.element {
             Element::F32 => bytes
@@ -155,16 +170,13 @@ impl Package {
     }
 
     /// Reads a tensor's bytes verbatim — for a storage kept in its stored form.
-    pub fn raw(
-        &mut self,
-        tensor: &StoredTensor,
-    ) -> Result<Vec<u8>, StressError> {
+    pub fn raw(&mut self, tensor: &StoredTensor) -> Result<Vec<u8>> {
         let size = tensor.element.size();
         let start = tensor.offset * size;
-        let wanted = tensor.len() * size;
+        let wanted = tensor.elements() * size;
         let bytes = self.entry(&format!(".data/{}", tensor.storage))?;
         if bytes.len() < start + wanted {
-            return Err(StressError::ModelDownload(format!(
+            return Err(TorchPackageError::new(format!(
                 "{}: holds {} bytes, need {}",
                 tensor.storage,
                 bytes.len(),
@@ -176,8 +188,8 @@ impl Package {
 }
 
 /// The attribute list of a pickled module (`NEWOBJ` + `BUILD` over its
-/// `__dict__`). Plain dictionaries are deliberately **not** modules: the
-/// reference stores its 126 523-entry n-gram table as one, and walking into it
+/// `__dict__`). Plain dictionaries are deliberately **not** modules: a lookup
+/// table with a hundred thousand entries is stored as one, and walking into it
 /// as if it were a submodule would be both wrong and slow.
 fn module_attrs(object: &Object) -> Option<&Vec<(Object, Object)>> {
     match object {
@@ -189,30 +201,31 @@ fn module_attrs(object: &Object) -> Option<&Vec<(Object, Object)>> {
     }
 }
 
-/// Unwraps TorchScript's `restore_type_tag(value, "Dict[str, int]")` wrapper,
-/// which it puts around every typed container it serializes.
+/// Unwraps the constructors TorchScript puts around every typed container it
+/// serializes — `restore_type_tag(value, "Dict[str, int]")` for a container
+/// whose type it records, and `build_intlist(values)` and its siblings for the
+/// ones it builds by element type.
+///
+/// In each of them the payload is the first argument, so one rule covers the
+/// family.
 fn untagged(object: &Object) -> &Object {
     let Object::Reduce { callable, args } = object else {
         return object;
     };
-    let Object::Class {
-        module_name,
-        class_name,
-    } = callable.as_ref()
-    else {
+    let Object::Class { module_name, .. } = callable.as_ref() else {
         return object;
     };
-    if module_name != "torch.jit._pickle" || class_name != "restore_type_tag" {
+    if module_name != "torch.jit._pickle" {
         return object;
     }
     match args.as_ref() {
-        Object::Tuple(args) => args.first().unwrap_or(object),
+        Object::Tuple(args) => args.first().map_or(object, untagged),
         _ => object,
     }
 }
 
 /// Looks a named attribute up in a module or a dictionary.
-pub(super) fn field<'a>(object: &'a Object, name: &str) -> Option<&'a Object> {
+pub fn field<'a>(object: &'a Object, name: &str) -> Option<&'a Object> {
     let items = match untagged(object) {
         Object::Build { args, .. } => match args.as_ref() {
             Object::Dict(items) => items,
@@ -228,17 +241,14 @@ pub(super) fn field<'a>(object: &'a Object, name: &str) -> Option<&'a Object> {
 }
 
 /// Follows a chain of attribute names.
-pub(super) fn path<'a>(
-    object: &'a Object,
-    names: &[&str],
-) -> Option<&'a Object> {
+pub fn path<'a>(object: &'a Object, names: &[&str]) -> Option<&'a Object> {
     names.iter().try_fold(object, |at, name| field(at, name))
 }
 
 /// Every tensor of a pickled module tree, keyed by its dotted attribute path
 /// (`bert.encoder.layer.0.attention.self.query.weight`) — the same names
 /// PyTorch's own `named_parameters` produces.
-pub(super) fn tensors(object: &Object) -> HashMap<String, StoredTensor> {
+pub fn tensors(object: &Object) -> HashMap<String, StoredTensor> {
     let mut out = HashMap::new();
     collect_tensors(object, "", &mut out);
     out
@@ -337,7 +347,7 @@ fn stored_tensor(object: &Object) -> Option<StoredTensor> {
 }
 
 /// Reads a pickled `dict[str, int]`.
-pub(super) fn string_int_map(object: &Object) -> Option<Vec<(String, i64)>> {
+pub fn string_int_map(object: &Object) -> Option<Vec<(String, i64)>> {
     let Object::Dict(items) = untagged(object) else {
         return None;
     };
@@ -357,10 +367,85 @@ pub(super) fn string_int_map(object: &Object) -> Option<Vec<(String, i64)>> {
         .collect()
 }
 
+/// Reads a pickled `dict[str, str]`.
+pub fn string_string_map(object: &Object) -> Option<Vec<(String, String)>> {
+    let Object::Dict(items) = untagged(object) else {
+        return None;
+    };
+    items
+        .iter()
+        .map(|(key, value)| match (key, untagged(value)) {
+            (Object::Unicode(key), Object::Unicode(value)) => {
+                Some((key.clone(), value.clone()))
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+/// A table of tables, as [`nested_string_map`] reads it.
+pub type NestedStringMap = Vec<(String, Vec<(String, String)>)>;
+
+/// Reads a pickled `dict[str, dict[str, str]]` — a table of tables, keyed by
+/// something like a language code.
+pub fn nested_string_map(object: &Object) -> Option<NestedStringMap> {
+    let Object::Dict(items) = untagged(object) else {
+        return None;
+    };
+    items
+        .iter()
+        .map(|(key, value)| {
+            let Object::Unicode(key) = key else {
+                return None;
+            };
+            Some((key.clone(), string_string_map(value)?))
+        })
+        .collect()
+}
+
+/// Reads a pickled `str`.
+pub fn string(object: &Object) -> Option<&str> {
+    match untagged(object) {
+        Object::Unicode(value) => Some(value),
+        _ => None,
+    }
+}
+
+/// The elements of a pickled `list` or `tuple`.
+pub fn list(object: &Object) -> Option<&[Object]> {
+    match untagged(object) {
+        Object::List(items) | Object::Tuple(items) => Some(items),
+        _ => None,
+    }
+}
+
+/// Reads a pickled integer, in either width the format uses.
+pub fn integer(object: &Object) -> Option<i64> {
+    match untagged(object) {
+        Object::Int(value) => Some(i64::from(*value)),
+        Object::Long(value) => Some(*value),
+        _ => None,
+    }
+}
+
+/// Reads a pickled `bool`.
+pub fn boolean(object: &Object) -> Option<bool> {
+    match untagged(object) {
+        Object::Bool(value) => Some(*value),
+        _ => None,
+    }
+}
+
+/// Reads a pickled `float`, accepting an integer where one would do.
+pub fn number(object: &Object) -> Option<f64> {
+    match untagged(object) {
+        Object::Float(value) => Some(*value),
+        other => integer(other).map(|value| value as f64),
+    }
+}
+
 /// Reads a pickled `dict[str, tuple[int, int]]` — the exception table.
-pub(super) fn string_pair_map(
-    object: &Object,
-) -> Option<Vec<(String, i64, i64)>> {
+pub fn string_pair_map(object: &Object) -> Option<Vec<(String, i64, i64)>> {
     let Object::Dict(items) = untagged(object) else {
         return None;
     };
@@ -387,9 +472,7 @@ pub(super) fn string_pair_map(
 }
 
 /// Reads a pickled `dict[str, list[str]]` — the homograph table.
-pub(super) fn string_list_map(
-    object: &Object,
-) -> Option<Vec<(String, Vec<String>)>> {
+pub fn string_list_map(object: &Object) -> Option<Vec<(String, Vec<String>)>> {
     let Object::Dict(items) = untagged(object) else {
         return None;
     };
@@ -416,16 +499,17 @@ pub(super) fn string_list_map(
 
 /// Reads a scalar tensor's single f32 value — the quantization constants are
 /// stored as zero-dimensional tensors.
-pub(super) fn scalar(
+pub fn scalar(
     package: &mut Package,
     tensors: &HashMap<String, StoredTensor>,
     key: &str,
-) -> Result<f32, StressError> {
+) -> Result<f32> {
     let tensor = tensors.get(key).ok_or_else(|| {
-        StressError::ModelDownload(format!("{key}: not in the archive"))
+        TorchPackageError::new(format!("{key}: not in the archive"))
     })?;
     let values = package.values(tensor)?;
-    values.first().copied().ok_or_else(|| {
-        StressError::ModelDownload(format!("{key}: empty scalar"))
-    })
+    values
+        .first()
+        .copied()
+        .ok_or_else(|| TorchPackageError::new(format!("{key}: empty scalar")))
 }

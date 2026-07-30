@@ -34,7 +34,6 @@ pub mod download;
 mod error;
 mod homograph;
 pub mod model;
-mod package;
 pub mod runtime;
 #[cfg(feature = "stress-burn")]
 pub mod runtime_burn;
