@@ -7,9 +7,15 @@
 `trakktor tts` is the counterpart to [`asr`](../asr/README.md): text in, an
 audio file out. Like
 `asr`, it is organized as a set of engines, each picked as a subcommand, and
-runs entirely locally. Two engines, each documented on its own page, and
-choosing between them is choosing how the voice is decided:
+runs entirely locally. Three engines, each documented on its own page:
 
+- [**`silero`**](silero.md) — sixty **preset** voices across **twenty
+  languages**: Russian (29 voices), Bashkir, Belarusian, Ukrainian, Kazakh,
+  Tatar, Tajik, Khakas, Kalmyk, Armenian, Azerbaijani, Chuvash, Erzya,
+  Georgian, Kabardian, Kyrgyz, Moksha, Udmurt, Uzbek, Yakut. No Latin script,
+  so no English. 48 kHz, no randomness anywhere, and fast enough on a CPU that
+  a GPU is an optimization rather than a requirement. Start here for Russian
+  and for the languages of the region.
 - [**`qwen3-tts`**](qwen3-tts.md) — ten languages, nine **preset** voices to
   pick from.
 - [**`espeech`**](espeech.md) — Russian only, and the voice is **cloned** from
@@ -17,6 +23,9 @@ choosing between them is choosing how the voice is decided:
   supply: a few seconds of someone speaking, plus the text they said.
 
 ```bash
+trakktor tts silero "Пример синтеза речи." -o hello.wav
+trakktor tts silero "Д+обрий д+ень, як сьог+одні спр+ави." --voice ukr_igor -o hello.wav
+
 trakktor tts qwen3-tts "Привет! Это синтез речи." --language russian -o hello.wav
 
 # the same text in a voice taken from a recording

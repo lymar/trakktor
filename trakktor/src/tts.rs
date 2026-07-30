@@ -194,7 +194,16 @@ pub(crate) fn run_espeech(
     // Marking comes after the engine's own model is resolved — a bad `--model`
     // should not cost a download first — but before anything that measures the
     // text: the marks are characters, and the piece budget counts its bytes.
-    let marked = stress::mark(args, model_dir, &paragraphs, &ref_text)?;
+    let marked = stress::mark(
+        stress::Where {
+            mode: args.stress,
+            runtime: args.runtime,
+            device: args.device,
+        },
+        model_dir,
+        &paragraphs,
+        &ref_text,
+    )?;
     let (paragraphs, ref_text) = match &marked {
         Some(marked) => (&marked.paragraphs, &marked.ref_text),
         None => (&paragraphs, &ref_text),
@@ -274,6 +283,192 @@ pub(crate) fn run_espeech(
         pretty,
     );
     Ok(())
+}
+
+/// Runs one Silero synthesis end to end: read the text, resolve (and if needed
+/// download and convert) the model, load it, mark the stress, speak the pieces,
+/// write the audio, and print the result.
+pub(crate) fn run_silero(
+    args: &crate::cli::SileroArgs,
+    model_dir: &Path,
+    json: bool,
+    pretty: bool,
+) -> Result<(), CliError> {
+    use trakktor_core::tts::silero;
+
+    // Everything that can fail without touching the network fails first, so a
+    // bad path, a bad extension, or a rate the model does not have does not
+    // cost a download.
+    let target = output_target(&args.output, args.audio_encoder)
+        .map_err(silero_input)?;
+    silero::Synthesizer::check_sample_rate(args.sample_rate)?;
+    silero::Synthesizer::check_reading(args.rate, args.pitch)?;
+    let listing = args.voice.eq_ignore_ascii_case("list");
+    let input = if listing {
+        None
+    } else {
+        Some(
+            read_input(args.text.as_deref(), args.text_file.as_deref())
+                .map_err(silero_input)?,
+        )
+    };
+
+    let resolved = silero::resolve_model(
+        model_dir,
+        &args.model,
+        args.allow_non_commercial_models,
+        &mut crate::asr::progress::download_progress(),
+    )?;
+    let model: Box<dyn silero::SpeechModel> = match args.runtime {
+        RuntimeArg::Candle => Box::new(silero::runtime::load(
+            &resolved.dir,
+            silero::runtime::device(matches!(args.device, DeviceArg::Metal))?,
+        )?),
+        RuntimeArg::Burn => load_silero_burn(&resolved, args.device)?,
+    };
+    let synthesizer = silero::Synthesizer::load(&resolved.dir, model)?;
+
+    // `--voice list` is a question about the model, so it is answered once the
+    // model is there and before anything is spoken.
+    if listing {
+        crate::output::print_voices(
+            &synthesizer.voices(),
+            &resolved.label(),
+            resolved.license(),
+            json,
+            pretty,
+        );
+        return Ok(());
+    }
+    let input = input.expect("a text unless the voices were listed");
+    let paragraphs = text::paragraphs(
+        &input.text,
+        args.text_format
+            .to_core()
+            .resolve(input.source.as_deref(), &input.text),
+    );
+    if paragraphs.is_empty() {
+        return Err(silero::SileroError::TextEmpty.into());
+    }
+    // Marking comes after the engine's own model is resolved — a bad `--model`
+    // should not cost a download first — but before anything that measures the
+    // text: the marks are characters, and the piece budget counts its bytes.
+    // The marker is the Russian accentor, so it runs only for a voice that
+    // reads Russian: the multilingual models spell the language as the prefix
+    // of the voice's name, and the classic voices, which carry none, are all
+    // Russian.
+    let russian_voice = match args.voice.split_once('_') {
+        Some((prefix, _)) => prefix == "ru",
+        None => true,
+    };
+    let marker = if russian_voice {
+        stress::marker(
+            stress::Where {
+                mode: args.stress,
+                runtime: args.runtime,
+                device: args.device,
+            },
+            model_dir,
+        )?
+    } else {
+        None
+    };
+    let marked = marker
+        .as_ref()
+        .map(|marker| stress::mark_paragraphs(marker, &paragraphs))
+        .transpose()?;
+    let paragraphs = marked.as_ref().unwrap_or(&paragraphs);
+
+    let options = silero::SynthesisOptions {
+        voice: args.voice.clone(),
+        sample_rate: args.sample_rate,
+        rate: args.rate,
+        pitch: args.pitch,
+        pause: f64::from(args.pause_ms) / 1000.0,
+        match_levels: matches!(args.levels, LevelsArg::Match),
+    };
+    let mut splitter = split::Splitter::new(
+        model_dir,
+        args.runtime,
+        args.device,
+        Box::new(str::len),
+    );
+
+    let report = progress::Reporter::start(Instant::now());
+    let synthesis = synthesizer.speak_paragraphs(
+        paragraphs,
+        &options,
+        &mut |text, budget| {
+            splitter
+                .split(text, budget)
+                .map_err(silero::SileroError::InvalidModel)
+        },
+        &mut |progress| report.update(progress),
+    )?;
+    report.finish(synthesis.chunks, synthesis.speech.duration());
+
+    write_audio(
+        &args.output,
+        &synthesis.speech,
+        target,
+        args.bitrate.as_deref(),
+    )?;
+
+    crate::output::print_silero_synthesis(
+        &synthesis,
+        &args.output,
+        &format_name(&args.output),
+        &resolved,
+        runtime_name(args.runtime),
+        &options,
+        marked.as_deref(),
+        json,
+        pretty,
+    );
+    Ok(())
+}
+
+/// Re-reports an input failure of the shared helpers in the Silero vocabulary.
+fn silero_input(err: Qwen3TtsError) -> trakktor_core::tts::silero::SileroError {
+    use trakktor_core::tts::silero::SileroError;
+    match err {
+        Qwen3TtsError::TextEmpty => SileroError::TextEmpty,
+        Qwen3TtsError::Io(message) => SileroError::Io(message),
+        other => SileroError::InvalidOptions(other.to_string()),
+    }
+}
+
+/// Loads the Silero model on the burn runtime (builds with the `burn`
+/// feature).
+#[cfg(feature = "burn")]
+fn load_silero_burn(
+    resolved: &trakktor_core::tts::silero::ResolvedModel,
+    device: DeviceArg,
+) -> Result<Box<dyn trakktor_core::tts::silero::SpeechModel>, CliError> {
+    use trakktor_core::tts::silero::runtime_burn;
+    let load = match device {
+        DeviceArg::Cpu => runtime_burn::load_cpu,
+        DeviceArg::Metal => {
+            crate::burn_notice::announce_cold_gpu_start();
+            runtime_burn::load_metal
+        },
+    };
+    Ok(load(&resolved.dir)?)
+}
+
+/// Without the `burn` feature, `--runtime burn` is a validation error.
+#[cfg(not(feature = "burn"))]
+fn load_silero_burn(
+    _resolved: &trakktor_core::tts::silero::ResolvedModel,
+    _device: DeviceArg,
+) -> Result<Box<dyn trakktor_core::tts::silero::SpeechModel>, CliError> {
+    Err(CliError::from(
+        trakktor_core::tts::silero::SileroError::InvalidOptions(
+            "this build has no burn runtime; install or build trakktor with \
+             the `burn` feature"
+                .into(),
+        ),
+    ))
 }
 
 /// Re-reports an input failure of the shared helpers in the ESpeech vocabulary.

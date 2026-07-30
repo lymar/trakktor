@@ -35,7 +35,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use trakktor_core::tts::{espeech, qwen3_tts};
+use trakktor_core::tts::{espeech, qwen3_tts, silero};
 
 use crate::asr::progress::clock;
 
@@ -66,6 +66,8 @@ pub(crate) enum Progress {
     Qwen3(qwen3_tts::SpeechProgress),
     /// A fixed-step run: the length of each piece is known before it starts.
     Espeech(espeech::SpeechProgress),
+    /// A one-pass run: a piece is a single call, so only the pieces move.
+    Silero(silero::SpeechProgress),
 }
 
 impl From<qwen3_tts::SpeechProgress> for Progress {
@@ -80,6 +82,12 @@ impl From<espeech::SpeechProgress> for Progress {
     }
 }
 
+impl From<silero::SpeechProgress> for Progress {
+    fn from(progress: silero::SpeechProgress) -> Self {
+        Progress::Silero(progress)
+    }
+}
+
 impl Progress {
     /// The measure whose advance means the run is alive, and which the speed is
     /// extrapolated from: seconds of audio for one engine, fraction of the work
@@ -88,6 +96,7 @@ impl Progress {
         match self {
             Progress::Qwen3(progress) => progress.audio,
             Progress::Espeech(progress) => Self::fraction(progress) * 100.0,
+            Progress::Silero(progress) => progress.audio,
         }
     }
 
@@ -107,6 +116,13 @@ impl Progress {
                 match progress.stage {
                     espeech::Stage::Solving => 0,
                     espeech::Stage::Vocoding => 1,
+                },
+            ),
+            Progress::Silero(progress) => (
+                progress.chunk,
+                match progress.stage {
+                    silero::Stage::Synthesizing => 0,
+                    silero::Stage::Vocoding => 1,
                 },
             ),
         }
@@ -217,6 +233,30 @@ impl Progress {
                     progress.chunks,
                     progress.step,
                     progress.steps,
+                    done * 100.0,
+                    clock(progress.audio),
+                    clock(elapsed),
+                )
+            },
+            // One call per piece, so there is nothing to report from inside
+            // one: what moves is the count of pieces and the audio they came
+            // to. That is honest, and this engine is fast enough that the line
+            // rarely gets a second tick anyway.
+            Progress::Silero(progress) => {
+                let done = if progress.total_cost == 0 {
+                    0.0
+                } else {
+                    progress.done_cost as f64 / progress.total_cost as f64
+                };
+                let tail = if quiet >= STALL_NOTICE {
+                    format!(" · quiet for {:.0}s", quiet.as_secs_f64())
+                } else {
+                    String::new()
+                };
+                format!(
+                    "speaking {}/{} · {:.0}% · {} audio · {} elapsed{tail}",
+                    progress.chunk,
+                    progress.chunks,
                     done * 100.0,
                     clock(progress.audio),
                     clock(elapsed),

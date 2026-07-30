@@ -44,6 +44,17 @@ Apache-licensed:
   Model weights are downloaded at runtime. Papers:
   [arXiv:2410.06885](https://arxiv.org/abs/2410.06885) (F5-TTS),
   [arXiv:2306.00814](https://arxiv.org/abs/2306.00814) (Vocos).
+- [**`tts silero`**](features/tts/silero.md) — [Silero TTS](https://github.com/snakers4/silero-models)
+  by the Silero Team: the v5 acoustic model — sixty voices across twenty languages of the
+  region — (a FastPitch-family encoder with
+  duration and pitch heads and an hourglass decoder), its character frontend,
+  and the analysis filterbanks its lower sample rates come from, ported to the
+  same candle runtime with the same optional burn runtime; the vocoder is
+  [Vocos](https://github.com/gemelo-ai/vocos) (MIT) again. Models are
+  downloaded at runtime. **Their licence is per model:** `v5_cis_base` and
+  `v5_cis_base_nostress` are MIT, and everything else in that repository is
+  CC BY-NC-SA 4.0 and is reachable only behind
+  `--allow-non-commercial-models`.
 - [**`vad`**](features/vad/README.md), and
   [**`asr --vad`**](features/asr/whisper.md#voice-activity-detection-vad) —
   [Silero-VAD](https://github.com/snakers4/silero-vad)
@@ -60,8 +71,9 @@ Apache-licensed:
   Team: the n-gram accentor with its stress and `ё` heads and the
   `rubert-tiny`-class homograph solver, ported to the same candle runtime with
   the same optional burn runtime. The model is downloaded at runtime. Also used
-  by [`tts espeech`](features/tts/espeech.md), which marks its text with it
-  before speaking.
+  by [`tts espeech`](features/tts/espeech.md) and
+  [`tts silero`](features/tts/silero.md), which mark their text with it before
+  speaking.
 - [**`text punctuate`**](features/text/README.md#text-punctuate--restore-punctuation-and-casing) — the
   [1-800-BAD-CODE multilingual punctuation/true-casing model](https://huggingface.co/1-800-BAD-CODE/xlm-roberta_punctuation_fullstop_truecase)
   (Apache-2.0), an [XLM-RoBERTa](https://huggingface.co/FacebookAI/xlm-roberta-base)

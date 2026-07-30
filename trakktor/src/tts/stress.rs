@@ -1,11 +1,11 @@
 //! Marking the stress before speaking.
 //!
-//! Russian does not write stress, and ESpeech reads it as a real input: without
-//! a mark the model guesses, and it guesses wrong often enough to hear. The
-//! marking itself belongs to `text stress` — a second implementation would only
-//! drift from it — so what lives here is the wiring: the same runtime and
-//! device the synthesis runs on, and a model loaded **lazily**, so `--stress
-//! off` never downloads it.
+//! Russian does not write stress, and both Russian engines read it as a real
+//! input: without a mark the model guesses, and it guesses wrong often enough
+//! to hear. The marking itself belongs to `text stress` — a second
+//! implementation would only drift from it — so what lives here is the wiring:
+//! the same runtime and device the synthesis runs on, and a model loaded
+//! **lazily**, so `--stress off` never downloads it.
 //!
 //! Marks the caller wrote themselves are never moved: that is guaranteed by the
 //! operation, not by this module.
@@ -17,9 +17,17 @@ use trakktor_core::stress::{
 };
 
 use crate::{
-    cli::{DeviceArg, EspeechArgs, RuntimeArg},
+    cli::{DeviceArg, RuntimeArg, StressArg},
     error::CliError,
 };
+
+/// Where a marker should run: the same place the synthesis does.
+#[derive(Clone, Copy)]
+pub(crate) struct Where {
+    pub mode: StressArg,
+    pub runtime: RuntimeArg,
+    pub device: DeviceArg,
+}
 
 /// The text of one synthesis run, marked.
 pub(crate) struct Marked {
@@ -36,15 +44,14 @@ pub(crate) struct Marked {
 /// Returns `None` when `--stress off`, so the caller can tell "not asked for"
 /// from "asked for and produced this".
 pub(crate) fn mark(
-    args: &EspeechArgs,
+    at: Where,
     model_dir: &Path,
     paragraphs: &[String],
     ref_text: &str,
 ) -> Result<Option<Marked>, CliError> {
-    if !matches!(args.stress, crate::cli::StressArg::Auto) {
+    let Some(stressor) = marker(at, model_dir)? else {
         return Ok(None);
-    }
-    let stressor = load(args, model_dir)?;
+    };
     // No user dictionary here: this is the engine's convenience path, and a
     // caller who needs one runs `text stress` and feeds the result back.
     let dictionary = Dictionary::default();
@@ -62,7 +69,16 @@ pub(crate) fn mark(
 }
 
 /// Loads the marker, downloading and converting the model on first use.
-fn load(args: &EspeechArgs, model_dir: &Path) -> Result<Stressor, CliError> {
+///
+/// Returns `None` when marking was not asked for, so a caller can tell "not
+/// asked for" from "asked for and produced this".
+pub(crate) fn marker(
+    at: Where,
+    model_dir: &Path,
+) -> Result<Option<Stressor>, CliError> {
+    if !matches!(at.mode, StressArg::Auto) {
+        return Ok(None);
+    }
     eprintln!("marking the stress; loading the model...");
     let resolved = stress::resolve_model(
         model_dir,
@@ -73,16 +89,37 @@ fn load(args: &EspeechArgs, model_dir: &Path) -> Result<Stressor, CliError> {
     // networks here are small enough that it costs nothing, and every decision
     // they make is a threshold that half precision can flip.
     let precision = stress::Precision::F32;
-    let runtime: Box<dyn StressModel> = match args.runtime {
-        RuntimeArg::Candle => match args.device {
+    let runtime: Box<dyn StressModel> = match at.runtime {
+        RuntimeArg::Candle => match at.device {
             DeviceArg::Cpu => {
                 Box::new(StressRuntime::load_cpu(&resolved.dir, precision)?)
             },
             DeviceArg::Metal => Box::new(load_metal(&resolved.dir, precision)?),
         },
-        RuntimeArg::Burn => load_burn(&resolved.dir, args.device, precision)?,
+        RuntimeArg::Burn => load_burn(&resolved.dir, at.device, precision)?,
     };
-    Ok(Stressor::load(&resolved.dir, runtime)?)
+    Ok(Some(Stressor::load(&resolved.dir, runtime)?))
+}
+
+/// Marks a list of paragraphs with an already-loaded marker.
+///
+/// # Errors
+///
+/// Returns [`CliError`] on a backend failure.
+pub(crate) fn mark_paragraphs(
+    stressor: &Stressor,
+    paragraphs: &[String],
+) -> Result<Vec<String>, CliError> {
+    // No user dictionary here: this is the engine's convenience path, and a
+    // caller who needs one runs `text stress` and feeds the result back.
+    let dictionary = Dictionary::default();
+    let options = StressOptions::default();
+    paragraphs
+        .iter()
+        .map(|paragraph| {
+            Ok(stressor.mark(paragraph, &dictionary, &options)?.text)
+        })
+        .collect()
 }
 
 /// Loads the model on Metal (builds with the `metal` feature).

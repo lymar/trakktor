@@ -12,6 +12,7 @@
 
 pub mod espeech;
 pub mod qwen3_tts;
+pub mod silero;
 pub mod text;
 
 #[cfg(test)]

@@ -21,10 +21,15 @@ Each command is documented in full on its own page under
   Russian), and [`vosk`](docs/features/asr/vosk.md) (Vosk's Zipformer2
   transducers, offline and streaming).
 - [**`tts` — speech synthesis**](docs/features/tts/README.md): text in, an
-  audio file out — plain text or Markdown, any length, fully local. Two
+  audio file out — plain text or Markdown, any length, fully local. Three
   engines — [`qwen3-tts`](docs/features/tts/qwen3-tts.md) (ten languages,
-  nine preset voices) and [`espeech`](docs/features/tts/espeech.md) (Russian,
-  the voice cloned from a recording you supply, stress marked automatically).
+  nine preset voices), [`espeech`](docs/features/tts/espeech.md) (Russian, the
+  voice cloned from a recording you supply, stress marked automatically), and
+  [`silero`](docs/features/tts/silero.md) (sixty preset voices across **twenty
+  languages** — Russian, Ukrainian, Belarusian, Kazakh, Tatar, Bashkir,
+  Georgian, Armenian and a dozen more of the region, though no Latin-script
+  language and so no English — at 48 kHz, and fast enough on a CPU to be the
+  one to use without a GPU).
 - [**`vad` — voice-activity audio editing**](docs/features/vad/README.md):
   find the speech in an audio file and report it, cut the silence out, or
   split the recording into clips.

@@ -27,12 +27,12 @@ const STUB_DESCRIPTION: &str =
      feeds a page declares, read unread entries as JSON, track read state. \
      Speech: transcribe audio with a local Whisper, GigaAM, or Vosk model, or \
      translate it to English; read text or Markdown aloud into an audio file, \
-     in a preset voice or one cloned from a recording. Audio: by \
-     voice-activity detection, report a speech/silence timeline, cut silence, \
-     or split a recording per utterance. Text: restore punctuation and \
-     capitalization in a raw transcript, split a wall of text into \
-     paragraphs, and mark where the stress falls in Russian words for a \
-     speech synthesizer — offline, multilingual. Reach for it whenever a task \
+     Russian included, in a preset voice or one cloned from a recording. \
+     Audio: by voice-activity detection, report a speech/silence timeline, \
+     cut silence, or split a recording per utterance. Text: restore \
+     punctuation and capitalization in a raw transcript, split a wall of text \
+     into paragraphs, and mark where the stress falls in Russian words for a \
+     synthesizer — offline, multilingual. Reach for it whenever a task \
      involves a feed or blog/news URL, polling a site for new posts, turning \
      audio into a transcript or captions, reading an article aloud, cloning a \
      voice, removing dead air, restoring punctuation, grouping text into \

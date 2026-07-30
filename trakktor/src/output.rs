@@ -25,6 +25,10 @@ use trakktor_core::{
             Synthesis as EspeechSynthesis, SynthesisOptions as EspeechOptions,
         },
         qwen3_tts::{Sampling, Synthesis},
+        silero::{
+            ResolvedModel as SileroModel, Synthesis as SileroSynthesis,
+            SynthesisOptions as SileroOptions,
+        },
     },
     vad::{Keep, SpeechSegment},
 };
@@ -834,6 +838,118 @@ pub fn print_espeech_synthesis(
             ""
         }
     );
+}
+
+/// Prints the result of one `tts silero` run.
+///
+/// The envelope is the shared one; the namespaced block carries what only this
+/// engine has — the **licence** of the model that was used, which is the point
+/// at which a caller can still notice it, and the counts that say what the
+/// frontend made of the text.
+#[allow(clippy::too_many_arguments)]
+pub fn print_silero_synthesis(
+    synthesis: &SileroSynthesis,
+    output: &Path,
+    format: &str,
+    model: &SileroModel,
+    runtime: &str,
+    options: &SileroOptions,
+    stressed: Option<&[String]>,
+    json: bool,
+    pretty: bool,
+) {
+    let duration = synthesis.speech.duration();
+    if json {
+        let mut engine_block = Map::new();
+        insert_opt(&mut engine_block, "license", model.license());
+        engine_block.insert("symbols".into(), json!(synthesis.symbols));
+        engine_block.insert("frames".into(), json!(synthesis.frames));
+        insert_f64(&mut engine_block, "rate", f64::from(options.rate));
+        insert_f64(&mut engine_block, "pitch", f64::from(options.pitch));
+        // Silence about what was thrown away would be the wrong kind of quiet:
+        // this frontend removes what it cannot spell, Latin included.
+        if synthesis.dropped > 0 {
+            engine_block
+                .insert("dropped_characters".into(), json!(synthesis.dropped));
+        }
+        if synthesis.skipped > 0 {
+            engine_block
+                .insert("skipped_paragraphs".into(), json!(synthesis.skipped));
+        }
+        if !synthesis.utterances.is_empty() {
+            engine_block
+                .insert("utterances".into(), json!(synthesis.utterances));
+        }
+        // What the model actually read, when the marks are not the caller's:
+        // without this it is impossible to tell a bad reading from a bad mark.
+        if let Some(marked) = stressed {
+            engine_block
+                .insert("stressed_text".into(), json!(marked.join("\n")));
+        }
+
+        let mut object = Map::new();
+        object.insert(
+            "output".into(),
+            Value::String(output.display().to_string()),
+        );
+        object.insert("format".into(), Value::String(format.into()));
+        object
+            .insert("sample_rate".into(), json!(synthesis.speech.sample_rate));
+        insert_f64(&mut object, "duration", duration);
+        object.insert("chunks".into(), json!(synthesis.chunks));
+        object.insert(
+            "voice".into(),
+            json!({
+                "kind": synthesis.voice.kind(),
+                "name": options.voice,
+            }),
+        );
+        object.insert(
+            "engine".into(),
+            json!({
+                "name": "silero",
+                "model": model.label(),
+                "runtime": runtime,
+            }),
+        );
+        object.insert("silero".into(), Value::Object(engine_block));
+        print_json(&Value::Object(object), pretty);
+        return;
+    }
+
+    println!("{}", output.display());
+    println!(
+        "{:.2}s\t{} Hz\t{} frames\t{} chunk{}\tvoice {}\t{} ({})",
+        duration,
+        synthesis.speech.sample_rate,
+        synthesis.frames,
+        synthesis.chunks,
+        if synthesis.chunks == 1 { "" } else { "s" },
+        options.voice,
+        model.label(),
+        model.license().unwrap_or("license unknown"),
+    );
+}
+
+/// Prints the voices a model speaks with (`--voice list`).
+pub fn print_voices(
+    voices: &[&str],
+    model: &str,
+    license: Option<&str>,
+    json: bool,
+    pretty: bool,
+) {
+    if json {
+        let mut object = Map::new();
+        object.insert("model".into(), Value::String(model.into()));
+        insert_opt(&mut object, "license", license);
+        object.insert("voices".into(), json!(voices));
+        print_json(&Value::Object(object), pretty);
+        return;
+    }
+    for voice in voices {
+        println!("{voice}");
+    }
 }
 
 // ---------------------------------------------------------------------------

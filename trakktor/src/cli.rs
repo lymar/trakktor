@@ -272,6 +272,196 @@ pub(crate) enum TtsCommand {
     /// of a model downloads its checkpoint into the model directory
     /// (~/.trakktor by default; see --model-dir), and later runs reuse it.
     Espeech(EspeechArgs),
+
+    /// Synthesize speech with a Silero model, in a preset voice.
+    ///
+    /// Sixty voices across twenty languages in the default model: Russian (29
+    /// of them), Bashkir, Belarusian, Ukrainian, Kazakh, Tatar, Tajik, Khakas,
+    /// Kalmyk, Armenian, Azerbaijani, Chuvash, Erzya, Georgian, Kabardian,
+    /// Kyrgyz, Moksha, Udmurt, Uzbek and Yakut. The language is not a flag but
+    /// the voice: each speaker was trained for one, and the prefix of its name
+    /// is that language's code (see --voice, and `--voice list` to print
+    /// them). Georgian, Armenian and Latin-written Azerbaijani or Uzbek are
+    /// transliterated into the model's own alphabet first. **There is no
+    /// Latin-script language and so no English**: the alphabet is Cyrillic,
+    /// Latin letters are dropped rather than read, and a text with nothing
+    /// else in it is an error — use `tts qwen3-tts` for those. Reads the text
+    /// as an argument, from a file with --text-file, or from standard input
+    /// (--text-file -), and
+    /// writes spoken audio at 48 kHz — the model's own rate, with 24 kHz and 8
+    /// kHz derived from it by its own filterbank (--sample-rate). Text of any
+    /// length works: it is split into paragraphs (plain text or Markdown, see
+    /// --text-format), spoken piece by piece and joined into one file. Nothing
+    /// in this model is sampled, so the same command always produces the same
+    /// file; --rate and --pitch change the reading. Russian stress is written
+    /// with `+` before the stressed vowel (`з+амок` is a lock, `зам+ок` a
+    /// castle) and is a real input to the model, not a hint: by default the
+    /// engine marks the text itself before speaking when the voice is a
+    /// Russian one (see --stress), and a `+` you wrote yourself is never
+    /// moved. The default model is
+    /// published under MIT; two others are not, and need
+    /// --allow-non-commercial-models (see --model). The first use of a model
+    /// downloads it into the model directory (~/.trakktor by default; see
+    /// --model-dir), converts it once, and later runs reuse it.
+    Silero(SileroArgs),
+}
+
+/// Flags of `tts silero`.
+#[derive(Args)]
+// At most one source of text. Unlike the other engines the group is not
+// required: `--voice list` asks about the model rather than speaks, and
+// demanding a text for it would be a riddle. Anything else without a text is
+// still a usage error, raised in clap's own style.
+#[command(group(clap::ArgGroup::new("silero_source").args(["speech", "text_file"])))]
+pub(crate) struct SileroArgs {
+    /// The text to speak. Omit it when reading the text from a file with
+    /// --text-file.
+    // The id must differ from the global `--text` flag, which clap would
+    // otherwise take this for.
+    #[arg(id = "speech", value_name = "text")]
+    pub(crate) text: Option<String>,
+
+    /// Read the text to speak from a UTF-8 file instead of the argument, or
+    /// from standard input with `-`. Text of any length works: it is spoken
+    /// piece by piece and joined into one file (see --text-format and
+    /// --pause-ms).
+    #[arg(long, value_name = "path|-")]
+    pub(crate) text_file: Option<PathBuf>,
+
+    /// How to read the input: where paragraphs end and whether it carries
+    /// markup. `txt` takes one paragraph per line; `md` separates paragraphs
+    /// with blank lines and strips Markdown markup (headings, list and quote
+    /// markers, emphasis, links — the text of a table or a code block is
+    /// kept). `auto` decides by the file extension, then by the text itself,
+    /// and falls back to `md`.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = TextFormatArg::Auto,
+        value_name = "format"
+    )]
+    pub(crate) text_format: TextFormatArg,
+
+    /// Voice to read in, as the model names its speakers — and with it the
+    /// language, since each speaker was trained for exactly one and the prefix
+    /// of the name says which (`ru_` Russian, `ukr_` Ukrainian, `kaz_` Kazakh,
+    /// `kat_` Georgian, and so on). Pass `list` to print the voices of the
+    /// selected model and exit.
+    #[arg(long, default_value = "ru_zhadyra", value_name = "name|list")]
+    pub(crate) voice: String,
+
+    /// Model: a published name, downloaded on first use, or a path to a
+    /// converted model directory. `cis-base` (the default) and
+    /// `cis-base-nostress` are published under MIT; `cis-ext` and `ru-classic`
+    /// — the five long-standing Russian voices — are under CC BY-NC-SA 4.0 and
+    /// need --allow-non-commercial-models. The license of the model that was
+    /// used is reported in the output.
+    #[arg(long, default_value = "cis-base", value_name = "name|dir")]
+    pub(crate) model: String,
+
+    /// Allow the models published under CC BY-NC-SA 4.0 (non-commercial,
+    /// share-alike). Without it, asking for one is an error before anything is
+    /// downloaded. The flag grants no license — it records that the choice was
+    /// deliberate, and makes it reproducible in a script.
+    #[arg(long)]
+    pub(crate) allow_non_commercial_models: bool,
+
+    /// Sample rate of the output. 48000 is what the model synthesizes; the
+    /// lower two are its own filterbank applied to that, not a resampling, so
+    /// they are what the model itself would produce.
+    #[arg(long, default_value_t = 48_000, value_name = "hz")]
+    pub(crate) sample_rate: u32,
+
+    /// Speech rate as a multiplier: below 1 speaks slower, above 1 faster. It
+    /// divides the length the model gave each symbol, so it changes the pacing
+    /// of the reading rather than replaying it at a different speed.
+    #[arg(long, default_value_t = 1.0, value_name = "float")]
+    pub(crate) rate: f32,
+
+    /// Pitch as a multiplier: below 1 lowers the voice, above 1 raises it. The
+    /// shift is scaled by the speaker's own range, so a voice moved this way
+    /// still sounds like itself; useful values sit between 0.75 and 1.25.
+    #[arg(long, default_value_t = 1.0, value_name = "float")]
+    pub(crate) pitch: f32,
+
+    /// Whether to mark the stress in the text before speaking it. This model
+    /// reads `+` before a stressed vowel as a real input — it is a symbol of
+    /// its alphabet — and the published models do not place it themselves, so
+    /// `auto` (the default) marks the text using the same model `text stress`
+    /// uses, downloaded on first use. Marks you wrote yourself are never
+    /// moved. The marker is Russian, so with a voice for another language
+    /// (any name prefix but `ru_`) the text is spoken as written, whatever
+    /// this flag says. `off` speaks the text exactly as given.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = StressArg::Auto,
+        value_name = "mode"
+    )]
+    pub(crate) stress: StressArg,
+
+    /// Silence inserted between paragraphs, in milliseconds. Each paragraph is
+    /// first trimmed of the silence the model leaves at its edges (a few tens
+    /// of milliseconds are kept as breathing room), so the gap is this value
+    /// rather than whatever the model happened to add. Pieces of a single
+    /// split paragraph get half of it.
+    #[arg(long, default_value_t = 500, value_name = "ms")]
+    pub(crate) pause_ms: u32,
+
+    /// What to do with the loudness of each piece. `match` (the default)
+    /// brings the pieces to a common level before joining, `keep` leaves them
+    /// exactly as synthesized.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = LevelsArg::Match,
+        value_name = "what"
+    )]
+    pub(crate) levels: LevelsArg,
+
+    /// Where to write the audio; the extension picks the format. `.wav` and
+    /// `.flac` are written directly, anything ffmpeg knows (mp3, m4a, opus,
+    /// ogg, …) through it — see --audio-encoder.
+    #[arg(long, short, default_value = "speech.wav", value_name = "path")]
+    pub(crate) output: PathBuf,
+
+    /// Encoder for the output file. `auto` (the default) writes wav and flac
+    /// with the built-in pure-Rust encoder and hands any other extension to an
+    /// installed `ffmpeg`; `builtin` refuses anything but wav/flac; `ffmpeg`
+    /// always shells out.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = AudioEncoderArg::Auto,
+        value_name = "encoder"
+    )]
+    pub(crate) audio_encoder: AudioEncoderArg,
+
+    /// Target bitrate for lossy ffmpeg formats, such as `192k` or `320k` (sets
+    /// ffmpeg's `-b:a`). Ignored by the built-in encoder; omit for ffmpeg's
+    /// own default.
+    #[arg(long, value_name = "rate")]
+    pub(crate) bitrate: Option<String>,
+
+    /// Inference runtime executing the model.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = RuntimeArg::Candle,
+        value_name = "runtime"
+    )]
+    pub(crate) runtime: RuntimeArg,
+
+    /// Compute device. This model is small enough that the CPU is the intended
+    /// place to run it rather than a fallback; `metal` needs a build with the
+    /// `metal` feature enabled, and is only available on macOS.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = DeviceArg::Cpu,
+        value_name = "device"
+    )]
+    pub(crate) device: DeviceArg,
 }
 
 /// Flags of `tts espeech`.
@@ -1982,6 +2172,26 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                 global.json(),
                 global.pretty,
             ),
+            TtsCommand::Silero(args) => {
+                if args.text.is_none() &&
+                    args.text_file.is_none() &&
+                    !args.voice.eq_ignore_ascii_case("list")
+                {
+                    Cli::command()
+                        .error(
+                            ErrorKind::MissingRequiredArgument,
+                            "the following required arguments were not \
+                             provided:\n  <text|--text-file <path|->>",
+                        )
+                        .exit();
+                }
+                crate::tts::run_silero(
+                    args,
+                    &global.model_dir()?,
+                    global.json(),
+                    global.pretty,
+                )
+            },
         },
         Command::Vad { command } => match command {
             VadCommand::Timeline(args) => {

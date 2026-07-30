@@ -14,7 +14,9 @@ use trakktor_core::{
     skill::SkillError,
     stress::StressError,
     structify::StructifyError,
-    tts::{espeech::EspeechError, qwen3_tts::Qwen3TtsError},
+    tts::{
+        espeech::EspeechError, qwen3_tts::Qwen3TtsError, silero::SileroError,
+    },
     vad::VadError,
 };
 
@@ -45,6 +47,8 @@ pub enum CliError {
     Qwen3Tts(Qwen3TtsError),
     /// An error from the ESpeech engine.
     Espeech(EspeechError),
+    /// An error from the Silero engine.
+    Silero(SileroError),
 }
 
 impl CliError {
@@ -64,6 +68,7 @@ impl CliError {
             CliError::Stress(err) => stress_code(err),
             CliError::Qwen3Tts(err) => qwen3_tts_code(err),
             CliError::Espeech(err) => espeech_code(err),
+            CliError::Silero(err) => silero_code(err),
         }
     }
 }
@@ -83,6 +88,7 @@ impl std::fmt::Display for CliError {
             CliError::Stress(err) => write!(f, "{err}"),
             CliError::Qwen3Tts(err) => write!(f, "{err}"),
             CliError::Espeech(err) => write!(f, "{err}"),
+            CliError::Silero(err) => write!(f, "{err}"),
         }
     }
 }
@@ -129,6 +135,10 @@ impl From<StressError> for CliError {
 
 impl From<EspeechError> for CliError {
     fn from(err: EspeechError) -> Self { CliError::Espeech(err) }
+}
+
+impl From<SileroError> for CliError {
+    fn from(err: SileroError) -> Self { CliError::Silero(err) }
 }
 
 impl From<Qwen3TtsError> for CliError {
@@ -268,6 +278,21 @@ fn espeech_code(err: &EspeechError) -> &'static str {
         EspeechError::Checkpoint(_) => "model_unavailable",
         EspeechError::InvalidOptions(_) => "invalid_options",
         EspeechError::Io(_) => "io_error",
+    }
+}
+
+/// Maps a [`SileroError`] to its stable `code`.
+fn silero_code(err: &SileroError) -> &'static str {
+    match err {
+        SileroError::TextEmpty => "text_empty",
+        SileroError::TextTooLong { .. } => "text_too_long",
+        SileroError::LicenseRestricted { .. } => "model_license_restricted",
+        SileroError::InvalidModel(_) |
+        SileroError::ModelDownload(_) |
+        SileroError::Checkpoint(_) => "model_unavailable",
+        SileroError::UnknownVoice { .. } => "unsupported_voice",
+        SileroError::InvalidOptions(_) => "invalid_options",
+        SileroError::Io(_) => "io_error",
     }
 }
 
