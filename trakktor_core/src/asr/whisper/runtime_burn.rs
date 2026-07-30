@@ -7,16 +7,17 @@
 //! fusion and autotuning.
 //!
 //! Checkpoints are the same published directories the candle runtime loads
-//! (`config.json` + `model.safetensors`); tensors are read through candle's
-//! safetensors reader and converted through f32 into tensors of the target
-//! backend. The backend choice is erased behind [`BurnRuntime`], so the
-//! transcription pipeline monomorphizes over burn once.
+//! (`config.json` + the safetensors weights, single-file or sharded);
+//! tensors are read through candle's safetensors reader and converted
+//! through f32 into tensors of the target backend. The backend choice is
+//! erased behind [`BurnRuntime`], so the transcription pipeline
+//! monomorphizes over burn once.
 
 pub mod net;
 #[cfg(test)]
 mod tests;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use burn::{
     backend::{
@@ -31,7 +32,7 @@ use super::{
     error::WhisperError,
     feature::MelWindow,
     model::{CrossQk, ForwardProvider, Logits, ModelDims},
-    runtime::{Precision, model_err, parse_config},
+    runtime::{Precision, checkpoint_weights, model_err, parse_config},
     tokenizer::TokenId,
 };
 
@@ -42,12 +43,13 @@ pub(super) struct Weights {
 }
 
 impl Weights {
-    fn open(path: &Path) -> Result<Self, WhisperError> {
-        // Safety: the checkpoint file is mapped read-only and must not be
+    fn open(paths: &[PathBuf]) -> Result<Self, WhisperError> {
+        // Safety: the checkpoint files are mapped read-only and must not be
         // modified while the weights are being read.
-        let inner =
-            unsafe { candle_core::safetensors::MmapedSafetensors::new(path) }
-                .map_err(|e| model_err(&path.display().to_string(), e))?;
+        let inner = unsafe {
+            candle_core::safetensors::MmapedSafetensors::multi(paths)
+        }
+        .map_err(|e| model_err("mapping the checkpoint weights", e))?;
         Ok(Self { inner })
     }
 
@@ -88,8 +90,8 @@ pub struct BurnModel<B: Backend> {
 }
 
 impl<B: Backend> BurnModel<B> {
-    /// Loads a checkpoint directory (`config.json` + `model.safetensors`)
-    /// onto `device`.
+    /// Loads a checkpoint directory (`config.json` + the safetensors
+    /// weights) onto `device`.
     pub fn load(
         model_dir: &Path,
         device: B::Device,
@@ -99,7 +101,7 @@ impl<B: Backend> BurnModel<B> {
             .map_err(|e| model_err(&config_path.display().to_string(), e))?;
         let dims = parse_config(&raw)?;
 
-        let weights = Weights::open(&model_dir.join("model.safetensors"))?;
+        let weights = Weights::open(&checkpoint_weights(model_dir)?)?;
         let encoder = net::AudioEncoder::load(&weights, &dims, &device)?;
         let decoder = net::TextDecoder::load(&weights, &dims, &device)?;
         Ok(Self {

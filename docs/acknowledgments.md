@@ -9,7 +9,12 @@ Apache-licensed:
 - [**`asr whisper`**](features/asr/whisper.md) — [OpenAI Whisper](https://github.com/openai/whisper)
   (MIT), run on [candle](https://github.com/huggingface/candle) (Apache-2.0 OR
   MIT), with an optional alternative runtime on
-  [burn](https://github.com/tracel-ai/burn) (Apache-2.0 OR MIT).
+  [burn](https://github.com/tracel-ai/burn) (Apache-2.0 OR MIT). The
+  `podlodka` and `podlodka-turbo` models are the
+  [Whisper-Podlodka](https://huggingface.co/bond005/whisper-large-v3-ru-podlodka)
+  Russian fine-tunes (Apache-2.0) by
+  [Ivan Bondarenko](https://huggingface.co/bond005), downloaded at runtime;
+  please cite them per their model cards if you use them.
 - [**`asr gigaam`**](features/asr/gigaam.md) — [GigaAM](https://github.com/salute-developers/GigaAM)
   (MIT): Conformer acoustic models (CTC and RNN-T) by the GigaChat team,
   pipeline ported to the same candle runtime, with the same optional burn

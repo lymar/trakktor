@@ -1,16 +1,16 @@
 //! The candle-backed Whisper runtime.
 //!
-//! Loads a checkpoint (a directory holding `config.json` and
-//! `model.safetensors` in the published layout) at a selectable
-//! [`Precision`] and implements [`ForwardProvider`] on top of the vendored
-//! network in [`net`]. Devices: CPU always; Metal and CUDA behind the
-//! corresponding cargo features.
+//! Loads a checkpoint (a directory holding `config.json` and the safetensors
+//! weights — one `model.safetensors`, or shards with their index — in the
+//! published layout) at a selectable [`Precision`] and implements
+//! [`ForwardProvider`] on top of the vendored network in [`net`]. Devices:
+//! CPU always; Metal and CUDA behind the corresponding cargo features.
 
 mod net;
 #[cfg(test)]
 mod tests;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
@@ -75,8 +75,8 @@ pub struct CandleRuntime {
 }
 
 impl CandleRuntime {
-    /// Loads a checkpoint directory (`config.json` + `model.safetensors`)
-    /// onto `device`, converting the weights to `precision`.
+    /// Loads a checkpoint directory (`config.json` + the safetensors
+    /// weights) onto `device`, converting the weights to `precision`.
     ///
     /// # Errors
     ///
@@ -92,14 +92,14 @@ impl CandleRuntime {
             .map_err(|e| model_err(&config_path.display().to_string(), e))?;
         let dims = parse_config(&raw)?;
 
-        let weights = model_dir.join("model.safetensors");
+        let weights = checkpoint_weights(model_dir)?;
         let dtype = precision.dtype();
-        // Safety: the checkpoint file is mapped read-only and must not be
+        // Safety: the checkpoint files are mapped read-only and must not be
         // modified while the runtime is alive.
         let vb = unsafe {
-            VarBuilder::from_mmaped_safetensors(&[&weights], dtype, &device)
+            VarBuilder::from_mmaped_safetensors(&weights, dtype, &device)
         }
-        .map_err(|e| model_err(&weights.display().to_string(), e))?;
+        .map_err(|e| model_err(&model_dir.display().to_string(), e))?;
 
         let encoder = net::AudioEncoder::load(vb.pp("model.encoder"), &dims)
             .map_err(|e| model_err("loading encoder weights", e))?;
@@ -146,6 +146,68 @@ impl CandleRuntime {
             .map_err(|e| model_err("creating the metal device", e))?;
         Self::load(model_dir, device, precision)
     }
+}
+
+/// The weight files of a checkpoint directory: the single
+/// `model.safetensors` when present, otherwise the shards listed by
+/// `model.safetensors.index.json` — the layout larger published checkpoints
+/// ship in.
+///
+/// # Errors
+///
+/// Returns [`WhisperError::InvalidModel`] when neither layout is present,
+/// the index is malformed, or a listed shard is missing.
+pub(super) fn checkpoint_weights(
+    model_dir: &Path,
+) -> Result<Vec<PathBuf>, WhisperError> {
+    let single = model_dir.join("model.safetensors");
+    if single.is_file() {
+        return Ok(vec![single]);
+    }
+
+    let index_path = model_dir.join("model.safetensors.index.json");
+    if !index_path.is_file() {
+        return Err(WhisperError::InvalidModel(format!(
+            "{}: found neither `model.safetensors` nor \
+             `model.safetensors.index.json`",
+            model_dir.display()
+        )));
+    }
+    let raw = std::fs::read_to_string(&index_path)
+        .map_err(|e| model_err(&index_path.display().to_string(), e))?;
+    let index: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| model_err(&index_path.display().to_string(), e))?;
+    let weight_map = index["weight_map"].as_object().ok_or_else(|| {
+        WhisperError::InvalidModel(format!(
+            "{}: missing `weight_map`",
+            index_path.display()
+        ))
+    })?;
+
+    let mut shards: Vec<&str> =
+        weight_map.values().filter_map(|v| v.as_str()).collect();
+    shards.sort_unstable();
+    shards.dedup();
+    if shards.is_empty() {
+        return Err(WhisperError::InvalidModel(format!(
+            "{}: `weight_map` lists no shard files",
+            index_path.display()
+        )));
+    }
+    shards
+        .into_iter()
+        .map(|shard| {
+            let path = model_dir.join(shard);
+            if path.is_file() {
+                Ok(path)
+            } else {
+                Err(WhisperError::InvalidModel(format!(
+                    "{}: shard `{shard}` listed by the index is missing",
+                    model_dir.display()
+                )))
+            }
+        })
+        .collect()
 }
 
 /// Reads the model geometry from the checkpoint's `config.json`.

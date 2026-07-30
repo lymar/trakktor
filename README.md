@@ -13,9 +13,10 @@ Each command is documented in full on its own page under
 - [**`asr` — speech recognition**](docs/features/asr/README.md): transcribe
   (or translate) speech from an audio file, with three engines —
   [`whisper`](docs/features/asr/whisper.md) (many languages, autodetection,
-  translation to English), [`gigaam`](docs/features/asr/gigaam.md) (GigaAM
-  Conformer models, mainly Russian), and [`vosk`](docs/features/asr/vosk.md)
-  (Vosk's Zipformer2 transducers, offline and streaming).
+  translation to English, plus the Podlodka fine-tunes for Russian),
+  [`gigaam`](docs/features/asr/gigaam.md) (GigaAM Conformer models, mainly
+  Russian), and [`vosk`](docs/features/asr/vosk.md) (Vosk's Zipformer2
+  transducers, offline and streaming).
 - [**`tts` — speech synthesis**](docs/features/tts/README.md): text in, an
   audio file out — plain text or Markdown, any length, fully local. Two
   engines — [`qwen3-tts`](docs/features/tts/qwen3-tts.md) (ten languages,

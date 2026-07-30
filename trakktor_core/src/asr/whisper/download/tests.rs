@@ -48,14 +48,51 @@ fn cached_models_resolve_without_downloading() {
 }
 
 #[test]
+fn cached_sharded_models_resolve_without_downloading() {
+    let work_dir = tempfile::tempdir().unwrap();
+    let model_dir =
+        work_dir.path().join("asr").join("whisper").join("podlodka");
+    std::fs::create_dir_all(&model_dir).unwrap();
+    let entry = KNOWN_MODELS
+        .iter()
+        .find(|entry| entry.name == "podlodka")
+        .unwrap();
+    assert!(entry.files.len() > 2, "podlodka ships sharded weights");
+    for file in entry.files {
+        std::fs::write(model_dir.join(file), "x").unwrap();
+    }
+
+    let resolved =
+        resolve_model(work_dir.path(), "podlodka", &mut no_progress()).unwrap();
+    assert_eq!(resolved.dir, model_dir);
+    assert_eq!(resolved.name, Some("podlodka"));
+}
+
+#[test]
 fn aliases_share_the_canonical_repository() {
     let repo_of = |name: &str| {
         KNOWN_MODELS
             .iter()
-            .find(|(known, _)| *known == name)
-            .map(|&(_, repo)| repo)
+            .find(|entry| entry.name == name)
+            .map(|entry| entry.repo)
             .unwrap()
     };
     assert_eq!(repo_of("turbo"), repo_of("large-v3-turbo"));
     assert_eq!(repo_of("large"), repo_of("large-v3"));
+}
+
+#[test]
+fn every_model_downloads_a_config_and_weights() {
+    for entry in KNOWN_MODELS {
+        assert!(
+            entry.files.contains(&"config.json"),
+            "{}: checkpoint must include config.json",
+            entry.name
+        );
+        assert!(
+            entry.files.iter().any(|f| f.ends_with(".safetensors")),
+            "{}: checkpoint must include safetensors weights",
+            entry.name
+        );
+    }
 }

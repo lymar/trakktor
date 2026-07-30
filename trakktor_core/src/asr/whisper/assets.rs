@@ -20,7 +20,8 @@ pub const MULTILINGUAL_TIKTOKEN: &str =
 
 /// Cross-attention heads that track word-level alignment, per published
 /// model, as `(decoder layer, head)` pairs — decoded once from the masks the
-/// reference ships.
+/// reference ships. The podlodka fine-tunes declare theirs in their
+/// checkpoints' generation config: the same heads as their parent models.
 pub const ALIGNMENT_HEADS: &[(&str, &[(usize, usize)])] = &[
     (
         "tiny.en",
@@ -194,6 +195,25 @@ pub const ALIGNMENT_HEADS: &[(&str, &[(usize, usize)])] = &[
     ),
     (
         "turbo",
+        &[(2, 4), (2, 11), (3, 3), (3, 6), (3, 11), (3, 14)],
+    ),
+    (
+        "podlodka",
+        &[
+            (7, 0),
+            (10, 17),
+            (12, 18),
+            (13, 12),
+            (16, 1),
+            (17, 14),
+            (19, 11),
+            (21, 4),
+            (24, 1),
+            (25, 6),
+        ],
+    ),
+    (
+        "podlodka-turbo",
         &[(2, 4), (2, 11), (3, 3), (3, 6), (3, 11), (3, 14)],
     ),
 ];

@@ -27,6 +27,13 @@ Names, smallest to largest (larger is slower but more accurate):
   `large-v3` (alias `large`), `large-v3-turbo` (alias `turbo`).
 - **English-only:** `tiny.en`, `base.en`, `small.en`, `medium.en` — slightly
   better on English audio.
+- **Russian fine-tunes:** `podlodka-turbo` (of `large-v3-turbo`) and
+  `podlodka` (of `large-v3`) — the
+  [Whisper-Podlodka-Turbo](https://huggingface.co/bond005/whisper-podlodka-turbo)
+  and
+  [Whisper-Large-V3-Ru-Podlodka](https://huggingface.co/bond005/whisper-large-v3-ru-podlodka)
+  models by Ivan Bondarenko (Apache-2.0), tuned for Russian speech with
+  punctuation and capitalization and for noise resistance.
 
 ## Language and task
 

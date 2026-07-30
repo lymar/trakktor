@@ -49,6 +49,69 @@ fn config_reports_missing_fields() {
 }
 
 #[test]
+fn single_file_checkpoints_resolve_to_one_weight_file() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("model.safetensors"), "x").unwrap();
+
+    let weights = checkpoint_weights(dir.path()).unwrap();
+    assert_eq!(weights, vec![dir.path().join("model.safetensors")]);
+}
+
+#[test]
+fn sharded_checkpoints_resolve_through_the_index() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("model.safetensors.index.json"),
+        r#"{"weight_map": {
+            "a.weight": "model-00002-of-00002.safetensors",
+            "b.weight": "model-00001-of-00002.safetensors",
+            "c.weight": "model-00001-of-00002.safetensors"
+        }}"#,
+    )
+    .unwrap();
+    for shard in [
+        "model-00001-of-00002.safetensors",
+        "model-00002-of-00002.safetensors",
+    ] {
+        std::fs::write(dir.path().join(shard), "x").unwrap();
+    }
+
+    let weights = checkpoint_weights(dir.path()).unwrap();
+    assert_eq!(
+        weights,
+        vec![
+            dir.path().join("model-00001-of-00002.safetensors"),
+            dir.path().join("model-00002-of-00002.safetensors"),
+        ]
+    );
+}
+
+#[test]
+fn a_missing_shard_fails_with_its_name() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("model.safetensors.index.json"),
+        r#"{"weight_map": {"a.weight": "model-00001-of-00002.safetensors"}}"#,
+    )
+    .unwrap();
+
+    let err = checkpoint_weights(dir.path()).unwrap_err();
+    assert!(matches!(err, WhisperError::InvalidModel(_)));
+    assert!(err.to_string().contains("model-00001-of-00002.safetensors"));
+}
+
+#[test]
+fn a_directory_without_weights_names_both_layouts() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let err = checkpoint_weights(dir.path()).unwrap_err();
+    assert!(matches!(err, WhisperError::InvalidModel(_)));
+    let message = err.to_string();
+    assert!(message.contains("model.safetensors"));
+    assert!(message.contains("model.safetensors.index.json"));
+}
+
+#[test]
 fn sinusoids_start_with_zero_sin_and_unit_cos() {
     let s = net::sinusoids(4, 6, &Device::Cpu).unwrap();
     assert_eq!(s.dims(), [4, 6]);

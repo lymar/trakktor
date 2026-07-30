@@ -34,7 +34,7 @@ pub use audio::{AudioDecoder, FfmpegDecoder, pad_or_trim};
 pub use decoding::{
     DecodeResult, DecodingOptions, PromptInput, decode, detect_language,
 };
-pub use download::{KNOWN_MODELS, ResolvedModel, resolve_model};
+pub use download::{KNOWN_MODELS, KnownModel, ResolvedModel, resolve_model};
 pub use error::WhisperError;
 pub use feature::{Mel, MelBands, MelWindow, log_mel_spectrogram};
 pub use model::{CrossQk, ForwardProvider, Logits, ModelDims, alignment_heads};

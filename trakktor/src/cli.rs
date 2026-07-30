@@ -918,7 +918,9 @@ pub(crate) struct WhisperArgs {
     /// Model: a published name, downloaded on first use, or a path to a
     /// checkpoint directory. Names: tiny, tiny.en, base, base.en, small,
     /// small.en, medium, medium.en, large-v1, large-v2, large-v3, large,
-    /// turbo, large-v3-turbo. Larger models are slower and more accurate.
+    /// turbo, large-v3-turbo, plus podlodka and podlodka-turbo — fine-tunes
+    /// of large-v3 and turbo specialized for Russian. Larger models are
+    /// slower and more accurate.
     #[arg(long, default_value = "tiny", value_name = "name|dir")]
     pub(crate) model: String,
 

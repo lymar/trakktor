@@ -22,6 +22,16 @@ OpenAI Whisper — MIT License
   weights are downloaded from Hugging Face at runtime and are not redistributed
   in this repository.
 
+Whisper-Podlodka models — Apache-2.0 License
+  Copyright (c) Ivan Bondarenko
+  https://huggingface.co/bond005/whisper-podlodka-turbo
+  https://huggingface.co/bond005/whisper-large-v3-ru-podlodka
+  The `asr whisper` models `podlodka-turbo` and `podlodka` are these Russian
+  fine-tunes of Whisper large-v3-turbo and large-v3. Their word-alignment
+  head tables (trakktor_core/src/asr/whisper/assets.rs) are taken from the
+  checkpoints' generation configs. Model weights are downloaded from Hugging
+  Face at runtime and are not redistributed in this repository.
+
 GigaAM — MIT License
   Copyright (c) 2024 GigaChat Team
   https://github.com/salute-developers/GigaAM
