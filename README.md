@@ -1,9 +1,12 @@
 # trakktor
 
 `trakktor` is a predictable, automation-friendly Rust CLI toolbox for coding
-agents (Claude Code, OpenCode, etc.): speech-to-text and text-to-speech,
-voice-activity audio editing, feeds, text structuring, and more —
-machine-readable output, stable flags, and meaningful exit codes.
+agents such as Claude Code and OpenCode (humans are welcome to use it too):
+speech-to-text and text-to-speech, voice-activity audio editing, feeds, text
+structuring, and more — machine-readable output, stable flags, and meaningful
+exit codes. No Python, no virtual environments, no drawn-out setup: a single
+binary that takes care of everything itself, downloading and caching the
+models it needs on first use.
 
 ## Commands
 
