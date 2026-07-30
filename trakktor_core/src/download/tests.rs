@@ -400,6 +400,56 @@ fn retries_a_server_error() {
 }
 
 #[test]
+fn keeps_going_while_the_drops_keep_delivering() {
+    // A server that hangs up 300 bytes into every response: ten drops to get
+    // through the file, twice what a fixed budget of attempts would have
+    // allowed. Each of them still brings the end closer, which is the whole
+    // difference between a flaky link and a source that is gone.
+    let content = body(3000);
+    let server = Server::always(content.clone(), Reply::Serve(Some(300)));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("model.bin");
+
+    Download::new(&server.url(), &target)
+        .fetch(&mut quiet())
+        .expect("fetch");
+
+    assert_eq!(fs::read(&target).expect("read"), content);
+    // The one-byte request that asks how long the file is, then one attempt per
+    // drop, each picking up where the last was cut off.
+    let mut wanted = vec!["bytes=0-0".to_owned()];
+    wanted.extend((0..10).map(|drop| format!("bytes={}-2999", drop * 300)));
+    assert!(
+        wanted.len() - 1 > MAX_FRUITLESS_ATTEMPTS,
+        "a test that stayed inside the budget would prove nothing"
+    );
+    assert_eq!(server.ranges(), wanted);
+}
+
+#[test]
+fn gives_up_when_the_attempts_bring_nothing() {
+    // Headers and then silence, every time: the budget is for exactly this, and
+    // a replenishable one must still run out when there is nothing to replenish
+    // it with.
+    let server = Server::always(body(3000), Reply::Serve(Some(0)));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("model.bin");
+
+    let error = Download::new(&server.url(), &target)
+        .fetch(&mut quiet())
+        .expect_err("nothing ever arrives");
+
+    assert!(matches!(error, DownloadError::Transfer { .. }), "{error}");
+    assert_eq!(
+        server.seen().len(),
+        MAX_FRUITLESS_ATTEMPTS + 1,
+        "five attempts that get nowhere, plus the one that asked how long the \
+         file is"
+    );
+    assert!(!target.exists(), "nothing was downloaded");
+}
+
+#[test]
 fn does_not_retry_a_missing_file() {
     let server = Server::always(body(3000), Reply::Status(404));
     let dir = tempfile::tempdir().expect("tempdir");
@@ -504,6 +554,77 @@ fn splits_only_into_slices_worth_their_own_connection() {
     let unknown = split(None);
     assert_eq!(unknown.len(), 1);
     assert_eq!(unknown[0].end, None);
+}
+
+#[test]
+fn progress_hands_the_budget_back() {
+    let mut budget = Budget::new();
+    for attempt in 1..MAX_FRUITLESS_ATTEMPTS {
+        assert!(
+            budget.spend(false).is_some(),
+            "attempt {attempt} of {MAX_FRUITLESS_ATTEMPTS} is not the last one"
+        );
+    }
+    assert!(
+        budget.spend(false).is_none(),
+        "attempts that get nowhere still run out"
+    );
+
+    // …but only while they follow one another. An attempt that delivered starts
+    // the count — and the waiting — over, however many drops came before it.
+    let mut budget = Budget::new();
+    for _ in 0..3 * MAX_FRUITLESS_ATTEMPTS {
+        assert!(budget.spend(false).is_some());
+        assert_eq!(
+            budget.spend(true),
+            Some(FIRST_BACKOFF),
+            "progress hands back the pause as well as the count"
+        );
+    }
+}
+
+#[test]
+fn the_pause_grows_while_nothing_arrives() {
+    let mut budget = Budget::new();
+    assert_eq!(budget.spend(false), Some(FIRST_BACKOFF));
+    assert_eq!(budget.spend(false), Some(FIRST_BACKOFF * 2));
+    assert_eq!(budget.spend(false), Some(FIRST_BACKOFF * 4));
+}
+
+#[test]
+fn a_trickle_is_not_progress_but_the_last_kilobyte_is() {
+    // A plan of `total` bytes that had `before` of them when the attempt
+    // started and `gained` more when it failed.
+    let advanced = |total: Option<u64>, before: u64, gained: u64| {
+        let plan = Plan {
+            url: "https://example.invalid/model.bin".to_owned(),
+            total,
+            etag: None,
+            slices: vec![Slice::new(0, total)],
+        };
+        plan.slices[0]
+            .done
+            .store(before + gained, Ordering::Relaxed);
+        plan.advanced(before)
+    };
+
+    let big = 1 << 30;
+    assert!(
+        !advanced(Some(big), 0, 0),
+        "an attempt that brought nothing"
+    );
+    assert!(advanced(Some(big), 0, PROGRESS_BYTES), "a megabyte of it");
+    assert!(!advanced(Some(big), 0, 64 << 10), "a trickle of it");
+
+    // Near the end there can be less left to fetch than the bar itself, so the
+    // bar comes down with the remainder: a kilobyte of the last ten counts,
+    // while nothing still does not.
+    assert!(advanced(Some(big), big - (10 << 10), 1 << 10));
+    assert!(!advanced(Some(big), big - (10 << 10), 0));
+
+    // A length the server would not state leaves only the flat bar.
+    assert!(!advanced(None, 0, 64 << 10));
+    assert!(advanced(None, 0, PROGRESS_BYTES));
 }
 
 #[test]

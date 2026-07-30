@@ -23,7 +23,11 @@
 //! **A hiccup is not a failure.** A dropped connection, a stalled transfer, a
 //! 5xx or a 429 is retried with exponential backoff, each attempt continuing
 //! from what already arrived. A 404 or a digest mismatch on a fresh download is
-//! not retried — repeating those only fails the same way.
+//! not retried — repeating those only fails the same way. What the retries are
+//! rationed by is attempts that get *nowhere*: an attempt that brought a real
+//! piece of the file in hands the budget back, so a checkpoint crossing a link
+//! that drops every half hour arrives instead of running out of tries while
+//! plainly working.
 //!
 //! **A big file is fetched over several connections.** See below; this is the
 //! one property that was measured before it was believed.
@@ -100,11 +104,40 @@ const MIN_SLICE_BYTES: u64 = 16 << 20;
 #[cfg(test)]
 const MIN_SLICE_BYTES: u64 = 4 << 10;
 
-/// Attempts made on one file before giving up.
-const MAX_ATTEMPTS: usize = 5;
+/// How many attempts in a row may get nowhere before the download gives up.
+///
+/// The budget counts attempts that bring nothing, not attempts: a
+/// multi-gigabyte checkpoint over a link that drops every half hour needs a
+/// dozen resumes to arrive, and each of them delivers hundreds of megabytes.
+/// Spending the budget on those would fail a download that is plainly working,
+/// while a source that is genuinely gone still runs out of tries just as fast.
+const MAX_FRUITLESS_ATTEMPTS: usize = 5;
 
-/// The pause after the first failed attempt; it doubles up to [`MAX_BACKOFF`].
+/// How much an attempt has to bring in to count as getting somewhere and hand
+/// the budget back.
+///
+/// A megabyte is far more than a source that is stuck manages and far less than
+/// a flaky link delivers between drops, so the two separate without having to
+/// know anything about the link.
+const PROGRESS_BYTES: u64 = 1 << 20;
+
+/// The share of what is still missing that counts as getting somewhere too, one
+/// part in this many.
+///
+/// It is what carries the rule into the tail of a file, where there can be less
+/// left to fetch than [`PROGRESS_BYTES`] altogether and a bar that did not come
+/// down with the remainder would call the last stretch a standstill.
+const PROGRESS_SHARE: u64 = 100;
+
+/// The pause after the first failed attempt; it doubles up to [`MAX_BACKOFF`]
+/// and starts over whenever an attempt gets somewhere.
+///
+/// Tests shrink it: what they check is which attempts happen, not how long the
+/// waiting between them lasts.
+#[cfg(not(test))]
 const FIRST_BACKOFF: Duration = Duration::from_secs(1);
+#[cfg(test)]
+const FIRST_BACKOFF: Duration = Duration::from_millis(1);
 
 /// The longest pause between attempts.
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
@@ -261,7 +294,8 @@ impl<'a> Download<'a> {
     }
 
     /// Fetches the file: continuing a partial from an earlier run, retrying
-    /// what is worth retrying, and moving the result onto its final name only
+    /// what is worth retrying — for as long as the retries keep bringing the
+    /// file closer to done — and moving the result onto its final name only
     /// once it is whole.
     ///
     /// A target that already exists is **not** checked — deciding that a model
@@ -271,8 +305,8 @@ impl<'a> Download<'a> {
     /// # Errors
     ///
     /// Returns [`DownloadError`] when the file could not be fetched: the server
-    /// refused the request, the transfer kept failing, the digest did not
-    /// match, or a local write failed.
+    /// refused the request, attempt after attempt brought nothing, the digest
+    /// did not match, or a local write failed.
     pub fn fetch(self, progress: Progress<'_>) -> Result<(), DownloadError> {
         let label = self.label.unwrap_or_else(|| {
             self.target
@@ -284,22 +318,21 @@ impl<'a> Download<'a> {
             create_dir(parent)?;
         }
 
-        let mut backoff = FIRST_BACKOFF;
-        for attempt in 1..=MAX_ATTEMPTS {
+        let mut budget = Budget::new();
+        loop {
             match self.attempt(label, &mut *progress) {
                 Ok(()) => return Ok(()),
-                Err(failure) => {
-                    if attempt == MAX_ATTEMPTS ||
-                        matches!(failure.fault, Fault::Permanent)
-                    {
-                        return Err(failure.error);
+                Err(setback) => {
+                    if matches!(setback.failure.fault, Fault::Permanent) {
+                        return Err(setback.failure.error);
                     }
-                    thread::sleep(backoff);
-                    backoff = (backoff * 2).min(MAX_BACKOFF);
+                    let Some(pause) = budget.spend(setback.progressed) else {
+                        return Err(setback.failure.error);
+                    };
+                    thread::sleep(pause);
                 },
             }
         }
-        unreachable!("the last attempt returns")
     }
 
     /// One attempt: work out what is still missing, fetch it, verify the
@@ -308,7 +341,7 @@ impl<'a> Download<'a> {
         &self,
         label: &str,
         progress: Progress<'_>,
-    ) -> Result<(), Failure> {
+    ) -> Result<(), Setback> {
         let partial = partial_path(self.target);
         let state = state_path(self.target);
 
@@ -324,16 +357,24 @@ impl<'a> Download<'a> {
                 self.plan()?
             },
         };
-        let fresh = plan.untouched();
+        // What is already on disk: the mark this attempt's own progress is
+        // measured against.
+        let before = plan.done();
         plan.write(&state);
 
         let outcome = self.run(&plan, &partial, &state, label, progress);
         plan.write(&state);
         if let Some(failure) = outcome {
+            // A restart throws away everything that arrived, so however much
+            // that was, the file is no closer to done than it was.
             if matches!(failure.fault, Fault::Restart) {
                 discard(&partial, &state);
+                return Err(failure.into());
             }
-            return Err(failure);
+            return Err(Setback {
+                progressed: plan.advanced(before),
+                failure,
+            });
         }
 
         // Every connection reported it was done, so a length that still
@@ -342,11 +383,13 @@ impl<'a> Download<'a> {
             let size = partial.metadata().map(|meta| meta.len()).unwrap_or(0);
             if size != total {
                 discard(&partial, &state);
-                return Err(self.fault(
-                    Fault::Restart,
-                    "reading",
-                    &format!("got {size} bytes of {total}; starting over"),
-                ));
+                return Err(self
+                    .fault(
+                        Fault::Restart,
+                        "reading",
+                        &format!("got {size} bytes of {total}; starting over"),
+                    )
+                    .into());
             }
         }
 
@@ -355,17 +398,18 @@ impl<'a> Download<'a> {
         {
             discard(&partial, &state);
             // Bytes carried over from an earlier run can be stale, and starting
-            // over fixes that. A download that was fresh to begin with and
-            // still does not match means the source or the transfer is broken,
-            // and repeating it would only fail the same way.
+            // over fixes that. When there were none to carry over, the source
+            // or the transfer is broken instead, and repeating would only fail
+            // the same way.
             return Err(Failure {
-                fault: if fresh {
+                fault: if before == 0 {
                     Fault::Permanent
                 } else {
                     Fault::Transient
                 },
                 error,
-            });
+            }
+            .into());
         }
 
         let _ = fs::remove_file(&state);
@@ -673,6 +717,63 @@ struct Failure {
     error: DownloadError,
 }
 
+/// A failed attempt, and whether the file is any closer to done for it.
+///
+/// The two answer different questions: the failure says whether trying again
+/// can help at all, the progress says whether trying again is free.
+struct Setback {
+    failure: Failure,
+    progressed: bool,
+}
+
+impl From<Failure> for Setback {
+    /// A failure with nothing to say about progress made none: it never got as
+    /// far as the body, or what it did bring in has just been thrown away.
+    fn from(failure: Failure) -> Self {
+        Self {
+            failure,
+            progressed: false,
+        }
+    }
+}
+
+/// What is left of a download's patience: how many attempts in a row have
+/// brought nothing, and how long to wait before the next one.
+///
+/// Progress hands both back, so the download is given up on only when attempt
+/// after attempt gets nowhere — a source that is gone rather than a link that
+/// keeps dropping.
+struct Budget {
+    fruitless: usize,
+    backoff: Duration,
+}
+
+impl Budget {
+    /// A full budget.
+    fn new() -> Self {
+        Self {
+            fruitless: 0,
+            backoff: FIRST_BACKOFF,
+        }
+    }
+
+    /// Books a failed attempt and says how long to wait before the next one, or
+    /// `None` when there is nothing left to try with.
+    fn spend(&mut self, progressed: bool) -> Option<Duration> {
+        if progressed {
+            *self = Self::new();
+        } else {
+            self.fruitless += 1;
+            if self.fruitless >= MAX_FRUITLESS_ATTEMPTS {
+                return None;
+            }
+        }
+        let pause = self.backoff;
+        self.backoff = (self.backoff * 2).min(MAX_BACKOFF);
+        Some(pause)
+    }
+}
+
 /// A local filesystem failure: never worth retrying, since nothing about the
 /// next attempt would be different.
 fn local(path: &Path, action: &'static str, error: &std::io::Error) -> Failure {
@@ -884,8 +985,15 @@ impl Plan {
             .sum()
     }
 
-    /// Whether nothing has been fetched under this plan yet.
-    fn untouched(&self) -> bool { self.done() == 0 }
+    /// Whether enough of the file has arrived since `before` for the attempt
+    /// that brought it to count as getting somewhere rather than being stuck.
+    fn advanced(&self, before: u64) -> bool {
+        let gained = self.done().saturating_sub(before);
+        let bar = self.total.map_or(PROGRESS_BYTES, |total| {
+            PROGRESS_BYTES.min(total.saturating_sub(before) / PROGRESS_SHARE)
+        });
+        gained > 0 && gained >= bar
+    }
 }
 
 /// Parses a `start,end,done` slice line; `-` is an unknown end.
