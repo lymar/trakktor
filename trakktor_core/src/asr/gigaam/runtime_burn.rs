@@ -16,7 +16,7 @@ pub mod net;
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use burn::{
     backend::{
@@ -29,12 +29,11 @@ use net::{ConformerEncoder, CtcHead};
 
 use super::{
     config::{ModelClass, ModelConfig},
-    decode,
     error::GigaamError,
     feature::{FeatureExtractor, Mel},
     rnnt::RnntHead,
     runtime::{
-        AsrModel, Emissions, FB_KEY, Precision, WINDOW_KEY, load_state_dict,
+        AsrModel, EncodedChunk, FB_KEY, Precision, WINDOW_KEY, load_state_dict,
         model_err, tensor_to_f32_parts,
     },
 };
@@ -43,7 +42,7 @@ use super::{
 /// RNN-T head always runs on the CPU (see [`rnnt`](super::rnnt)).
 enum Head<B: Backend> {
     Ctc(CtcHead<B>),
-    Rnnt(RnntHead),
+    Rnnt(Arc<RnntHead>),
 }
 
 /// A loaded GigaAM model on a burn backend: feature extractor, Conformer
@@ -87,12 +86,12 @@ impl<B: Backend> GigaamBurnModel<B> {
                 let rnnt_cfg = config.rnnt.as_ref().ok_or_else(|| {
                     model_err("config", "rnnt model without rnnt geometry")
                 })?;
-                Head::Rnnt(RnntHead::load(
+                Head::Rnnt(Arc::new(RnntHead::load(
                     &map,
                     config.encoder.d_model,
                     config.num_classes,
                     rnnt_cfg,
-                )?)
+                )?))
             },
         };
         Ok(Self {
@@ -140,7 +139,7 @@ impl<B: Backend> GigaamBurnModel<B> {
 impl<B: Backend> AsrModel for GigaamBurnModel<B> {
     fn feature(&self) -> &FeatureExtractor { &self.feature }
 
-    fn emissions(&self, mel: &Mel) -> Result<Emissions, GigaamError> {
+    fn encode_chunk(&self, mel: &Mel) -> Result<EncodedChunk, GigaamError> {
         let encoded = self.encoder.forward(self.mel_input(mel)); // [1, T', D]
         match &self.head {
             Head::Ctc(ctc_head) => {
@@ -153,13 +152,7 @@ impl<B: Backend> AsrModel for GigaamBurnModel<B> {
                     .map_err(|e| {
                         model_err("argmax readback", format!("{e:?}"))
                     })?;
-                let (token_ids, token_frames) =
-                    decode::ctc_greedy(&labels, labels.len(), self.blank_id);
-                Ok(Emissions {
-                    token_ids,
-                    token_frames,
-                    enc_frames: labels.len(),
-                })
+                Ok(EncodedChunk::ctc(labels, self.blank_id))
             },
             Head::Rnnt(rnnt_head) => {
                 let [_, enc_frames, _] = encoded.dims();
@@ -170,13 +163,7 @@ impl<B: Backend> AsrModel for GigaamBurnModel<B> {
                     .map_err(|e| {
                         model_err("encoder read-back", format!("{e:?}"))
                     })?;
-                let (token_ids, token_frames) =
-                    rnnt_head.greedy(&flat, enc_frames);
-                Ok(Emissions {
-                    token_ids,
-                    token_frames,
-                    enc_frames,
-                })
+                Ok(EncodedChunk::rnnt(Arc::clone(rnnt_head), flat, enc_frames))
             },
         }
     }

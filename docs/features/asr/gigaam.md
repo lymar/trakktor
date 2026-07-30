@@ -34,9 +34,11 @@ pass a path to a local `.ckpt`):
   capitalization** (end-to-end model with text normalization — numbers as
   digits, sentence casing), decoded by an RNN-T (transducer) head. The more
   accurate of the two punctuated models.
-- **`v3_e2e_ctc`** — the same punctuated output from a CTC decoder: faster,
-  and it ends sentences more often, at some cost in word accuracy. Worth the
-  swap when throughput or sentence structure matters more than wording.
+- **`v3_e2e_ctc`** — the same punctuated output from a CTC decoder: it ends
+  sentences more often, at some cost in word accuracy. On a GPU the two run
+  equally fast (the transducer's decode loop rides behind the next chunk's
+  encode); on CPU-only runs this is the lighter choice. Worth the swap when
+  sentence structure matters more than wording.
 - **`v3_ctc`** — Russian; normalized lowercase text without punctuation.
 - **`v3_rnnt`** — Russian; like `v3_ctc` but with an RNN-T (transducer)
   decoder — usually the most accurate raw text on Russian, slightly slower.

@@ -691,12 +691,13 @@ pub(crate) struct GigaamArgs {
     /// Model: a published name, downloaded on first use, or a path to a
     /// checkpoint `.ckpt` file. Names: v3_e2e_rnnt (the default — punctuated,
     /// capitalized Russian; the more accurate of the two punctuated models),
-    /// v3_e2e_ctc (the same punctuated output from a CTC decoder: faster,
-    /// and it ends sentences more often, at some cost in word accuracy),
-    /// v3_ctc (Russian, lowercase, no punctuation), v3_rnnt (like v3_ctc but
-    /// with a transducer decoder — usually the most accurate raw text on
-    /// Russian), multilingual_ctc, multilingual_large_ctc (the largest
-    /// multilingual). Larger models are slower.
+    /// v3_e2e_ctc (the same punctuated output from a CTC decoder: it ends
+    /// sentences more often, at some cost in word accuracy, and is the
+    /// lighter choice for CPU-only runs), v3_ctc (Russian, lowercase, no
+    /// punctuation), v3_rnnt (like v3_ctc but with a transducer decoder —
+    /// usually the most accurate raw text on Russian), multilingual_ctc,
+    /// multilingual_large_ctc (the largest multilingual). Larger models are
+    /// slower.
     #[arg(long, default_value = "v3_e2e_rnnt", value_name = "name|file")]
     pub(crate) model: String,
 

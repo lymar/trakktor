@@ -18,6 +18,16 @@
 //!   extra PCM behind the pending speech, and remembers the last committed
 //!   window's edge to keep the next one from overlapping it.
 //!
+//! A committed chunk is transcribed in two overlapped halves: the device
+//! half (features, encoder, the one read-back) runs inline, and the pure-CPU
+//! token decode — where the RNN-T head spends its sequential loop — runs on a
+//! worker thread while the device already encodes the next chunk. One chunk
+//! is in flight at a time; its segment is recorded when the next chunk's
+//! device half is done (or at the end of the stream), so segments stay in
+//! order. Every chunk goes through the same computation as an inline decode —
+//! only the moment of computation moves — so the transcription is
+//! bit-identical to the unpipelined one.
+//!
 //! Commits are triggered by the speech/window timeline, never by block
 //! boundaries, so feeding the same audio in different block sizes yields an
 //! identical transcription.
@@ -37,11 +47,11 @@ use super::{
     constants::{LONGFORM_THRESHOLD_S, SAMPLE_RATE},
     decode::Word,
     error::GigaamError,
-    runtime::AsrModel,
+    runtime::{AsrModel, Emissions},
     tokenizer::Tokenizer,
     transcribe::{
         Segment, TranscribeOptions, TranscribeProgress, Transcription,
-        transcribe_chunk,
+        chunk_result,
     },
 };
 pub use crate::asr::segment::{COMMIT_HORIZON_S, COMMIT_MARGIN_S};
@@ -52,6 +62,19 @@ use crate::vad::{
 /// Extra samples kept behind the earliest needed position when shedding PCM,
 /// absorbing the window quantization of the VAD grid.
 const SHED_GUARD_SAMPLES: usize = 512;
+
+/// A committed chunk whose device half is done and whose pure-CPU token
+/// decode is running on a worker thread — the pipelining that hides the
+/// transducer head's cost behind the next chunk's encode.
+struct InFlight {
+    chunk: Chunk,
+    /// Absolute sample the chunk's audio window started at — the origin that
+    /// puts its word times onto the recording's timeline.
+    origin_sample: usize,
+    /// The window's PCM length in samples — the words' frame→time scale.
+    samples: usize,
+    decode: std::thread::JoinHandle<Emissions>,
+}
 
 /// A streamed transcription session. Feed PCM with
 /// [`push`](Self::push), then call [`finish`](Self::finish) once.
@@ -76,6 +99,8 @@ pub struct StreamTranscriber<'m> {
     /// Time spans of the words the previous chunk kept — what the seam
     /// reconciliation of the next chunk tests against.
     prev_kept: Vec<(f64, f64)>,
+    /// The chunk whose decode is riding behind the current encode, if any.
+    in_flight: Option<InFlight>,
     segments: Vec<Segment>,
     texts: Vec<String>,
 }
@@ -110,6 +135,7 @@ impl<'m> StreamTranscriber<'m> {
             texts: Vec::new(),
             windows: 0,
             prev_kept: Vec::new(),
+            in_flight: None,
         })
     }
 
@@ -188,6 +214,11 @@ impl<'m> StreamTranscriber<'m> {
             }
         }
 
+        // Drain the pipeline: the last chunk has no successor to ride behind.
+        if let Some(last) = self.in_flight.take() {
+            self.record_segment(last, progress);
+        }
+
         Ok(Transcription {
             text: self.texts.join(" "),
             segments: self.segments,
@@ -231,10 +262,10 @@ impl<'m> StreamTranscriber<'m> {
         Ok(())
     }
 
-    /// Transcribes one committed chunk from the retained buffer and records the
-    /// segment. The model sees the chunk's audio *window*; the segment reports
-    /// the speech span, and word times — local to the window — are shifted onto
-    /// the original timeline by `window_start`.
+    /// Transcribes one committed chunk from the retained buffer: runs the
+    /// device half inline, hands the pure-CPU decode to a worker thread, and
+    /// records the segment of the *previous* in-flight chunk, whose decode
+    /// overlapped this chunk's encode.
     fn transcribe_committed(
         &mut self,
         chunk: Chunk,
@@ -252,12 +283,41 @@ impl<'m> StreamTranscriber<'m> {
             chunk.window_start
         );
         let pcm = &self.buf[a - self.base..b - self.base];
-        let result = transcribe_chunk(self.model, self.tokenizer, pcm)?;
-        let origin = a as f64 / sr;
+        let samples = pcm.len();
+        let mel = self.model.feature().log_mel(pcm);
+        let encoded = self.model.encode_chunk(&mel)?;
+        let previous = self.in_flight.replace(InFlight {
+            chunk,
+            origin_sample: a,
+            samples,
+            decode: std::thread::spawn(move || encoded.decode()),
+        });
+        if let Some(previous) = previous {
+            self.record_segment(previous, progress);
+        }
+        Ok(())
+    }
+
+    /// Joins an in-flight chunk's decode and records its segment. The model
+    /// saw the chunk's audio *window*; the segment reports the speech span,
+    /// and word times — local to the window — are shifted onto the original
+    /// timeline by the window's start.
+    fn record_segment(
+        &mut self,
+        done: InFlight,
+        progress: &mut dyn FnMut(TranscribeProgress),
+    ) {
+        let emitted = match done.decode.join() {
+            Ok(emitted) => emitted,
+            // A worker panic is a head bug; surface it as our own panic.
+            Err(panic) => std::panic::resume_unwind(panic),
+        };
+        let result = chunk_result(self.tokenizer, &emitted, done.samples);
+        let origin = done.origin_sample as f64 / SAMPLE_RATE as f64;
         let (text, words) = own_words(
             result.words,
             origin,
-            &chunk,
+            &done.chunk,
             &self.prev_kept,
             result.text,
         );
@@ -267,8 +327,8 @@ impl<'m> StreamTranscriber<'m> {
         }
         self.segments.push(Segment {
             id: self.segments.len(),
-            start: chunk.start,
-            end: chunk.end,
+            start: done.chunk.start,
+            end: done.chunk.end,
             text,
             words: if self.options.word_timestamps {
                 words
@@ -277,10 +337,9 @@ impl<'m> StreamTranscriber<'m> {
             },
         });
         progress(TranscribeProgress {
-            processed_seconds: chunk.end,
+            processed_seconds: done.chunk.end,
             total_seconds: self.total_hint,
         });
-        Ok(())
     }
 
     /// Drops PCM that no present or future chunk can need. Nothing is shed

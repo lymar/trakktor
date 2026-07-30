@@ -13,7 +13,10 @@
 //! synchronization (the CTC path reads back per-frame argmax labels, the
 //! RNN-T path reads back the encoder output for the CPU-side transducer loop
 //! in [`rnnt`](super::rnnt)), and the token emission logic is shared across
-//! runtimes.
+//! runtimes. The seam splits there: [`AsrModel::encode_chunk`] is the device
+//! half ending in that read-back, and the [`EncodedChunk`] it returns decodes
+//! on the CPU with no device or model in sight — so a caller may decode one
+//! chunk on another thread while the device already encodes the next.
 
 #[cfg(test)]
 mod bench;
@@ -21,7 +24,7 @@ pub mod net;
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Device, IndexOp, Tensor};
 use candle_nn::VarBuilder;
@@ -63,9 +66,94 @@ pub trait AsrModel {
     /// The feature extractor.
     fn feature(&self) -> &FeatureExtractor;
 
-    /// Runs one chunk's log-mel features through the encoder and the model's
-    /// head, returning the emitted tokens.
-    fn emissions(&self, mel: &Mel) -> Result<Emissions, GigaamError>;
+    /// The device half of one chunk: the encoder forward (plus, for a CTC
+    /// head, its projection and argmax), ending in the chunk's single
+    /// read-back. Everything still to do is pure CPU, packaged as an
+    /// [`EncodedChunk`].
+    fn encode_chunk(&self, mel: &Mel) -> Result<EncodedChunk, GigaamError>;
+
+    /// Both halves in sequence: [`encode_chunk`](Self::encode_chunk), then
+    /// [`EncodedChunk::decode`].
+    fn emissions(&self, mel: &Mel) -> Result<Emissions, GigaamError> {
+        Ok(self.encode_chunk(mel)?.decode())
+    }
+}
+
+/// The read-back device output of one chunk, one token-emission step short of
+/// [`Emissions`].
+///
+/// The value is detached from the device and the model — plain buffers plus a
+/// shared handle to the transducer head — so [`decode`](Self::decode) can run
+/// on another thread while the device starts on the next chunk. Decoding is
+/// where the RNN-T head spends its sequential CPU loop; for CTC it is only
+/// the collapse of per-frame labels.
+pub struct EncodedChunk {
+    inner: EncodedInner,
+}
+
+enum EncodedInner {
+    /// Per-frame argmax labels awaiting the CTC collapse.
+    Ctc { labels: Vec<u32>, blank_id: u32 },
+    /// The encoder output `[T', d_model]` awaiting the greedy transducer
+    /// loop of the shared head.
+    Rnnt {
+        head: Arc<RnntHead>,
+        encoded: Vec<f32>,
+        enc_frames: usize,
+    },
+}
+
+impl EncodedChunk {
+    /// Read-back CTC labels awaiting the collapse.
+    pub(crate) fn ctc(labels: Vec<u32>, blank_id: u32) -> Self {
+        Self {
+            inner: EncodedInner::Ctc { labels, blank_id },
+        }
+    }
+
+    /// Read-back encoder output awaiting the transducer loop.
+    pub(crate) fn rnnt(
+        head: Arc<RnntHead>,
+        encoded: Vec<f32>,
+        enc_frames: usize,
+    ) -> Self {
+        Self {
+            inner: EncodedInner::Rnnt {
+                head,
+                encoded,
+                enc_frames,
+            },
+        }
+    }
+
+    /// The pure-CPU half: token emission by the model's head.
+    #[must_use]
+    pub fn decode(self) -> Emissions {
+        match self.inner {
+            EncodedInner::Ctc { labels, blank_id } => {
+                let (token_ids, token_frames) =
+                    decode::ctc_greedy(&labels, labels.len(), blank_id);
+                Emissions {
+                    token_ids,
+                    token_frames,
+                    enc_frames: labels.len(),
+                }
+            },
+            EncodedInner::Rnnt {
+                head,
+                encoded,
+                enc_frames,
+            } => {
+                let (token_ids, token_frames) =
+                    head.greedy(&encoded, enc_frames);
+                Emissions {
+                    token_ids,
+                    token_frames,
+                    enc_frames,
+                }
+            },
+        }
+    }
 }
 
 /// Compute precision of the runtime.
@@ -102,7 +190,7 @@ pub(crate) const WINDOW_KEY: &str =
 /// RNN-T head always runs on the CPU (see [`rnnt`](super::rnnt)).
 enum Head {
     Ctc(CtcHead),
-    Rnnt(RnntHead),
+    Rnnt(Arc<RnntHead>),
 }
 
 /// A loaded GigaAM model: feature extractor, Conformer encoder, and decoding
@@ -143,12 +231,12 @@ impl GigaamModel {
                 let rnnt_cfg = config.rnnt.as_ref().ok_or_else(|| {
                     model_err("config", "rnnt model without rnnt geometry")
                 })?;
-                Some(Head::Rnnt(RnntHead::load(
+                Some(Head::Rnnt(Arc::new(RnntHead::load(
                     &map,
                     config.encoder.d_model,
                     config.num_classes,
                     rnnt_cfg,
-                )?))
+                )?)))
             },
         };
 
@@ -257,34 +345,23 @@ impl GigaamModel {
 impl AsrModel for GigaamModel {
     fn feature(&self) -> &FeatureExtractor { &self.feature }
 
-    fn emissions(&self, mel: &Mel) -> Result<Emissions, GigaamError> {
+    fn encode_chunk(&self, mel: &Mel) -> Result<EncodedChunk, GigaamError> {
         let encoded = self.encode(mel)?;
-        match &self.head {
+        let chunk = match &self.head {
             Head::Ctc(_) => {
                 let logits = self.ctc_logits(&encoded)?;
                 let labels = logits
                     .argmax(candle_core::D::Minus1)
                     .and_then(|t| t.to_vec1::<u32>())
                     .map_err(|e| model_err("argmax", e))?;
-                let (token_ids, token_frames) =
-                    decode::ctc_greedy(&labels, labels.len(), self.blank_id);
-                Ok(Emissions {
-                    token_ids,
-                    token_frames,
-                    enc_frames: labels.len(),
-                })
+                EncodedChunk::ctc(labels, self.blank_id)
             },
             Head::Rnnt(rnnt_head) => {
-                let (flat, enc_frames) = self.encoded_to_f32(&encoded)?;
-                let (token_ids, token_frames) =
-                    rnnt_head.greedy(&flat, enc_frames);
-                Ok(Emissions {
-                    token_ids,
-                    token_frames,
-                    enc_frames,
-                })
+                let (encoded, enc_frames) = self.encoded_to_f32(&encoded)?;
+                EncodedChunk::rnnt(Arc::clone(rnnt_head), encoded, enc_frames)
             },
-        }
+        };
+        Ok(chunk)
     }
 }
 

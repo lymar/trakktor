@@ -1,17 +1,17 @@
-//! Per-chunk transcription and the result types.
+//! Per-chunk transcription result types and rendering.
 //!
 //! One chunk is one encoder forward pass with a single device synchronization
 //! at its end — the CTC path reads back per-frame argmax labels, the RNN-T
-//! path reads back the encoder output and runs its sequential decode loop on
-//! the CPU — so the device stays busy through a chunk. The orchestration over
-//! a whole recording (short single-chunk audio and streamed long-form
-//! segmentation) lives in [`stream`](super::stream).
+//! path reads back the encoder output for its sequential decode loop on the
+//! CPU — so the device stays busy through a chunk. The orchestration over a
+//! whole recording (short single-chunk audio, streamed long-form
+//! segmentation, and the decode-behind-encode pipelining) lives in
+//! [`stream`](super::stream).
 
 use super::{
     constants::SAMPLE_RATE,
     decode::{Word, frames_to_words},
-    error::GigaamError,
-    runtime::AsrModel,
+    runtime::Emissions,
     tokenizer::Tokenizer,
 };
 
@@ -54,29 +54,26 @@ pub(crate) struct ChunkResult {
     pub(crate) words: Vec<Word>,
 }
 
-/// Runs one chunk through feature extraction, the encoder, the model's head,
-/// and greedy decoding.
+/// Renders one chunk's decoded emissions into its text and word timings;
+/// `samples` is the chunk's PCM length, the scale from encoder frames to
+/// seconds.
 ///
 /// Words are always resolved, whatever the caller asked for in the output: a
 /// chunk hears past the span it owns, and their timings are what tells its own
 /// words from the neighbour's context. They cost a walk over the emitted
 /// tokens, the frames being a by-product of decoding either head.
-pub(crate) fn transcribe_chunk(
-    model: &dyn AsrModel,
+pub(crate) fn chunk_result(
     tokenizer: &Tokenizer,
-    chunk: &[f32],
-) -> Result<ChunkResult, GigaamError> {
-    let mel = model.feature().log_mel(chunk);
-    let emitted = model.emissions(&mel)?;
-
+    emitted: &Emissions,
+    samples: usize,
+) -> ChunkResult {
     let text = tokenizer.decode(&emitted.token_ids);
-    let shift =
-        chunk.len() as f64 / SAMPLE_RATE as f64 / emitted.enc_frames as f64;
+    let shift = samples as f64 / SAMPLE_RATE as f64 / emitted.enc_frames as f64;
     let words = frames_to_words(
         tokenizer,
         &emitted.token_ids,
         &emitted.token_frames,
         shift,
     );
-    Ok(ChunkResult { text, words })
+    ChunkResult { text, words }
 }
