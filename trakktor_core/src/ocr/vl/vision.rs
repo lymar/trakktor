@@ -58,14 +58,6 @@ fn linear(rows: usize, cols: usize, vb: VarBuilder) -> Result<Linear> {
     ))
 }
 
-/// Rotates the halves of the last axis: `[a, b] → [-b, a]`.
-fn rotate_half(xs: &Tensor) -> Result<Tensor> {
-    let half = xs.dim(D::Minus1)? / 2;
-    let first = xs.narrow(D::Minus1, 0, half)?;
-    let second = xs.narrow(D::Minus1, half, half)?;
-    Tensor::cat(&[second.neg()?, first], D::Minus1)
-}
-
 /// The patch embedding and the learned position grid.
 struct Embeddings {
     /// The patch projection, held as a matrix: the convolution has kernel and
@@ -206,7 +198,8 @@ impl Attention {
         })
     }
 
-    /// `xs` is `[seq, hidden]`; `cos` and `sin` are `[seq, head_dim]`.
+    /// `xs` is `[seq, hidden]`; `cos` and `sin` are `[seq, head_dim / 2]`,
+    /// in `f32`.
     fn forward(
         &self,
         xs: &Tensor,
@@ -215,27 +208,30 @@ impl Attention {
     ) -> Result<Tensor> {
         let (seq, hidden) = xs.dims2()?;
         let split = |projected: Tensor| -> Result<Tensor> {
-            projected.reshape((seq, self.heads, self.head_dim))
+            projected
+                .reshape((seq, self.heads, self.head_dim))?
+                .transpose(0, 1)?
+                .contiguous()
         };
         // The rotation is applied in full precision, as the reference does:
         // the angles are the same for every layer, and rounding them once per
         // layer in half precision drifts.
-        let rope = |xs: Tensor| -> Result<Tensor> {
-            let xs = xs.to_dtype(DType::F32)?;
-            let rotated = rotate_half(&xs)?;
-            (xs.broadcast_mul(&cos.unsqueeze(1)?)? +
-                rotated.broadcast_mul(&sin.unsqueeze(1)?)?)?
-            .to_dtype(self.q_proj.weight().dtype())?
-            .transpose(0, 1)?
-            .contiguous()
+        let rope = |xs: &Tensor| -> Result<Tensor> {
+            candle_nn::rotary_emb::rope(
+                &xs.unsqueeze(0)?.to_dtype(DType::F32)?,
+                cos,
+                sin,
+            )?
+            .to_dtype(xs.dtype())?
+            .squeeze(0)
         };
 
-        let query = rope(split(self.q_proj.forward(xs)?)?)?;
-        let key = rope(split(self.k_proj.forward(xs)?)?)?;
-        let value = split(self.v_proj.forward(xs)?)?
-            .transpose(0, 1)?
-            .contiguous()?;
-        let keys = key.transpose(1, 2)?.contiguous()?;
+        let query = rope(&split(self.q_proj.forward(xs)?)?)?;
+        let key = rope(&split(self.k_proj.forward(xs)?)?)?;
+        let value = split(self.v_proj.forward(xs)?)?;
+        // A transposed view is a layout the matrix product reads directly;
+        // nothing to copy.
+        let keys = key.transpose(1, 2)?;
 
         let mut attended = Vec::with_capacity(seq.div_ceil(ATTENTION_CHUNK));
         let mut at = 0;
@@ -346,12 +342,11 @@ impl Tower {
         })
     }
 
-    /// Builds the two-dimensional rotary tables for a patch grid.
-    ///
-    /// Each patch takes its row's angles in the first quarter of the head
-    /// dimension and its column's in the second; the pair is then repeated to
-    /// fill the head, because the rotation pairs element `i` with element
-    /// `i + head_dim / 2`.
+    /// Builds the two-dimensional rotary tables for a patch grid, one row per
+    /// patch, `[patches, head_dim / 2]`: the patch's row angles fill the
+    /// first quarter of the head dimension and its column angles the second.
+    /// The rotation pairs channel `i` with channel `i + head_dim / 2`, so
+    /// each angle is carried once.
     fn rotary(
         &self,
         grid: (usize, usize, usize),
@@ -367,21 +362,15 @@ impl Tower {
             })
             .collect();
 
-        let mut angles = Vec::with_capacity(height * width * self.head_dim);
+        let half = self.head_dim / 2;
+        let mut angles = Vec::with_capacity(height * width * half);
         for row in 0..height {
             for column in 0..width {
-                // Row angles, then column angles, then the same pair again.
-                let pair: Vec<f32> = inverse
-                    .iter()
-                    .map(|f| row as f32 * f)
-                    .chain(inverse.iter().map(|f| column as f32 * f))
-                    .collect();
-                angles.extend_from_slice(&pair);
-                angles.extend_from_slice(&pair);
+                angles.extend(inverse.iter().map(|f| row as f32 * f));
+                angles.extend(inverse.iter().map(|f| column as f32 * f));
             }
         }
-        let angles =
-            Tensor::from_vec(angles, (height * width, self.head_dim), device)?;
+        let angles = Tensor::from_vec(angles, (height * width, half), device)?;
         Ok((angles.cos()?, angles.sin()?))
     }
 

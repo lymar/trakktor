@@ -525,28 +525,28 @@ pub fn whole(quads: &[Quad], page: (u32, u32)) -> Block {
 pub fn cut(bgr: &[u8], page: (u32, u32), block: &Block) -> RgbImage {
     let rect = &block.rect;
     let stride = page.0 as usize * 3;
-    let mut out = RgbImage::new(rect.width, rect.height);
-    for row in 0..rect.height {
-        let y = rect.y + row;
+    let width = rect.width as usize;
+    let mut out = vec![255u8; width * rect.height as usize * 3];
+    for row in 0..rect.height as usize {
+        let y = rect.y + row as u32;
         let mine = block
             .bands
             .iter()
             .any(|(top, bottom)| y >= *top && y < *bottom);
         if !mine {
-            for column in 0..rect.width {
-                out.put_pixel(column, row, image::Rgb([255, 255, 255]));
-            }
-            continue;
+            continue; // stays white
         }
         let source = y as usize * stride + rect.x as usize * 3;
-        for column in 0..rect.width {
-            let at = source + column as usize * 3;
-            out.put_pixel(
-                column,
-                row,
-                image::Rgb([bgr[at + 2], bgr[at + 1], bgr[at]]),
-            );
+        let target = &mut out[row * width * 3..(row + 1) * width * 3];
+        for (pixel, bgr) in target
+            .chunks_exact_mut(3)
+            .zip(bgr[source..source + width * 3].chunks_exact(3))
+        {
+            pixel[0] = bgr[2];
+            pixel[1] = bgr[1];
+            pixel[2] = bgr[0];
         }
     }
-    out
+    RgbImage::from_raw(rect.width, rect.height, out)
+        .expect("the buffer was sized to the rectangle")
 }

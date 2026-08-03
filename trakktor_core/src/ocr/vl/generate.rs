@@ -11,7 +11,7 @@
 //! handed more than it can parse, so the loop watches for it explicitly and
 //! reports it, rather than returning a page of noise as if it were text.
 
-use candle_core::{D, DType, Device, IndexOp, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::ops::softmax_last_dim;
 use tokenizers::Tokenizer;
 
@@ -176,6 +176,16 @@ impl Reader {
         task: Task,
         limits: &Limits,
     ) -> Result<Answer> {
+        // A ceiling of zero admits no answer; say so without running anything.
+        if limits.max_tokens == 0 {
+            return Ok(Answer {
+                text: String::new(),
+                score: 0.0,
+                tokens: 0,
+                truncated: true,
+            });
+        }
+
         let merge = self.cfg.vision.spatial_merge_size;
         let places = picture.tokens(merge);
 
@@ -206,12 +216,30 @@ impl Reader {
         }
         let inputs = Tensor::cat(&parts, 1)?.contiguous()?;
 
-        // 4. Prefill, then one token at a time.
-        let mut cache = Cache::new(self.decoder.layer_count());
-        let mut logits =
-            self.decoder.forward(&inputs, &positions, &mut cache)?;
-        let mut next =
-            positions.last().map(|axes| axes[0] + 1).unwrap_or_default();
+        // 4. Prefill, then one token at a time. The cache and the rotary
+        // tables are sized once, up front, for the whole answer the limits
+        // allow: every position the generation can reach is known before its
+        // first token, so nothing about positions needs rebuilding per step.
+        let prompt = tokens.len();
+        let next = positions.last().map(|axes| axes[0] + 1).unwrap_or_default();
+        let mut positions = positions;
+        positions
+            .extend((0..limits.max_tokens as i64).map(|step| [next + step; 3]));
+        let (cos, sin) =
+            self.decoder.tables(&positions, &self.device, self.dtype)?;
+
+        let mut cache = Cache::new(
+            &self.cfg,
+            prompt + limits.max_tokens,
+            self.dtype,
+            &self.device,
+        )?;
+        let mut logits = self.decoder.forward(
+            &inputs,
+            &cos.narrow(0, 0, prompt)?,
+            &sin.narrow(0, 0, prompt)?,
+            &mut cache,
+        )?;
 
         let mut generated: Vec<u32> = Vec::new();
         let mut scores: Vec<f32> = Vec::new();
@@ -237,9 +265,13 @@ impl Reader {
             }
 
             let embedded = self.decoder.embed(&[token], &self.device)?;
-            logits =
-                self.decoder.forward(&embedded, &[[next; 3]], &mut cache)?;
-            next += 1;
+            let row = prompt + generated.len() - 1;
+            logits = self.decoder.forward(
+                &embedded,
+                &cos.narrow(0, row, 1)?,
+                &sin.narrow(0, row, 1)?,
+                &mut cache,
+            )?;
         }
 
         let text = self
@@ -323,12 +355,24 @@ impl Reader {
     }
 
     /// The greedy choice and how sure the model was of it.
+    ///
+    /// The softmax stays on the device; the whole probability row comes back
+    /// in one transfer and the argmax happens here — one synchronization per
+    /// token where an on-device argmax plus a gather would cost two, and the
+    /// wait is what the step's time is made of. Ties resolve to the first
+    /// maximum, as the device kernel resolves them.
     fn pick(&self, logits: &Tensor) -> Result<(u32, f32)> {
-        let probabilities = softmax_last_dim(&logits.to_dtype(DType::F32)?)?;
-        let token = probabilities.argmax(D::Minus1)?.to_scalar::<u32>()?;
-        let probability =
-            probabilities.i(token as usize)?.to_scalar::<f32>()?;
-        Ok((token, probability))
+        let probabilities = softmax_last_dim(&logits.to_dtype(DType::F32)?)?
+            .to_vec1::<f32>()?;
+        let mut token = 0usize;
+        let mut best = f32::NEG_INFINITY;
+        for (index, &probability) in probabilities.iter().enumerate() {
+            if probability > best {
+                best = probability;
+                token = index;
+            }
+        }
+        Ok((token as u32, best))
     }
 
     /// Where to cut, if the answer has started going in circles.

@@ -14,39 +14,97 @@
 //! in another. The head dimension is split between the axes in the proportion
 //! `[16, 24, 24]`, so the first 32 channels of each half rotate with the
 //! sequence, the next 48 with the row, the last 48 with the column.
+//!
+//! The decode step is built to move one token cheaply, because a page pays for
+//! it thousands of times: the KV cache is preallocated once per generation and
+//! written in place, the rotary tables are computed once for every position
+//! the answer could reach, and grouped-query attention folds the queries into
+//! the key heads' shape — a reshape — instead of copying the cached keys out
+//! to the queries'.
 
-use candle_core::{D, DType, Device, IndexOp, Result, Tensor};
+#[cfg(test)]
+mod tests;
+
+use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{Embedding, Linear, Module, VarBuilder, ops::softmax_last_dim};
 
 use super::config::ModelConfig;
 
-/// The keys and values one layer has seen so far, `[1, kv heads, seen, dim]`.
-type LayerCache = Option<(Tensor, Tensor)>;
-
-/// The growing state of one generation.
+/// The keys and values already seen, in one preallocated buffer per layer.
+///
+/// Growing a cache by concatenation re-copies everything seen so far on every
+/// step, which prices an n-token answer at n² copied positions. These buffers
+/// are sized once — for the prompt plus the longest answer the limits allow —
+/// and each step writes its one new column in place.
 pub struct Cache {
-    layers: Vec<LayerCache>,
+    /// One `[1, kv heads, capacity, head dim]` tensor per layer.
+    keys: Vec<Tensor>,
+    values: Vec<Tensor>,
+    /// Positions filled so far, the same in every layer.
+    len: usize,
+    capacity: usize,
 }
 
 impl Cache {
-    pub fn new(layers: usize) -> Self {
-        Self {
-            layers: vec![None; layers],
+    /// Allocates a cache able to hold `capacity` positions.
+    pub fn new(
+        cfg: &ModelConfig,
+        capacity: usize,
+        dtype: DType,
+        device: &Device,
+    ) -> Result<Self> {
+        let shape = (1, cfg.num_key_value_heads, capacity, cfg.head_dim);
+        let mut keys = Vec::with_capacity(cfg.num_hidden_layers);
+        let mut values = Vec::with_capacity(cfg.num_hidden_layers);
+        for _ in 0..cfg.num_hidden_layers {
+            keys.push(Tensor::zeros(shape, dtype, device)?);
+            values.push(Tensor::zeros(shape, dtype, device)?);
         }
+        Ok(Self {
+            keys,
+            values,
+            len: 0,
+            capacity,
+        })
     }
 
     /// How many positions are already in the cache.
-    pub fn len(&self) -> usize {
-        match self.layers.first().and_then(Option::as_ref) {
-            Some((keys, _)) => keys.dim(2).unwrap_or(0),
-            None => 0,
+    pub fn len(&self) -> usize { self.len }
+
+    pub fn is_empty(&self) -> bool { self.len == 0 }
+
+    /// Writes one layer's new keys and values, `[1, kv heads, seq, dim]`, at
+    /// the append position, and returns everything seen so far including
+    /// them — views into the buffers, nothing copied.
+    fn push(
+        &self,
+        layer: usize,
+        key: &Tensor,
+        value: &Tensor,
+    ) -> Result<(Tensor, Tensor)> {
+        let seq = key.dim(2)?;
+        if self.len + seq > self.capacity {
+            candle_core::bail!(
+                "the answer outgrew its cache: position {} + {seq} of {}",
+                self.len,
+                self.capacity
+            );
         }
+        self.keys[layer].slice_set(key, 2, self.len)?;
+        self.values[layer].slice_set(value, 2, self.len)?;
+        let total = self.len + seq;
+        Ok((
+            self.keys[layer].narrow(2, 0, total)?,
+            self.values[layer].narrow(2, 0, total)?,
+        ))
     }
 
-    pub fn is_empty(&self) -> bool { self.len() == 0 }
+    /// Marks `seq` more positions filled, once every layer has pushed them.
+    fn advance(&mut self, seq: usize) { self.len += seq; }
 }
 
-/// Root-mean-square normalization with a learned gain, statistics in `f32`.
+/// Root-mean-square normalization with a learned gain; the fused kernel keeps
+/// the statistics in `f32` whatever the activations are.
 struct RmsNorm {
     weight: Tensor,
     eps: f64,
@@ -61,11 +119,7 @@ impl RmsNorm {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let dtype = xs.dtype();
-        let xs = xs.to_dtype(DType::F32)?;
-        let variance = xs.sqr()?.mean_keepdim(D::Minus1)?;
-        let normed = xs.broadcast_div(&(variance + self.eps)?.sqrt()?)?;
-        normed.to_dtype(dtype)?.broadcast_mul(&self.weight)
+        candle_nn::ops::rms_norm(xs, &self.weight, self.eps as f32)
     }
 }
 
@@ -79,31 +133,8 @@ fn linear(
     Ok(Linear::new(vb.get((rows, cols), name)?, None))
 }
 
-/// Repeats key/value heads so every query head has a partner.
-fn repeat_kv(xs: &Tensor, groups: usize) -> Result<Tensor> {
-    if groups == 1 {
-        return Ok(xs.clone());
-    }
-    let (batch, heads, seq, dim) = xs.dims4()?;
-    xs.unsqueeze(2)?
-        .expand((batch, heads, groups, seq, dim))?
-        .reshape((batch, heads * groups, seq, dim))
-}
-
-/// Rotates the halves of the last axis: `[a, b] → [-b, a]`.
-fn rotate_half(xs: &Tensor) -> Result<Tensor> {
-    let half = xs.dim(D::Minus1)? / 2;
-    let first = xs.narrow(D::Minus1, 0, half)?;
-    let second = xs.narrow(D::Minus1, half, half)?;
-    Tensor::cat(&[second.neg()?, first], D::Minus1)
-}
-
 /// The three-axis rotary tables.
-///
-/// Built per forward pass rather than cached, because the positions of a
-/// prefill are not a prefix of anything: the picture's patches carry row and
-/// column indices, and the text after them resumes from the larger of the two.
-pub struct Rotary {
+struct Rotary {
     inverse: Vec<f32>,
     /// How the head dimension is split between the axes.
     section: Vec<usize>,
@@ -127,9 +158,10 @@ impl Rotary {
         }
     }
 
-    /// Cosine and sine for `positions`, laid out `[3, seq]` and already
-    /// collapsed onto the sections: the result is `[1, 1, seq, head_dim]`,
-    /// ready to broadcast over `[1, heads, seq, head_dim]`.
+    /// Cosine and sine for `positions`, one row per position, laid out
+    /// `[seq, head_dim / 2]`: the rotation pairs channel `i` with channel
+    /// `i + head_dim / 2`, so each angle is carried once. Within a row the
+    /// channels are split between the three axes by section.
     fn tables(
         &self,
         positions: &[[i64; 3]],
@@ -138,31 +170,20 @@ impl Rotary {
     ) -> Result<(Tensor, Tensor)> {
         let seq = positions.len();
         let half = self.head_dim / 2;
-        let mut angles = vec![0f32; 3 * seq * self.head_dim];
-        for (index, axes) in positions.iter().enumerate() {
-            for (axis, &position) in axes.iter().enumerate() {
-                let base = (axis * seq + index) * self.head_dim;
-                for (i, frequency) in self.inverse.iter().enumerate() {
-                    let angle = position as f32 * frequency;
-                    angles[base + i] = angle;
-                    angles[base + half + i] = angle;
+        let mut angles = vec![0f32; seq * half];
+        for (row, axes) in positions.iter().enumerate() {
+            let slot = &mut angles[row * half..(row + 1) * half];
+            let mut at = 0;
+            for (&size, &position) in self.section.iter().zip(axes.iter()) {
+                for (channel, angle) in
+                    slot[at..at + size].iter_mut().enumerate()
+                {
+                    *angle = position as f32 * self.inverse[at + channel];
                 }
+                at += size;
             }
         }
-        let angles = Tensor::from_vec(angles, (3, seq, self.head_dim), device)?;
-
-        // Each section of the head dimension takes its angles from one axis,
-        // and the split repeats across the two halves of the head.
-        let mut chunks = Vec::with_capacity(self.section.len() * 2);
-        let mut at = 0;
-        for (index, size) in
-            self.section.iter().chain(self.section.iter()).enumerate()
-        {
-            chunks.push(angles.i((index % 3, .., at..at + size))?);
-            at += size;
-        }
-        let angles =
-            Tensor::cat(&chunks, 1)?.reshape((1, 1, seq, self.head_dim))?;
+        let angles = Tensor::from_vec(angles, (seq, half), device)?;
         Ok((
             angles.cos()?.to_dtype(dtype)?,
             angles.sin()?.to_dtype(dtype)?,
@@ -257,7 +278,8 @@ impl DecoderLayer {
         cos: &Tensor,
         sin: &Tensor,
         mask: Option<&Tensor>,
-        cache: &mut LayerCache,
+        cache: &Cache,
+        layer: usize,
     ) -> Result<Tensor> {
         let (batch, seq, _) = xs.dims3()?;
         let normed = self.input_layernorm.forward(xs)?;
@@ -267,41 +289,44 @@ impl DecoderLayer {
                 .transpose(1, 2)?
                 .contiguous()
         };
-        let rope = |xs: &Tensor| -> Result<Tensor> {
-            (xs.broadcast_mul(cos)? + rotate_half(xs)?.broadcast_mul(sin)?)?
-                .contiguous()
-        };
+        let rope = |xs: &Tensor| candle_nn::rotary_emb::rope(xs, cos, sin);
 
         let query = rope(&split(self.q_proj.forward(&normed)?, self.heads)?)?;
         let key = rope(&split(self.k_proj.forward(&normed)?, self.kv_heads)?)?;
         let value = split(self.v_proj.forward(&normed)?, self.kv_heads)?;
+        let (keys, values) = cache.push(layer, &key, &value)?;
+        let total = keys.dim(2)?;
 
-        let (key, value) = match cache.take() {
-            None => (key, value),
-            Some((past_k, past_v)) => (
-                Tensor::cat(&[&past_k, &key], 2)?.contiguous()?,
-                Tensor::cat(&[&past_v, &value], 2)?.contiguous()?,
-            ),
-        };
-        *cache = Some((key.clone(), value.clone()));
-
+        // Grouped-query attention, without the copy it is usually paid for
+        // with. Instead of repeating the two cached key heads out to sixteen,
+        // the sixteen query heads are folded into two groups of eight — a
+        // pure reshape, because the grouping is contiguous — and each group
+        // scores against its key head as one matrix. The cache is read where
+        // it lies.
         let groups = self.heads / self.kv_heads;
-        let keys = repeat_kv(&key, groups)?;
-        let values = repeat_kv(&value, groups)?;
-
+        let query = query.reshape((
+            batch,
+            self.kv_heads,
+            groups * seq,
+            self.head_dim,
+        ))?;
         let scale = 1f64 / (self.head_dim as f64).sqrt();
-        let mut weights =
-            (query.matmul(&keys.transpose(2, 3)?.contiguous()?)? * scale)?;
+        let mut weights = (query.matmul(&keys.transpose(2, 3)?)? * scale)?;
         if let Some(mask) = mask {
-            weights = weights.broadcast_add(mask)?;
+            // The mask rows are per query position; unfold the group axis so
+            // it can broadcast over them, then fold it back.
+            weights = weights
+                .reshape((batch, self.kv_heads, groups, seq, total))?
+                .broadcast_add(mask)?
+                .reshape((batch, self.kv_heads, groups * seq, total))?;
         }
         let weights = softmax_last_dim(&weights.to_dtype(DType::F32)?)?
             .to_dtype(values.dtype())?;
-        let attended = weights.matmul(&values)?.transpose(1, 2)?.reshape((
-            batch,
-            seq,
-            self.heads * self.head_dim,
-        ))?;
+        let attended = weights
+            .matmul(&values)?
+            .reshape((batch, self.heads, seq, self.head_dim))?
+            .transpose(1, 2)?
+            .reshape((batch, seq, self.heads * self.head_dim))?;
         let xs = (xs + self.o_proj.forward(&attended)?)?;
 
         let normed = self.post_attention_layernorm.forward(&xs)?;
@@ -338,7 +363,6 @@ pub struct Decoder {
     norm: RmsNorm,
     lm_head: Linear,
     rotary: Rotary,
-    layer_count: usize,
 }
 
 impl Decoder {
@@ -373,11 +397,8 @@ impl Decoder {
                 "lm_head.weight",
             )?,
             rotary: Rotary::new(cfg),
-            layer_count: cfg.num_hidden_layers,
         })
     }
-
-    pub fn layer_count(&self) -> usize { self.layer_count }
 
     /// Looks token ids up in the embedding table.
     pub fn embed(&self, tokens: &[u32], device: &Device) -> Result<Tensor> {
@@ -385,31 +406,51 @@ impl Decoder {
         self.embed_tokens.forward(&ids)
     }
 
-    /// Runs the decoder over `inputs`, shaped `[1, seq, hidden]`, and returns
+    /// The rotary rows for `positions` — built once per generation, because
+    /// every position an answer can reach is known before its first token:
+    /// the prompt's are laid out by the picture, and the text after it counts
+    /// up by one. The caller slices rows off as the decode advances.
+    pub fn tables(
+        &self,
+        positions: &[[i64; 3]],
+        device: &Device,
+        dtype: DType,
+    ) -> Result<(Tensor, Tensor)> {
+        self.rotary.tables(positions, device, dtype)
+    }
+
+    /// Runs the decoder over `inputs`, shaped `[1, seq, hidden]`, with `cos`
+    /// and `sin` the rotary rows of exactly these `seq` positions. Returns
     /// the logits of the **last** position only, as a flat `[vocab]` — the
     /// only ones a greedy decoder ever looks at, and 103 424 numbers per
     /// position is not a row to materialize needlessly.
     pub fn forward(
         &self,
         inputs: &Tensor,
-        positions: &[[i64; 3]],
+        cos: &Tensor,
+        sin: &Tensor,
         cache: &mut Cache,
     ) -> Result<Tensor> {
         let (_, seq, _) = inputs.dims3()?;
         let past = cache.len();
-        let device = inputs.device();
-        let (cos, sin) =
-            self.rotary.tables(positions, device, inputs.dtype())?;
         let mask = if seq > 1 {
-            Some(causal_mask(seq, past, device, inputs.dtype())?)
+            Some(causal_mask(seq, past, inputs.device(), inputs.dtype())?)
         } else {
             None
         };
 
         let mut hidden = inputs.clone();
-        for (layer, slot) in self.layers.iter().zip(&mut cache.layers) {
-            hidden = layer.forward(&hidden, &cos, &sin, mask.as_ref(), slot)?;
+        for (index, layer) in self.layers.iter().enumerate() {
+            hidden = layer.forward(
+                &hidden,
+                cos,
+                sin,
+                mask.as_ref(),
+                cache,
+                index,
+            )?;
         }
+        cache.advance(seq);
         let last = hidden.i((.., seq - 1.., ..))?.contiguous()?;
         self.lm_head
             .forward(&self.norm.forward(&last)?)?
