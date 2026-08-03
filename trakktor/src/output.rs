@@ -1290,7 +1290,10 @@ mod tests;
 pub fn print_ocr(
     pages: &[trakktor_core::ocr::Page],
     figures: &[Vec<trakktor_core::ocr::Quad>],
-    language: &str,
+    // The language the run was told to read, when the engine takes one at all:
+    // a generative engine works the writing system out for itself, and
+    // reporting a language it never used would be an invention.
+    language: Option<&str>,
     detection: &str,
     recognition: &str,
     markdown: bool,
@@ -1345,22 +1348,32 @@ pub fn print_ocr(
                     "width": page.width,
                     "height": page.height,
                     "text": page.text(),
-                    "lines": page.lines.iter().map(|line| json!({
-                        "text": line.text,
-                        "score": round4(line.score),
-                        "quad": line.quad.points.iter()
-                            .map(|(x, y)| json!([round1(*x), round1(*y)]))
-                            .collect::<Vec<_>>(),
-                        "rotated": line.rotated,
-                    })).collect::<Vec<_>>(),
+                    "lines": page.lines.iter().map(|line| {
+                        let mut item = json!({
+                            "text": line.text,
+                            "score": round4(line.score),
+                            "quad": line.quad.points.iter()
+                                .map(|(x, y)| json!([round1(*x), round1(*y)]))
+                                .collect::<Vec<_>>(),
+                            "rotated": line.rotated,
+                        });
+                        // Only when it happened: an engine that cannot run
+                        // away should not carry a field about running away.
+                        if line.truncated {
+                            item["truncated"] = json!(true);
+                        }
+                        item
+                    }).collect::<Vec<_>>(),
                 })
             })
             .collect();
         let mut envelope = json!({
             "pages": pages_json,
-            "language": language,
             "models": { "detection": detection, "recognition": recognition },
         });
+        if let Some(language) = language {
+            envelope["language"] = json!(language);
+        }
         if markdown {
             envelope["markdown"] = json!(text);
         }

@@ -12,6 +12,7 @@ pub mod layout;
 pub mod markdown;
 pub mod paddle;
 pub mod page;
+pub mod vl;
 
 pub use error::OcrError;
 pub use page::{Line, Page, Quad};

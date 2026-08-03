@@ -10,6 +10,7 @@ fn line(text: &str, x0: f32, y0: f32, x1: f32, y1: f32) -> Line {
         score: 0.95,
         quad: Quad::new([(x0, y0), (x1, y0), (x1, y1), (x0, y1)]),
         rotated: false,
+        truncated: false,
     }
 }
 

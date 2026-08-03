@@ -1,6 +1,11 @@
-//! `ocr paddle`: flag mapping, model resolution, and the page loop.
+//! `ocr paddle` and `ocr vl`: flag mapping, model resolution, and the page
+//! loop.
 
-use std::path::{Path, PathBuf};
+use std::{
+    io::{IsTerminal, Write},
+    path::{Path, PathBuf},
+    time::{Duration, Instant},
+};
 
 use trakktor_core::ocr::{
     OcrError, Page, Quad,
@@ -13,10 +18,11 @@ use trakktor_core::ocr::{
         model,
         pipeline::{Device, Engine, Options},
     },
+    vl,
 };
 
 use crate::{
-    cli::{OcrFormatArg, OcrPaddleArgs},
+    cli::{OcrFormatArg, OcrPaddleArgs, OcrTaskArg, OcrVlArgs},
     error::CliError,
 };
 
@@ -76,7 +82,7 @@ pub(crate) fn run_paddle(
 
     let engine = Engine::load(
         model_dir,
-        device(args),
+        device(args.device),
         options,
         &mut crate::asr::progress::download_progress(),
     )?;
@@ -106,7 +112,7 @@ pub(crate) fn run_paddle(
     crate::output::print_ocr(
         &pages,
         &figures,
-        &args.lang,
+        Some(&args.lang),
         detection,
         recognition,
         markdown,
@@ -117,14 +123,196 @@ pub(crate) fn run_paddle(
     .map_err(CliError::from)
 }
 
+/// Runs one `ocr vl` pass.
+///
+/// The shape is the classic engine's — resolve, then read page by page — with
+/// one difference that matters to whoever is watching: a page here is tens of
+/// seconds, not one, so the block counter goes to stderr as it goes.
+pub(crate) fn run_vl(
+    args: &OcrVlArgs,
+    model_dir: &Path,
+    json: bool,
+    pretty: bool,
+) -> Result<(), CliError> {
+    if args.pages.is_empty() {
+        return Err(OcrError::NoPages.into());
+    }
+    for page in &args.pages {
+        if !page.is_file() {
+            return Err(OcrError::PageNotFound {
+                path: page.display().to_string(),
+            }
+            .into());
+        }
+    }
+
+    let options = vl::Options {
+        model: args
+            .model
+            .clone()
+            .unwrap_or_else(|| vl::model::DEFAULT_MODEL.to_string()),
+        detection: args
+            .det_model
+            .clone()
+            .unwrap_or_else(|| model::DEFAULT_DETECTION.to_string()),
+        limit_side_len: args.limit_side_len,
+        params: Params {
+            thresh: args.thresh,
+            box_thresh: args.box_thresh,
+            unclip_ratio: args.unclip_ratio,
+            ..Params::default()
+        },
+        task: match args.task {
+            OcrTaskArg::Ocr => vl::Task::Ocr,
+            OcrTaskArg::Table => vl::Task::Table,
+            OcrTaskArg::Formula => vl::Task::Formula,
+            OcrTaskArg::Chart => vl::Task::Chart,
+        },
+        limits: vl::Limits {
+            max_tokens: args.max_tokens,
+            ..vl::Limits::default()
+        },
+        blocks: vl::blocks::Settings {
+            gap: args.block_gap,
+            overlap: args.block_overlap,
+            height: args.block_height,
+            row_gap: args.block_row_gap,
+            max_lines: args.block_lines,
+            padding: args.block_padding,
+            ..vl::blocks::Settings::default()
+        },
+        whole_page: args.whole_page,
+        drop_score: args.drop_score,
+        figures: matches!(args.format, OcrFormatArg::Md) && args.out.is_some(),
+    };
+
+    let engine = vl::Engine::load(
+        model_dir,
+        device(args.device),
+        options,
+        &mut crate::asr::progress::download_progress(),
+    )?;
+
+    let mut pages: Vec<Page> = Vec::with_capacity(args.pages.len());
+    let mut figures: Vec<Vec<Quad>> = Vec::with_capacity(args.pages.len());
+    let started = Instant::now();
+    for (index, path) in args.pages.iter().enumerate() {
+        let number = index + 1;
+        let mut report = block_progress(started, number, args.pages.len());
+        let read = engine.read_file(path, number, &mut report)?;
+        if let Some(dir) = &args.crops {
+            write_blocks(dir, number, &read)?;
+        }
+        if !read.figures.is_empty() {
+            let raster = RawPage::load(path)?;
+            write_figures(args.out.as_deref(), number, &raster, &read.figures)?;
+        }
+        figures.push(read.figures.iter().map(Figure::quad).collect());
+        pages.push(read.page);
+    }
+    finish_progress();
+
+    let (detection, recognition) = engine.models();
+    crate::output::print_ocr(
+        &pages,
+        &figures,
+        None,
+        detection,
+        recognition,
+        matches!(args.format, OcrFormatArg::Md),
+        args.out.as_deref(),
+        json,
+        pretty,
+    )
+    .map_err(CliError::from)
+}
+
 /// The device the run asks for. Whether this build can serve it is the
 /// engine's to say, so that the answer is the same however trakktor is
 /// embedded.
-fn device(args: &OcrPaddleArgs) -> Device {
-    match args.device {
+fn device(chosen: crate::cli::DeviceArg) -> Device {
+    match chosen {
         crate::cli::DeviceArg::Cpu => Device::Cpu,
         crate::cli::DeviceArg::Metal => Device::Metal,
     }
+}
+
+/// The live stderr line of a `ocr vl` run.
+///
+/// A generative reader spends tens of seconds on a page with nothing to show
+/// for it until the page is done, which is indistinguishable from being stuck.
+/// The line says which block of which page is being read and how long the run
+/// has been going; it is rewritten in place on a terminal and, off one,
+/// printed only when the block advances.
+fn block_progress(
+    started: Instant,
+    page: usize,
+    pages: usize,
+) -> impl FnMut(usize, usize) {
+    let interactive = std::io::stderr().is_terminal();
+    let mut last: Option<Instant> = None;
+    move |block: usize, blocks: usize| {
+        let now = Instant::now();
+        let too_soon = last.is_some_and(|at| {
+            now.duration_since(at) < Duration::from_millis(250)
+        });
+        // The first block of a page always prints: it is the only sign that
+        // the page changed.
+        if too_soon && block > 0 {
+            return;
+        }
+        last = Some(now);
+        let elapsed = started.elapsed().as_secs();
+        let where_ = if pages > 1 {
+            format!("page {page}/{pages}, ")
+        } else {
+            String::new()
+        };
+        let line = format!(
+            "reading {where_}block {}/{blocks} · {}:{:02}",
+            block + 1,
+            elapsed / 60,
+            elapsed % 60
+        );
+        let mut stderr = std::io::stderr();
+        if interactive {
+            let _ = write!(stderr, "\r\u{1b}[2K{line}");
+        } else {
+            let _ = writeln!(stderr, "{line}");
+        }
+        let _ = stderr.flush();
+    }
+}
+
+/// Clears the live line so the result does not land on top of it.
+fn finish_progress() {
+    if std::io::stderr().is_terminal() {
+        let mut stderr = std::io::stderr();
+        let _ = write!(stderr, "\r\u{1b}[2K");
+        let _ = stderr.flush();
+    }
+}
+
+/// Writes one page's block pictures.
+fn write_blocks(
+    dir: &Path,
+    page: usize,
+    read: &vl::Read,
+) -> Result<(), CliError> {
+    std::fs::create_dir_all(dir).map_err(|source| OcrError::Write {
+        path: dir.display().to_string(),
+        source,
+    })?;
+    for index in 0..read.crops() {
+        let path: PathBuf = dir.join(format!("p{page:03}-b{index:04}.png"));
+        std::fs::write(&path, read.crop_png(index)?).map_err(|source| {
+            OcrError::Write {
+                path: path.display().to_string(),
+                source,
+            }
+        })?;
+    }
+    Ok(())
 }
 
 /// The directory illustration crops go in, next to the Markdown they are

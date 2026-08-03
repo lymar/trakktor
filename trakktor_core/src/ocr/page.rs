@@ -63,6 +63,14 @@ pub struct Line {
     /// Whether the text-line orientation classifier turned this crop around
     /// before reading it.
     pub rotated: bool,
+    /// Whether the reading this line came from was **cut short** — the
+    /// generative engine started repeating itself and the answer was trimmed
+    /// back to where the repetition began.
+    ///
+    /// It is a property of a reading, not of a line, but it is reported per
+    /// line because a line is what the caller has. Always false for an engine
+    /// that classifies characters: that kind of recognizer cannot run away.
+    pub truncated: bool,
 }
 
 /// One page of a run.

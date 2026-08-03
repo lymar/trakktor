@@ -49,7 +49,8 @@ pub enum Device {
 }
 
 impl Device {
-    fn resolve(self) -> Result<CandleDevice, OcrError> {
+    /// The tensor library's device, or the reason this build cannot serve it.
+    pub fn resolve(self) -> Result<CandleDevice, OcrError> {
         match self {
             Self::Cpu => Ok(CandleDevice::Cpu),
             #[cfg(feature = "ocr-metal")]
@@ -282,6 +283,7 @@ impl Engine {
                 score: reading.score,
                 quad: boxes[index].0,
                 rotated: rotated[index],
+                truncated: false,
             });
             kept_crops
                 .push(std::mem::replace(&mut crops[index], Crop::empty()));
@@ -346,7 +348,7 @@ pub struct Read {
 /// generous on a scan and tight on a thumbnail — but it is what the reference
 /// does, and the reading order that matters for a multi-column page is built
 /// later, out of this one.
-fn sort_boxes(boxes: &mut [(Quad, f32)]) {
+pub fn sort_boxes(boxes: &mut [(Quad, f32)]) {
     boxes.sort_by(|a, b| {
         let (ay, ax) = (a.0.points[0].1, a.0.points[0].0);
         let (by, bx) = (b.0.points[0].1, b.0.points[0].0);

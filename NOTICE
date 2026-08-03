@@ -225,6 +225,40 @@ DBNet / DB (Differentiable Binarization) — Apache-2.0 License
   detector implements, and which `ocr paddle` ports, originate here;
   PaddleOCR's own post-processing file names both projects as its source.
 
+PaddleOCR-VL — Apache-2.0 License
+  Copyright (c) 2016 PaddlePaddle Authors
+  https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.6
+  The `ocr vl` engine ports the PaddleOCR-VL 1.6 document model: the
+  variable-resolution SigLIP-style vision tower with two-dimensional rotary
+  positions and interpolated position embeddings, the patch-merging projector,
+  and the ERNIE-4.5 decoder with three-dimensional multimodal rotary
+  positions, together with the published image preprocessing and prompt
+  format. Model weights are downloaded from Hugging Face
+  (huggingface.co/PaddlePaddle/PaddleOCR-VL-1.6) at runtime and are not
+  redistributed in this repository.
+
+ERNIE-4.5 — Apache-2.0 License
+  Copyright (c) 2025 Baidu, Inc.
+  https://huggingface.co/baidu/ERNIE-4.5-0.3B-Paddle
+  The text decoder PaddleOCR-VL is built on, and which `ocr vl` ports.
+
+Transformers — Apache-2.0 License
+  Copyright 2018- The Hugging Face team
+  https://github.com/huggingface/transformers
+  The `ocr vl` port follows this project's native `paddleocr_vl`
+  implementation where it differs from the checkpoint's own published code —
+  specifically in how the learned position grid of the vision tower is
+  interpolated onto an arbitrary patch grid.
+
+oar-ocr — Apache-2.0 License
+  Copyright (c) 2025 oar-ocr contributors
+  https://github.com/GreatV/oar-ocr
+  Prior art consulted while porting PaddleOCR-VL to candle: its `oar-ocr-vl`
+  crate carries a working candle implementation of the same checkpoint, and
+  the arrangement of the vision tower's rotary tables and the multimodal
+  rotary sections in `ocr vl` follow it. No code is vendored — the crate is
+  not a dependency of trakktor.
+
 
 -------------------------------------------------------------------------------
 2. Rust crate dependencies
@@ -272,5 +306,6 @@ https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode
 
 Apache License 2.0 (applies to the Apache-licensed works listed in section 1 —
 Vosk/icefall/sherpa-onnx, the 1-800-BAD-CODE punctuation model, Qwen3-TTS,
-ESpeech-TTS-1, PaddleOCR, DBNet/DB, and, at your option, candle and burn): see
+ESpeech-TTS-1, PaddleOCR, DBNet/DB, PaddleOCR-VL, ERNIE-4.5, Transformers,
+oar-ocr, and, at your option, candle and burn): see
 https://www.apache.org/licenses/LICENSE-2.0

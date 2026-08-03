@@ -66,6 +66,19 @@ Apache-licensed:
   by way of [DBNet.pytorch](https://github.com/WenmuZhou/DBNet.pytorch), which
   PaddleOCR names as its source. Please cite the PaddleOCR 3.0 technical report
   (arXiv:2507.05595) and the DB paper if you use these models.
+- [**`ocr vl`**](features/ocr/README.md) —
+  [PaddleOCR-VL 1.6](https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.6)
+  (Apache-2.0) by the PaddlePaddle authors: a 0.9-billion-parameter document
+  model — a variable-resolution vision tower, a patch-merging projector and an
+  [ERNIE-4.5](https://huggingface.co/baidu/ERNIE-4.5-0.3B-Paddle) (Apache-2.0)
+  decoder — ported to the same candle runtime. Where the checkpoint's own code
+  and the native implementation in
+  [Transformers](https://github.com/huggingface/transformers) (Apache-2.0)
+  disagree on interpolating the vision tower's position grid, the port follows
+  Transformers. [oar-ocr](https://github.com/GreatV/oar-ocr) (Apache-2.0) was
+  consulted as prior art for the same checkpoint on candle. Weights are
+  downloaded at runtime. Please cite the PaddleOCR-VL technical report
+  (arXiv:2510.14528) if you use this model.
 - [**`vad`**](features/vad/README.md), and
   [**`asr --vad`**](features/asr/whisper.md#voice-activity-detection-vad) —
   [Silero-VAD](https://github.com/snakers4/silero-vad)

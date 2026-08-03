@@ -109,11 +109,13 @@ tts-runtime = [
 # the candle one. Builds on top of the candle runtime (shared checkpoint reader
 # and model plumbing).
 tts-burn = ["tts-runtime", "dep:burn"]
-# The candle-backed OCR runtime (`ocr paddle`): text detection, text-line
-# orientation classification and text recognition, reading PaddleOCR's own
-# inference artifacts. Needs candle, `image` for decoding the page, `imageproc`
-# and `clipper2-rust` for the geometry around the networks. Off the default set
-# the crate builds without it.
+# The candle-backed OCR runtimes (`ocr paddle`, `ocr vl`): text detection,
+# text-line orientation classification and text recognition, reading
+# PaddleOCR's own inference artifacts; and the generative document model behind
+# `ocr vl`, which brings the `tokenizers` crate with it (it publishes its
+# vocabulary in that crate's own format). Needs candle, `image` for decoding
+# the page, `imageproc` and `clipper2-rust` for the geometry around the
+# networks. Off the default set the crate builds without it.
 ocr-runtime = [
     "dep:candle-core",
     "dep:candle-nn",
@@ -121,6 +123,7 @@ ocr-runtime = [
     "dep:image",
     "dep:imageproc",
     "dep:clipper2-rust",
+    "dep:tokenizers",
 ]
 # The burn-backed alternative OCR runtime, selectable at run time next to the
 # candle one. Builds on top of the candle runtime (shared artifact reader and

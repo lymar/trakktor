@@ -174,6 +174,12 @@ enum Command {
     /// Each page carries its text lines with their quadrangles and confidence;
     /// `--format md` assembles them into Markdown instead, with paragraphs and
     /// a reading order worked out from the geometry.
+    ///
+    /// Which engine: `paddle` for a page in one writing system it covers —
+    /// 13 MB and a second or two per page, and the right default. `vl` for a
+    /// page whose script it does not cover, for one that mixes scripts, or
+    /// when a table or a formula is wanted as structure rather than as lines —
+    /// about 1.9 GB downloaded once, and tens of seconds per page.
     Ocr {
         #[command(subcommand)]
         command: OcrCommand,
@@ -216,6 +222,21 @@ pub(crate) enum OcrCommand {
     /// first use into the model directory (~/.trakktor by default) and later
     /// runs reuse them. The full working set for a language is about 13 MB.
     Paddle(Box<OcrPaddleArgs>),
+
+    /// Read pages with the PaddleOCR-VL document model.
+    ///
+    /// A generative model that writes out the text it sees instead of picking
+    /// characters from a dictionary. It works out the writing system by
+    /// itself — so there is no `--lang` here — reads scripts the classic
+    /// pipeline has no model for at all, and can return a table as markup or a
+    /// formula as LaTeX. It finds the lines with the same detector `ocr paddle`
+    /// uses, groups them into blocks, and reads a block at a time: handed a
+    /// whole page it tends to get stuck repeating itself, and handed a single
+    /// line it has too little context to settle on a script.
+    ///
+    /// The price is the model: about 1.9 GB downloaded once, and tens of
+    /// seconds a page. Prefer `ocr paddle` unless you need what this buys.
+    Vl(Box<OcrVlArgs>),
 }
 
 #[derive(Args)]
@@ -320,6 +341,175 @@ pub(crate) struct OcrPaddleArgs {
         value_name = "device"
     )]
     pub(crate) device: DeviceArg,
+}
+
+#[derive(Args)]
+pub(crate) struct OcrVlArgs {
+    /// Page images to read, in reading order: each file is one page of the
+    /// result. PNG, JPEG, TIFF, WebP, BMP and GIF are understood.
+    #[arg(value_name = "page")]
+    pub(crate) pages: Vec<PathBuf>,
+
+    /// What to ask the model for. `ocr` reads the text and is the only one
+    /// that works block by block; the other three are asked of the page as a
+    /// whole, because a table or a formula is itself one block and cutting it
+    /// up destroys the structure that makes the question worth asking.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = OcrTaskArg::Ocr,
+        value_name = "task"
+    )]
+    pub(crate) task: OcrTaskArg,
+
+    /// Form of the text result: `lines` prints the recognized lines as they
+    /// were read, `md` assembles Markdown — paragraphs, reading order,
+    /// headings and footnotes worked out from the geometry of the page.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = OcrFormatArg::Lines,
+        value_name = "form"
+    )]
+    pub(crate) format: OcrFormatArg,
+
+    /// Write the text result to this file as well as reporting it. With
+    /// `--format md` any illustrations found on the page are written next to
+    /// it, in an `imgs` directory, and linked from the Markdown.
+    #[arg(long, value_name = "path")]
+    pub(crate) out: Option<PathBuf>,
+
+    /// Write every block as its own image into this directory — exactly the
+    /// picture the model was handed. The unit here is the block, not the line:
+    /// when a reading goes wrong, this is what shows whether the model was
+    /// given something coherent to read.
+    #[arg(long, value_name = "dir")]
+    pub(crate) crops: Option<PathBuf>,
+
+    /// Longest the answer for one block may get. It has to be generous, and
+    /// how generous depends on the script: Tibetan costs about five times more
+    /// tokens per character than English, so a ceiling that fits a Latin page
+    /// will cut a Tibetan one in half.
+    #[arg(long, default_value_t = 1024, value_name = "n")]
+    pub(crate) max_tokens: usize,
+
+    /// Blocks the model read with less mean token probability than this are
+    /// dropped. Zero keeps everything, which is what to use when text is
+    /// missing and you want to know whether it was read at all.
+    #[arg(long, default_value_t = 0.3, value_name = "p")]
+    pub(crate) drop_score: f32,
+
+    /// Read each page in a single call instead of block by block. Right when
+    /// the page already is one block; a way into a repetition loop when it is
+    /// not.
+    #[arg(long)]
+    pub(crate) whole_page: bool,
+
+    /// Longest side, in pixels, the page is scaled to before the lines are
+    /// detected. A line the detector misses is not merely unreported here — it
+    /// is a block the model never sees.
+    #[arg(long, default_value_t = 1440, value_name = "px")]
+    pub(crate) limit_side_len: usize,
+
+    /// The checkpoint to read with, or a directory holding one.
+    #[arg(long, value_name = "name|dir")]
+    pub(crate) model: Option<String>,
+
+    /// Text detection model, as in `ocr paddle`.
+    #[arg(long, value_name = "name|dir")]
+    pub(crate) det_model: Option<String>,
+
+    /// Probability above which a pixel counts as text when the detector's map
+    /// is thresholded.
+    #[arg(long, default_value_t = 0.3, value_name = "p")]
+    pub(crate) thresh: f32,
+
+    /// Mean probability a detected box must reach to be kept.
+    #[arg(long, default_value_t = 0.6, value_name = "p")]
+    pub(crate) box_thresh: f32,
+
+    /// How far a detected box is expanded before the block is cut out.
+    #[arg(long, default_value_t = 1.5, value_name = "ratio")]
+    pub(crate) unclip_ratio: f32,
+
+    /// Widest horizontal gap, in line heights, that still joins two detected
+    /// boxes into one line of text. The detector returns a line with wide word
+    /// spaces as several boxes, and a line handed to the model in halves is
+    /// read far worse than a whole one — but the same measurement is what
+    /// tells a word space from a column gutter, so raising this merges
+    /// columns.
+    #[arg(long, default_value_t = 1.2, value_name = "ratio")]
+    pub(crate) block_row_gap: f32,
+
+    /// Vertical gap, in line heights, that ends a block.
+    #[arg(long, default_value_t = 0.8, value_name = "ratio")]
+    pub(crate) block_gap: f32,
+
+    /// How much of the narrower box two lines must share horizontally to
+    /// belong to one block. This is what keeps two columns apart.
+    #[arg(long, default_value_t = 0.3, value_name = "ratio")]
+    pub(crate) block_overlap: f32,
+
+    /// How far a line's height may differ from its block's, either way. This
+    /// is the setting that decides how a page mixing two writing systems is
+    /// read: a line of a stacking script runs taller than an alphabetic line
+    /// of the same size, and the ratio is the only sign the geometry has that
+    /// the two are different kinds of text. Raise it and they join into one
+    /// block, which reads markedly worse.
+    #[arg(long, default_value_t = 1.5, value_name = "ratio")]
+    pub(crate) block_height: f32,
+
+    /// Most lines one block may hold. The answer grows with the block, and so
+    /// does the chance of the model losing its place in it.
+    #[arg(long, default_value_t = 12, value_name = "n")]
+    pub(crate) block_lines: usize,
+
+    /// How far, in line heights, the cut is grown past the detected boxes.
+    /// The detector marks a shrunken core of each line; without a margin the
+    /// tall letters go, and in a stacking script whole tiers of marks go with
+    /// them.
+    #[arg(long, default_value_t = 0.35, value_name = "ratio")]
+    pub(crate) block_padding: f32,
+
+    /// Runtime for the neural networks.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = RuntimeArg::Candle,
+        value_name = "engine"
+    )]
+    pub(crate) runtime: RuntimeArg,
+
+    /// Device to run on. This model is nearly two gigabytes of weights and an
+    /// autoregressive decode loop, so a GPU is the difference between a page
+    /// in seconds and a page in minutes — hence the default, where the build
+    /// has one.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = DEFAULT_VL_DEVICE,
+        value_name = "device"
+    )]
+    pub(crate) device: DeviceArg,
+}
+
+/// The device `ocr vl` runs on unless told otherwise.
+#[cfg(feature = "metal")]
+const DEFAULT_VL_DEVICE: DeviceArg = DeviceArg::Metal;
+#[cfg(not(feature = "metal"))]
+const DEFAULT_VL_DEVICE: DeviceArg = DeviceArg::Cpu;
+
+/// What `ocr vl` asks the model for.
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
+pub(crate) enum OcrTaskArg {
+    /// Read the text.
+    Ocr,
+    /// Read a table, as markup rather than as lines.
+    Table,
+    /// Read a formula as LaTeX.
+    Formula,
+    /// Describe a chart.
+    Chart,
 }
 
 /// Form of the text an OCR run reports.
@@ -1470,7 +1660,7 @@ pub(crate) enum TimestampsArg {
 /// The `--device` value of `asr whisper`.
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum DeviceArg {
-    /// The CPU (the default).
+    /// The CPU.
     Cpu,
     /// The GPU via Metal, on macOS.
     Metal,
@@ -2366,6 +2556,12 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
         },
         Command::Ocr { command } => match command {
             OcrCommand::Paddle(args) => crate::ocr::run_paddle(
+                args,
+                &global.model_dir()?,
+                global.json(),
+                global.pretty,
+            ),
+            OcrCommand::Vl(args) => crate::ocr::run_vl(
                 args,
                 &global.model_dir()?,
                 global.json(),

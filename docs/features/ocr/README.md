@@ -5,8 +5,16 @@
 > [Output and exit codes](../../../README.md#output-and-exit-codes).
 
 Text recognition over page images: scans, photographs of pages, screenshots.
-One engine ships today — [`paddle`](paddle.md), a port of the PP-OCRv5 pipeline —
-and it runs fully offline once its models are downloaded.
+Two engines, both fully offline once their models are downloaded.
+
+- [**`paddle`**](paddle.md) — a port of the PP-OCRv5 pipeline: a detector finds
+  the lines, a recognizer reads each one. About 13 MB per language, a second or
+  two per page. **The default choice.**
+- [**`vl`**](vl.md) — a port of the PaddleOCR-VL document model, which writes
+  out what it sees rather than picking characters from a dictionary. It works
+  out the writing system itself, reads scripts `paddle` has no model for, and
+  can return a table as markup or a formula as LaTeX. About 1.9 GB downloaded
+  once, and tens of seconds per page.
 
 ```sh
 trakktor ocr paddle page.png                     # JSON: pages, lines, boxes, scores
@@ -14,6 +22,9 @@ trakktor ocr paddle page.png --text              # the recognized lines
 trakktor ocr paddle p1.png p2.png p3.png         # one document, three pages
 trakktor ocr paddle scan.png --lang en           # pick the recognizer by language
 trakktor ocr paddle scan.png --format md --out doc.md
+
+trakktor ocr vl scan.png --text                  # no --lang: the model works it out
+trakktor ocr vl table.png --task table --text    # the table as markup
 ```
 
 ## Pages, not files
@@ -75,14 +86,20 @@ illustrations — see [the engine page](paddle.md#what-markdown-does-and-does-no
 
 ## Languages
 
-`--lang <code>` picks the recognizer; `--lang list` prints every code with the
-model it selects. Russian is the default.
+The two engines answer this question differently, and it is the main reason to
+pick one over the other.
 
-A recognizer is trained on one script and can only ever emit characters from its
-own dictionary. A page in a script the selected model does not cover comes back
+`paddle` takes `--lang <code>`, which picks the recognizer; `--lang list` prints
+every code with the model it selects, and Russian is the default. A recognizer
+is trained on one script and can only ever emit characters from its own
+dictionary. A page in a script the selected model does not cover comes back
 empty or as nonsense **even though its lines were found** — the detector is
-script-independent, the recognizer is not. There is no Tibetan recognizer in
-this line of models at all.
+script-independent, the recognizer is not. Some writing systems have no
+recognizer in this line of models at all.
+
+`vl` has no `--lang`: one model covers every writing system it knows and decides
+for itself what it is looking at, so a page that mixes two scripts is read as
+one page. That is what it is for.
 
 ## Checking a result
 
@@ -96,4 +113,9 @@ detector never found it or the recognizer could not read it.
 
 The other lever is `--limit-side-len`. It decides how far the page is scaled
 down before detection, and it is the setting that decides whether small type is
-found at all: see [the engine page](paddle.md#finding-small-type).
+found at all: see [the engine page](paddle.md#finding-small-type). Both engines
+have it, and it matters to `vl` twice over — a line the detector misses there is
+not merely unreported, it is a block the model never sees.
+
+For `vl`, `--crops` writes out **blocks** rather than lines: the regions the
+model was asked to make sense of. See [its page](vl.md#it-reads-blocks-not-lines).
