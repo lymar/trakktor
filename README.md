@@ -30,6 +30,15 @@ Each command is documented in full on its own page under
   Georgian, Armenian and a dozen more of the region, though no Latin-script
   language and so no English — at 48 kHz, and fast enough on a CPU to be the
   one to use without a GPU).
+- [**`ocr` — read text off images**](docs/features/ocr/README.md): scans,
+  photographs of pages and screenshots in, text out — page by page, so a
+  document is read by passing its pages in order. One engine,
+  [`paddle`](docs/features/ocr/paddle.md), a port of the PP-OCRv5 pipeline
+  (detection, then recognition) reading PaddleOCR's published models directly:
+  twelve recognizers covering Cyrillic, Latin, Arabic, Devanagari, Korean,
+  Thai, Greek, Tamil, Telugu and Chinese/Japanese, about 13 MB per language.
+  Output is JSON with every line's box and confidence, plain text, or Markdown
+  with paragraphs and a reading order worked out from the geometry.
 - [**`vad` — voice-activity audio editing**](docs/features/vad/README.md):
   find the speech in an audio file and report it, cut the silence out, or
   split the recording into clips.
@@ -129,8 +138,9 @@ read-state), `--model-dir <path>` (also `TRAKKTOR_MODEL_DIR`; default
 
 trakktor ports and builds on several open-source projects, all MIT- or
 Apache-licensed — Whisper, GigaAM, Vosk, Qwen3-TTS, F5-TTS and the ESpeech
-checkpoints, Vocos, Silero-VAD, Silero Stress, SaT / wtpsplit, and the
-1-800-BAD-CODE punctuation model, on the candle and burn runtimes. The full credits — with
+checkpoints, Vocos, Silero-VAD, Silero Stress, SaT / wtpsplit, the
+1-800-BAD-CODE punctuation model, and PaddleOCR (with DB, the detection
+algorithm it builds on), on the candle and burn runtimes. The full credits — with
 licenses, upstream links, and papers — live in
 [`docs/acknowledgments.md`](docs/acknowledgments.md); see [`NOTICE`](NOTICE)
 for the complete third-party attributions and license notices.

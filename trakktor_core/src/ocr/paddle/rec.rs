@@ -1,0 +1,818 @@
+//! The text recognizer: `eslav_PP-OCRv5_mobile_rec` and its siblings, which
+//! share its architecture down to the last weight name and differ only in how
+//! many classes their head reads.
+//!
+//! A recognizer takes a straightened text-line crop and returns one
+//! probability distribution per time step, which a greedy CTC pass turns into
+//! text. The network is the detector's backbone family in its recognition
+//! variant — a PP-LCNetV3 whose strides work on one axis at a time — under a
+//! small transformer neck and a single projection.
+//!
+//! Four things about it are easy to get wrong and are pinned here:
+//!
+//! - **The height is exactly 48.** The backbone halves it three times and the
+//!   closing pooling divides what is left by three, so 48 is the one height
+//!   that leaves a single row for the sequence to be read off. Any other height
+//!   leaves a feature map that cannot be a sequence at all.
+//! - **A crop is resized to a width its batch chooses, not its own.** The whole
+//!   batch is padded to one width, and a crop read across a wide, mostly empty
+//!   tensor reads differently from the same crop read across a snug one. The
+//!   batching policy is therefore part of the result rather than an
+//!   implementation detail; it lives in [`Recognizer::read`].
+//! - **The padding is mid-grey, not black.** Crops are normalized to `[-1, 1]`
+//!   and the padding is left at zero, which is where the value 127 lands.
+//! - **The softmax is inside the exported graph.** [`Recognizer::forward`]
+//!   returns probabilities; a second softmax would flatten them and quietly
+//!   ruin every confidence the pipeline reports.
+
+#[cfg(test)]
+mod tests;
+
+use candle_core::{D, Device, Tensor};
+
+use super::{
+    crop::Crop,
+    image::{CHANNELS, resize_linear},
+    net::{
+        Affine, BatchNorm, Conv, HARD_SIGMOID_SLOPE, LayerNorm, Linear, Loader,
+        SqueezeExcite, hardswish, subsample, swish,
+    },
+};
+use crate::ocr::error::OcrError;
+
+/// The height every crop is resized to.
+pub const HEIGHT: usize = 48;
+
+/// The width a batch is padded to when nothing in it is wider than the shape
+/// the models were exported for — 320 stands for an aspect ratio of `320 / 48`.
+pub const WIDTH: usize = 320;
+
+/// The widest a batch is ever padded to. A pathological crop — a printed rule
+/// mistaken for a line of text — would otherwise size the whole batch, and the
+/// exported graphs are not built for that either.
+pub const MAX_WIDTH: usize = 3200;
+
+/// Crops per forward pass.
+pub const BATCH: usize = 6;
+
+/// The CTC blank: class zero, the only ignored class, and it emits nothing.
+pub const BLANK: usize = 0;
+
+/// The narrowest input the network can read — below this the closing pooling
+/// has nothing to pool. Every batch is far wider, but the check is cheap and
+/// the alternative is an unhelpful failure deep inside a convolution.
+const MIN_WIDTH: usize = 8;
+
+/// The width the backbone hands to the neck.
+const BACKBONE: usize = 480;
+/// The width the neck works in, which is also what the head reads.
+const NECK: usize = 120;
+/// The squeezed width of the neck's reducing convolutions (`BACKBONE / 8`).
+const NECK_SQUEEZED: usize = 60;
+/// Attention heads and the width of each.
+const HEADS: usize = 8;
+const HEAD_WIDTH: usize = NECK / HEADS;
+/// The hidden width of a transformer block's feed-forward part.
+const HIDDEN: usize = 240;
+/// Transformer blocks in the neck.
+const DEPTH: usize = 2;
+/// The epsilon the four normalizations inside the blocks carry, and the
+/// different one the neck's closing normalization carries. One constant, two
+/// values, and a silently wrong output if they are unified.
+const BLOCK_EPS: f64 = 1e-5;
+const FINAL_EPS: f64 = 1e-6;
+
+/// One collapsed rep-layer: a convolution, its own pair of learned scalars, an
+/// activation and a second pair.
+///
+/// Unlike the detector's, none of these layers skips its activation. Upstream
+/// drops the activation of a layer whose stride is the number two, and the
+/// recognition variant strides one axis at a time — a pair that is never that
+/// number — so all twenty-eight of them keep it.
+#[derive(Debug)]
+struct RepLayer {
+    conv: Conv,
+    stride: (usize, usize),
+    affine: Affine,
+    act: Affine,
+}
+
+impl RepLayer {
+    /// `affine` is the index of the layer's own pair of scalars; the
+    /// activation's pair is always the one after it.
+    fn load(
+        loader: &Loader,
+        conv: &str,
+        dims: [usize; 4],
+        stride: (usize, usize),
+        padding: usize,
+        groups: usize,
+        affine: usize,
+    ) -> Result<Self, OcrError> {
+        Ok(Self {
+            conv: Conv::load(loader, conv, dims, 1, padding, groups)?,
+            stride,
+            affine: Affine::load(loader, affine)?,
+            act: Affine::load(loader, affine + 1)?,
+        })
+    }
+
+    fn forward(&self, x: &Tensor) -> Result<Tensor, OcrError> {
+        let y = subsample(&self.conv.forward(x)?, self.stride)?;
+        let y = self.affine.forward(&y)?;
+        self.act.forward(&hardswish(&y)?)
+    }
+}
+
+/// A backbone block: depthwise, optional gate, pointwise.
+#[derive(Debug)]
+struct Block {
+    depthwise: RepLayer,
+    excite: Option<SqueezeExcite>,
+    pointwise: RepLayer,
+}
+
+impl Block {
+    fn forward(&self, x: &Tensor) -> Result<Tensor, OcrError> {
+        let y = self.depthwise.forward(x)?;
+        let y = match &self.excite {
+            None => y,
+            Some(excite) => excite.forward(&y)?,
+        };
+        self.pointwise.forward(&y)
+    }
+}
+
+/// One row of the backbone's block table. The stride is per-axis: reading a
+/// text line means keeping its length and spending its height.
+struct BlockSpec {
+    /// Depthwise kernel size.
+    kernel: usize,
+    stride: (usize, usize),
+    in_channels: usize,
+    out_channels: usize,
+    excite: bool,
+}
+
+/// The fourteen blocks of the recognition backbone, with the channel counts its
+/// scale works out to. Weight names run in step with the index: the depthwise
+/// convolution of block `i` is `conv2d_{136 + 2i}`, the pointwise one follows
+/// it, and the four learned-scalar blocks are `4i .. 4i + 3`.
+///
+/// The height falls 48 → 24 (the stem) → 12 → 6 → 3, while the width is halved
+/// exactly once inside the blocks, by the sixth. A backbone copied from the
+/// detector would halve the width four times over and leave a sequence far too
+/// short to hold the text.
+const BLOCKS: [BlockSpec; 14] = [
+    BlockSpec {
+        kernel: 3,
+        stride: (1, 1),
+        in_channels: 16,
+        out_channels: 32,
+        excite: false,
+    },
+    BlockSpec {
+        kernel: 3,
+        stride: (1, 1),
+        in_channels: 32,
+        out_channels: 64,
+        excite: false,
+    },
+    BlockSpec {
+        kernel: 3,
+        stride: (1, 1),
+        in_channels: 64,
+        out_channels: 64,
+        excite: false,
+    },
+    BlockSpec {
+        kernel: 3,
+        stride: (2, 1),
+        in_channels: 64,
+        out_channels: 128,
+        excite: false,
+    },
+    BlockSpec {
+        kernel: 3,
+        stride: (1, 1),
+        in_channels: 128,
+        out_channels: 128,
+        excite: false,
+    },
+    // The one width reduction, and the last block of this stage to keep a 3x3
+    // depthwise kernel.
+    BlockSpec {
+        kernel: 3,
+        stride: (1, 2),
+        in_channels: 128,
+        out_channels: 240,
+        excite: false,
+    },
+    BlockSpec {
+        kernel: 5,
+        stride: (1, 1),
+        in_channels: 240,
+        out_channels: 240,
+        excite: false,
+    },
+    BlockSpec {
+        kernel: 5,
+        stride: (1, 1),
+        in_channels: 240,
+        out_channels: 240,
+        excite: false,
+    },
+    BlockSpec {
+        kernel: 5,
+        stride: (1, 1),
+        in_channels: 240,
+        out_channels: 240,
+        excite: false,
+    },
+    BlockSpec {
+        kernel: 5,
+        stride: (1, 1),
+        in_channels: 240,
+        out_channels: 240,
+        excite: false,
+    },
+    BlockSpec {
+        kernel: 5,
+        stride: (2, 1),
+        in_channels: 240,
+        out_channels: 480,
+        excite: true,
+    },
+    BlockSpec {
+        kernel: 5,
+        stride: (1, 1),
+        in_channels: 480,
+        out_channels: 480,
+        excite: true,
+    },
+    BlockSpec {
+        kernel: 5,
+        stride: (2, 1),
+        in_channels: 480,
+        out_channels: 480,
+        excite: false,
+    },
+    BlockSpec {
+        kernel: 5,
+        stride: (1, 1),
+        in_channels: 480,
+        out_channels: 480,
+        excite: false,
+    },
+];
+
+/// The two blocks that carry a squeeze-and-excitation gate name their
+/// convolutions out of step with everything else.
+const EXCITE_CONVS: [(usize, &str, &str); 2] = [
+    (10, "conv2d_96", "conv2d_97"),
+    (11, "conv2d_107", "conv2d_108"),
+];
+
+/// A neck convolution: no bias, batch normalization, and a sigmoid-weighted
+/// activation — the neck's activation is not the backbone's hard one.
+///
+/// Two of the five have a kernel one row tall and three columns wide, padded
+/// along the width alone. A convolution takes one padding for both axes, so
+/// that padding is added to the input instead.
+#[derive(Debug)]
+struct ConvNorm {
+    conv: Conv,
+    pad: usize,
+    norm: BatchNorm,
+}
+
+impl ConvNorm {
+    fn load(
+        loader: &Loader,
+        conv: &str,
+        norm: &str,
+        dims: [usize; 4],
+    ) -> Result<Self, OcrError> {
+        Ok(Self {
+            conv: Conv::load(loader, conv, dims, 1, 0, 1)?,
+            pad: dims[3] / 2,
+            norm: BatchNorm::load(loader, norm, dims[0])?,
+        })
+    }
+
+    fn forward(&self, x: &Tensor) -> Result<Tensor, OcrError> {
+        let padded = match self.pad {
+            0 => x.clone(),
+            pad => x.pad_with_zeros(3, pad, pad)?,
+        };
+        let y = self.norm.forward(&self.conv.forward(&padded)?)?;
+        swish(&y)
+    }
+}
+
+/// Global self-attention over the sequence: no mask, no positional encoding.
+#[derive(Debug)]
+struct Attention {
+    qkv: Linear,
+    proj: Linear,
+}
+
+impl Attention {
+    fn load(loader: &Loader, qkv: &str, proj: &str) -> Result<Self, OcrError> {
+        Ok(Self {
+            qkv: Linear::load(loader, qkv, NECK, 3 * NECK)?,
+            proj: Linear::load(loader, proj, NECK, NECK)?,
+        })
+    }
+
+    fn forward(&self, x: &Tensor) -> Result<Tensor, OcrError> {
+        let (batch, steps, _) = x.dims3()?;
+        // One projection produces all three sequences at once, so splitting it
+        // means reading the heads out of the middle of the width.
+        let qkv = self
+            .qkv
+            .forward(x)?
+            .reshape((batch, steps, 3, HEADS, HEAD_WIDTH))?
+            .permute((2, 0, 3, 1, 4))?;
+        // The query is scaled before the product, not the product after it.
+        let scale = (HEAD_WIDTH as f64).powf(-0.5);
+        let q = qkv.get(0)?.contiguous()?.affine(scale, 0.0)?;
+        let k = qkv.get(1)?.contiguous()?;
+        let v = qkv.get(2)?.contiguous()?;
+        let across = k.transpose(D::Minus2, D::Minus1)?.contiguous()?;
+        let weights = candle_nn::ops::softmax_last_dim(&q.matmul(&across)?)?;
+        let y = weights
+            .matmul(&v)?
+            .transpose(1, 2)?
+            .reshape((batch, steps, NECK))?;
+        self.proj.forward(&y)
+    }
+}
+
+/// One transformer block: attention and a feed-forward part, each normalized
+/// before it runs and added back to what went into it.
+#[derive(Debug)]
+struct EncoderBlock {
+    norm1: LayerNorm,
+    attn: Attention,
+    norm2: LayerNorm,
+    fc1: Linear,
+    fc2: Linear,
+}
+
+impl EncoderBlock {
+    /// The block at `index` owns normalizations `2i` and `2i + 1` and the four
+    /// projections `4i .. 4i + 3`.
+    fn load(loader: &Loader, index: usize) -> Result<Self, OcrError> {
+        let norm = |offset: usize| {
+            LayerNorm::load(
+                loader,
+                &format!("layer_norm_{}", 2 * index + offset),
+                NECK,
+                BLOCK_EPS,
+            )
+        };
+        let name = |offset: usize| format!("linear_{}", 4 * index + offset);
+        Ok(Self {
+            norm1: norm(0)?,
+            attn: Attention::load(loader, &name(0), &name(1))?,
+            norm2: norm(1)?,
+            fc1: Linear::load(loader, &name(2), NECK, HIDDEN)?,
+            fc2: Linear::load(loader, &name(3), HIDDEN, NECK)?,
+        })
+    }
+
+    fn forward(&self, x: &Tensor) -> Result<Tensor, OcrError> {
+        let y = self.attn.forward(&self.norm1.forward(x)?)?;
+        let x = (x + y)?;
+        let y = self.fc1.forward(&self.norm2.forward(&x)?)?;
+        let y = self.fc2.forward(&swish(&y)?)?;
+        Ok((&x + &y)?)
+    }
+}
+
+/// The recognizer.
+#[derive(Debug)]
+pub struct Recognizer {
+    device: Device,
+    stem: Conv,
+    stem_norm: BatchNorm,
+    blocks: Vec<Block>,
+    /// The neck narrows the backbone's width to the one the transformer works
+    /// in,
+    reduce: [ConvNorm; 2],
+    encoder: Vec<EncoderBlock>,
+    norm: LayerNorm,
+    /// widens what the transformer made of it back to the backbone's width so
+    /// that the two can be laid side by side,
+    restore: ConvNorm,
+    /// and narrows the pair once more for the head to read.
+    fuse: [ConvNorm; 2],
+    head: Linear,
+    classes: usize,
+}
+
+impl Recognizer {
+    pub fn load(loader: &Loader) -> Result<Self, OcrError> {
+        let classes = loader.artifact().output_classes().ok_or_else(|| {
+            OcrError::Artifact(
+                "the recognizer does not declare how many classes it reads"
+                    .into(),
+            )
+        })?;
+
+        let stem = Conv::load(loader, "conv2d_0", [16, 3, 3, 3], 2, 1, 1)?;
+        let stem_norm = BatchNorm::load(loader, "batch_norm2d_0", 16)?;
+
+        let mut blocks = Vec::with_capacity(BLOCKS.len());
+        for (i, spec) in BLOCKS.iter().enumerate() {
+            let depthwise = RepLayer::load(
+                loader,
+                &format!("conv2d_{}", 136 + 2 * i),
+                [spec.in_channels, 1, spec.kernel, spec.kernel],
+                spec.stride,
+                spec.kernel / 2,
+                spec.in_channels,
+                4 * i,
+            )?;
+            let pointwise = RepLayer::load(
+                loader,
+                &format!("conv2d_{}", 137 + 2 * i),
+                [spec.out_channels, spec.in_channels, 1, 1],
+                (1, 1),
+                0,
+                1,
+                4 * i + 2,
+            )?;
+            let excite = if spec.excite {
+                let (_, down, up) = EXCITE_CONVS
+                    .iter()
+                    .find(|(block, _, _)| *block == i)
+                    .ok_or_else(|| {
+                        OcrError::Artifact(format!(
+                            "block {i} wants a squeeze-and-excitation gate \
+                             that the model does not name"
+                        ))
+                    })?;
+                Some(SqueezeExcite::load(
+                    loader,
+                    down,
+                    up,
+                    spec.in_channels,
+                    spec.in_channels / 4,
+                    HARD_SIGMOID_SLOPE,
+                )?)
+            } else {
+                None
+            };
+            blocks.push(Block {
+                depthwise,
+                excite,
+                pointwise,
+            });
+        }
+
+        let mut encoder = Vec::with_capacity(DEPTH);
+        for index in 0..DEPTH {
+            encoder.push(EncoderBlock::load(loader, index)?);
+        }
+
+        Ok(Self {
+            device: loader.device().clone(),
+            stem,
+            stem_norm,
+            blocks,
+            reduce: [
+                ConvNorm::load(
+                    loader,
+                    "conv2d_131",
+                    "batch_norm2d_146",
+                    [NECK_SQUEEZED, BACKBONE, 1, 3],
+                )?,
+                ConvNorm::load(
+                    loader,
+                    "conv2d_132",
+                    "batch_norm2d_147",
+                    [NECK, NECK_SQUEEZED, 1, 1],
+                )?,
+            ],
+            encoder,
+            norm: LayerNorm::load(loader, "layer_norm_4", NECK, FINAL_EPS)?,
+            restore: ConvNorm::load(
+                loader,
+                "conv2d_133",
+                "batch_norm2d_148",
+                [BACKBONE, NECK, 1, 1],
+            )?,
+            fuse: [
+                ConvNorm::load(
+                    loader,
+                    "conv2d_134",
+                    "batch_norm2d_149",
+                    [NECK_SQUEEZED, 2 * BACKBONE, 1, 3],
+                )?,
+                ConvNorm::load(
+                    loader,
+                    "conv2d_135",
+                    "batch_norm2d_150",
+                    [NECK, NECK_SQUEEZED, 1, 1],
+                )?,
+            ],
+            head: Linear::load(loader, "linear_8", NECK, classes)?,
+            classes,
+        })
+    }
+
+    /// How many classes the head reads, the blank and the space included.
+    pub fn classes(&self) -> usize { self.classes }
+
+    /// The device the weights live on.
+    pub fn device(&self) -> &Device { &self.device }
+
+    /// Runs the network over a batch of normalized crops.
+    ///
+    /// The input is `[batch, 3, 48, width]` in `[-1, 1]`, blue channel first;
+    /// the result is `[batch, steps, classes]` of probabilities — the softmax
+    /// is inside the exported graph, so do not apply it again.
+    pub fn forward(&self, x: &Tensor) -> Result<Tensor, OcrError> {
+        let (_, _, height, width) = x.dims4()?;
+        if height != HEIGHT {
+            return Err(OcrError::Runtime(format!(
+                "the recognizer reads crops {HEIGHT} pixels tall, got {height}"
+            )));
+        }
+        if width < MIN_WIDTH {
+            return Err(OcrError::Runtime(format!(
+                "the recognizer needs at least {MIN_WIDTH} pixels of width, \
+                 got {width}"
+            )));
+        }
+
+        // The stem carries no activation, unlike every convolution after it.
+        let mut y = self.stem_norm.forward(&self.stem.forward(x)?)?;
+        for block in &self.blocks {
+            y = block.forward(&y)?;
+        }
+        // Three rows into one and two columns into one: the feature map
+        // becomes a single row, and the sequence gets its length.
+        let pooled = y.avg_pool2d((3, 2))?;
+
+        let mut z = pooled.clone();
+        for layer in &self.reduce {
+            z = layer.forward(&z)?;
+        }
+        let (batch, _, _, steps) = z.dims4()?;
+        let mut sequence = z
+            .reshape((batch, NECK, steps))?
+            .transpose(1, 2)?
+            .contiguous()?;
+        for block in &self.encoder {
+            sequence = block.forward(&sequence)?;
+        }
+        sequence = self.norm.forward(&sequence)?;
+        z = sequence
+            .transpose(1, 2)?
+            .contiguous()?
+            .reshape((batch, NECK, 1, steps))?;
+        z = self.restore.forward(&z)?;
+        // What the backbone produced comes first, what the transformer made of
+        // it second.
+        z = Tensor::cat(&[&pooled, &z], 1)?;
+        for layer in &self.fuse {
+            z = layer.forward(&z)?;
+        }
+
+        let sequence = z
+            .reshape((batch, NECK, steps))?
+            .transpose(1, 2)?
+            .contiguous()?;
+        let logits = self.head.forward(&sequence)?;
+        Ok(candle_nn::ops::softmax_last_dim(&logits)?)
+    }
+
+    /// Reads a page's crops and returns one reading per crop, in the order the
+    /// crops were given.
+    ///
+    /// Crops reach the network sorted by aspect ratio, in groups of [`BATCH`],
+    /// because a group is padded to a single width and that width changes what
+    /// the network reads: pack a short crop together with a long one and the
+    /// short one is read across a tensor that is mostly padding. Sorting keeps
+    /// crops of similar shape together, and the sort is stable, so crops of
+    /// equal ratio keep page order and a run repeats itself.
+    ///
+    /// A crop with no pixels is never read; its reading is the empty one.
+    pub fn read(
+        &self,
+        crops: &[Crop],
+        labels: &Labels,
+    ) -> Result<Vec<Reading>, OcrError> {
+        if labels.len() != self.classes {
+            return Err(OcrError::Artifact(format!(
+                "the label table holds {} classes but the recognizer reads {}",
+                labels.len(),
+                self.classes
+            )));
+        }
+        let mut readings = vec![Reading::default(); crops.len()];
+        let mut order: Vec<usize> =
+            (0..crops.len()).filter(|i| readable(&crops[*i])).collect();
+        order.sort_by(|a, b| {
+            ratio(&crops[*a])
+                .partial_cmp(&ratio(&crops[*b]))
+                .expect("a readable crop has a finite aspect ratio")
+        });
+
+        for group in order.chunks(BATCH) {
+            let batch: Vec<&Crop> = group.iter().map(|i| &crops[*i]).collect();
+            let input = batch_tensor(&batch, &self.device)?;
+            let probabilities = self.forward(&input)?;
+            let (_, steps, classes) = probabilities.dims3()?;
+            let flat = probabilities.flatten_all()?.to_vec1::<f32>()?;
+            for (row, index) in group.iter().enumerate() {
+                let from = row * steps * classes;
+                let rows = &flat[from..from + steps * classes];
+                readings[*index] = decode(rows, classes, labels);
+            }
+        }
+        Ok(readings)
+    }
+}
+
+/// Whether a crop can be read at all: it has an extent, and enough bytes to
+/// back the extent it claims.
+///
+/// A quadrangle that straightens into nothing is the caller's to drop, but a
+/// resize must never be asked to read past the end of one.
+pub(super) fn readable(crop: &Crop) -> bool {
+    crop.width > 0 &&
+        crop.height > 0 &&
+        crop.bgr.len() >= crop.width * crop.height * CHANNELS
+}
+
+/// How many times wider than tall a crop is. Meaningless for a crop that is
+/// not [`readable`], which is why nothing asks one.
+fn ratio(crop: &Crop) -> f64 { crop.width as f64 / crop.height as f64 }
+
+/// The width a batch of crops is padded to.
+///
+/// The widest crop in the batch decides, but never below the shape the models
+/// were exported for and never above [`MAX_WIDTH`]. The multiplication
+/// truncates, so an aspect ratio a hair under a whole pixel does not buy one.
+pub fn batch_width(crops: &[&Crop]) -> usize {
+    let mut widest = WIDTH as f64 / HEIGHT as f64;
+    for crop in crops {
+        if readable(crop) {
+            widest = widest.max(ratio(crop));
+        }
+    }
+    ((HEIGHT as f64 * widest) as usize).min(MAX_WIDTH)
+}
+
+/// Turns a batch of crops into the tensor the network reads: `[batch, 3, 48,
+/// width]`, normalized to `[-1, 1]`, blue channel first.
+///
+/// A crop keeps its aspect ratio until it would run past the batch width, at
+/// which point it is squeezed to fit; whatever is left over on the right stays
+/// at zero, which on this scale is mid-grey rather than black.
+pub fn batch_tensor(
+    crops: &[&Crop],
+    device: &Device,
+) -> Result<Tensor, OcrError> {
+    let width = batch_width(crops);
+    let mut data = vec![0f32; crops.len() * CHANNELS * HEIGHT * width];
+    for (n, crop) in crops.iter().enumerate() {
+        if !readable(crop) {
+            continue;
+        }
+        let scaled = (HEIGHT as f64 * ratio(crop)).ceil() as usize;
+        let taken = scaled.clamp(1, width);
+        let resized = resize_linear(
+            &crop.bgr,
+            crop.width,
+            crop.height,
+            CHANNELS,
+            taken,
+            HEIGHT,
+        );
+        for y in 0..HEIGHT {
+            for x in 0..taken {
+                for c in 0..CHANNELS {
+                    let mut value =
+                        f32::from(resized[(y * taken + x) * CHANNELS + c]) /
+                            255.0;
+                    value -= 0.5;
+                    value /= 0.5;
+                    data[((n * CHANNELS + c) * HEIGHT + y) * width + x] = value;
+                }
+            }
+        }
+    }
+    let shape = (crops.len(), CHANNELS, HEIGHT, width);
+    Ok(Tensor::from_vec(data, shape, device)?)
+}
+
+/// What the recognizer made of one crop.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Reading {
+    pub text: String,
+    /// Mean probability of the steps that were kept, and zero when none were.
+    pub score: f32,
+}
+
+/// The class table a CTC recognizer decodes against: the blank, the model's
+/// own character dictionary, and the space.
+///
+/// The order is not a convention this port chose — the models were trained
+/// against it. The blank is class zero and emits nothing, the dictionary
+/// follows in file order, and the space is appended *after* the dictionary
+/// rather than sorted into it, so it is always the last class. Getting the
+/// order wrong shifts every character the model emits.
+#[derive(Debug, Clone)]
+pub struct Labels {
+    table: Vec<String>,
+}
+
+impl Labels {
+    /// Builds the table from a model's own dictionary and checks it against
+    /// the class count its graph declares.
+    ///
+    /// The two live in different files, and a mismatch means they do not
+    /// belong together — worth reporting here rather than as text that decodes
+    /// into the wrong alphabet.
+    pub fn new(
+        characters: &[String],
+        classes: usize,
+    ) -> Result<Self, OcrError> {
+        if characters.len() + 2 != classes {
+            return Err(OcrError::Artifact(format!(
+                "the character dictionary holds {} entries, which with the \
+                 blank and the space makes {}, but the recognizer reads {} \
+                 classes",
+                characters.len(),
+                characters.len() + 2,
+                classes
+            )));
+        }
+        let mut table = Vec::with_capacity(classes);
+        table.push(String::new());
+        table.extend(characters.iter().cloned());
+        table.push(" ".to_string());
+        Ok(Self { table })
+    }
+
+    /// How many classes the table covers.
+    pub fn len(&self) -> usize { self.table.len() }
+
+    pub fn is_empty(&self) -> bool { self.table.is_empty() }
+
+    /// What a class emits. The blank, and anything the table does not cover,
+    /// emits nothing.
+    pub fn text(&self, class: usize) -> &str {
+        self.table
+            .get(class)
+            .map(String::as_str)
+            .unwrap_or_default()
+    }
+}
+
+/// Greedy CTC decoding of one crop's probabilities, laid out step after step.
+///
+/// At every step the likeliest class wins, ties going to the lower class the
+/// way the reference's arg-max does. Repeats collapse *before* blanks are
+/// dropped — so two identical steps in a row are one character, while the same
+/// two separated by a blank are two — and the score is the mean probability of
+/// the steps that survive both rules.
+pub fn decode(
+    probabilities: &[f32],
+    classes: usize,
+    labels: &Labels,
+) -> Reading {
+    let mut text = String::new();
+    let mut total = 0f64;
+    let mut kept = 0usize;
+    let mut previous = usize::MAX;
+    for step in probabilities.chunks_exact(classes) {
+        let mut best = 0usize;
+        for (class, probability) in step.iter().enumerate() {
+            if *probability > step[best] {
+                best = class;
+            }
+        }
+        let repeated = best == previous;
+        previous = best;
+        if repeated || best == BLANK {
+            continue;
+        }
+        text.push_str(labels.text(best));
+        total += f64::from(step[best]);
+        kept += 1;
+    }
+    Reading {
+        text,
+        score: if kept == 0 {
+            0.0
+        } else {
+            (total / kept as f64) as f32
+        },
+    }
+}

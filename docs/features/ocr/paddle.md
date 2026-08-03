@@ -1,0 +1,99 @@
+# `ocr paddle` — the PP-OCRv5 pipeline
+
+> Part of [`ocr`](README.md); the shared page model, output shape and language
+> rules are described there.
+
+Three networks in sequence: a detector finds the text lines on the page and
+returns a quadrangle for each, every quadrangle is straightened out of the page
+into an upright crop, and a recognizer reads the crop. An optional third model
+decides whether a crop is upside down before it is read.
+
+trakktor runs PaddleOCR's own published artifacts directly — the graph and the
+weights exactly as they are published — so there is no conversion step, no
+Python and no ONNX runtime in the picture. The full working set for a language
+is about 13 MB, downloaded on first use into `~/.trakktor/ocr/paddle/`.
+
+## Models
+
+```
+--lang <code>              # default: ru — picks the recognizer
+--det-model <name|dir>     # default: PP-OCRv5_mobile_det
+--rec-model <name|dir>     # overrides what --lang chose
+```
+
+One detector serves every language: it looks for text as such and does not care
+what script it is. Twelve recognizers cover the scripts between them — Eastern
+Slavic, wider Cyrillic, Latin, English, Arabic, Devanagari, Korean, Thai, Greek,
+Telugu, Tamil, and Chinese/Japanese. They share an architecture and differ only
+in the alphabet they were trained on.
+
+Either flag also takes a **path** to a directory holding a model's
+`inference.json`, `inference.pdiparams` and `config.json`, which is how to run a
+model that is not in the catalog.
+
+### The dictionary is the ceiling
+
+A recognizer can only emit characters from its own dictionary, and the
+dictionaries are not supersets of one another. The English one has no en dash,
+so `pp. 358–359` comes back as `pp. 358359`; the Latin one has none either, but
+does have `ß` and `ā`; the Eastern Slavic one has the dash. A character outside
+the dictionary is simply missing from the output, which reads like a recognition
+failure and is not one.
+
+## Finding small type
+
+```
+--limit-side-len <px>      # default: 960
+```
+
+The page is scaled so that its longest side is at most this many pixels before
+detection. **This is the single most consequential setting.** An A4 page scanned
+at 300 dpi is 3508 pixels tall, so the default shrinks it nearly fourfold — and
+at that size footnote-sized text stops being detected at all, silently: the
+lines are absent from the result rather than wrong in it.
+
+On a dense page, 1536 or 2048 finds those lines. The cost rises roughly with the
+area, so four times the side length is four times the detection time.
+
+## Tuning the detector
+
+```
+--thresh <p>               # default: 0.3   pixel is text above this probability
+--box-thresh <p>           # default: 0.6   mean probability a box must reach
+--unclip-ratio <ratio>     # default: 1.5   how far a box is expanded
+--drop-score <p>           # default: 0.5   drop lines read with less confidence
+```
+
+The detector marks a shrunken core of each line rather than its full extent, so
+some expansion is always needed; more of it captures tall letters and accents,
+and eventually the neighbouring line. `--drop-score 0` keeps everything, which
+is the setting to use when a line is missing and the question is whether it was
+found at all.
+
+```
+--textline-orientation     # off by default
+```
+
+adds the classifier that turns an upside-down line around. It costs a little per
+line and rarely fires on a scanned book.
+
+## What Markdown does and does not do
+
+`--format md` works from geometry alone: line spacing, indents, the width of the
+column and where each line ends. That is enough for reading order (including
+columns), paragraphs, joining hyphenated line breaks, and continuing a paragraph
+across a page break.
+
+It is **not** enough to tell what a block *is*. Headings are guessed from
+centring and isolation rather than known; running heads, page numbers and
+footnotes are separated by position and type size; tables come out as text; and
+illustrations are found by looking for ink that no text box covers, which finds
+pictures but also finds large tables and display formulas. Deciding those
+properly needs a document-layout model, which this engine does not carry yet.
+
+## Speed
+
+The recognizer, not the detector, is where the time goes: on a CPU the detector
+takes about a second and a half for an A4 page at `--limit-side-len 1920`, and
+the recognizer about a third of a second per line — so a 45-line page is around
+seventeen seconds. `--device metal` moves both onto the GPU.

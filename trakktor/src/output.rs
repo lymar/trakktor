@@ -1278,3 +1278,124 @@ fn render_json(value: &Value, pretty: bool) -> String {
 
 #[cfg(test)]
 mod tests;
+
+/// Prints the result of an OCR run. JSON: one object for the run, holding the
+/// pages, each page's lines with their quadrangles and confidences, and the
+/// models that produced them. Text: the page text, or the assembled Markdown.
+///
+/// The page separator goes to `stdout` as part of the data rather than to
+/// `stderr` as diagnostics: without it the text of a multi-page document
+/// cannot be taken apart again.
+#[allow(clippy::too_many_arguments)]
+pub fn print_ocr(
+    pages: &[trakktor_core::ocr::Page],
+    figures: &[Vec<trakktor_core::ocr::Quad>],
+    language: &str,
+    detection: &str,
+    recognition: &str,
+    markdown: bool,
+    out: Option<&std::path::Path>,
+    json: bool,
+    pretty: bool,
+) -> Result<(), trakktor_core::ocr::OcrError> {
+    use trakktor_core::ocr::{layout, markdown as md};
+
+    // Running heads and page numbers are only recognizable across a
+    // document, so the repeated text is found once and handed to every page.
+    let repeated = layout::document_furniture(pages);
+    let settings = layout::Settings::default();
+    let analysed: Vec<(trakktor_core::ocr::Page, layout::Layout)> = pages
+        .iter()
+        .enumerate()
+        .map(|(at, page)| {
+            let layout = layout::analyse(page, &repeated, &settings);
+            let found = figures.get(at).cloned().unwrap_or_default();
+            (page.clone(), layout.with_figures(found))
+        })
+        .collect();
+
+    let text = if markdown {
+        let options = md::Options {
+            page_separators: pages.len() > 1,
+            // The links are only worth writing once the crops are on disk,
+            // which is what a run writing the Markdown to a file does.
+            image_dir: out.map(|_| crate::ocr::IMAGE_DIR.to_string()),
+        };
+        md::render(&analysed, &options)
+    } else {
+        md::plain(pages)
+    };
+
+    if let Some(path) = out {
+        std::fs::write(path, &text).map_err(|source| {
+            trakktor_core::ocr::OcrError::Write {
+                path: path.display().to_string(),
+                source,
+            }
+        })?;
+    }
+
+    if json {
+        let pages_json: Vec<Value> = pages
+            .iter()
+            .map(|page| {
+                json!({
+                    "number": page.number,
+                    "source": page.source,
+                    "width": page.width,
+                    "height": page.height,
+                    "text": page.text(),
+                    "lines": page.lines.iter().map(|line| json!({
+                        "text": line.text,
+                        "score": round4(line.score),
+                        "quad": line.quad.points.iter()
+                            .map(|(x, y)| json!([round1(*x), round1(*y)]))
+                            .collect::<Vec<_>>(),
+                        "rotated": line.rotated,
+                    })).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        let mut envelope = json!({
+            "pages": pages_json,
+            "language": language,
+            "models": { "detection": detection, "recognition": recognition },
+        });
+        if markdown {
+            envelope["markdown"] = json!(text);
+        }
+        if let Some(path) = out {
+            envelope["out"] = json!(path.display().to_string());
+        }
+        print_json(&envelope, pretty);
+        return Ok(());
+    }
+
+    print!("{text}");
+    Ok(())
+}
+
+/// Prints the language codes an OCR engine covers, with the recognizer each
+/// one selects — the mapping is many-to-one, and knowing which model a code
+/// lands on is what tells you which alphabet you will get.
+pub fn print_ocr_languages(
+    languages: &[(&str, &str)],
+    json: bool,
+    pretty: bool,
+) {
+    if json {
+        let items: Vec<Value> = languages
+            .iter()
+            .map(|(code, model)| json!({ "code": code, "model": model }))
+            .collect();
+        print_json(&json!(items), pretty);
+        return;
+    }
+    for (code, model) in languages {
+        println!("{code}\t{model}");
+    }
+}
+
+fn round4(value: f32) -> f64 { (f64::from(value) * 1e4).round() / 1e4 }
+
+fn round1(value: f32) -> f64 { (f64::from(value) * 10.0).round() / 10.0 }

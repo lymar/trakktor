@@ -26,15 +26,16 @@ const DEFAULT_MODEL_DIR_NAME: &str = ".trakktor";
 
 /// A predictable, automation-friendly CLI toolbox for coding agents (Claude
 /// Code, OpenCode, etc.): speech-to-text and text-to-speech, voice-activity
-/// audio editing, feeds, text structuring, punctuation and Russian stress
-/// marking, and more — machine-readable output, stable flags, and meaningful
-/// exit codes. Reach for it when a task needs one of these helpers, such as
-/// fetching a feed's unread items, transcribing an audio file to timestamped
-/// text, reading a text or Markdown file aloud into an audio file — in a preset
-/// voice or in one cloned from a sample recording — cutting the silence out of
-/// a recording, restoring punctuation to a raw transcript, splitting a
-/// transcript into readable paragraphs, or marking where the stress falls in
-/// Russian text.
+/// audio editing, text recognition on page images, feeds, text structuring,
+/// punctuation and Russian stress marking, and more — machine-readable output,
+/// stable flags, and meaningful exit codes. Reach for it when a task needs one
+/// of these helpers, such as fetching a feed's unread items, transcribing an
+/// audio file to timestamped text, reading a text or Markdown file aloud into
+/// an audio file — in a preset voice or in one cloned from a sample
+/// recording — cutting the silence out of a recording, reading the text off a
+/// scan or a screenshot page by page, restoring punctuation to a raw
+/// transcript, splitting a transcript into readable paragraphs, or marking
+/// where the stress falls in Russian text.
 ///
 /// Output is JSON by default (`--pretty` indents it); pass `--text` for
 /// human-readable text. Results go to stdout, errors to stderr. Exit codes are
@@ -164,6 +165,20 @@ enum Command {
         command: TextCommand,
     },
 
+    /// Read the text off page images (OCR).
+    ///
+    /// Text recognition is organized as a set of engines, each with its own
+    /// models and languages; pick one as the subcommand. The input is one or
+    /// more page images and the result is one page per image, in the order
+    /// given, so a scanned document is read by passing its pages in sequence.
+    /// Each page carries its text lines with their quadrangles and confidence;
+    /// `--format md` assembles them into Markdown instead, with paragraphs and
+    /// a reading order worked out from the geometry.
+    Ocr {
+        #[command(subcommand)]
+        command: OcrCommand,
+    },
+
     /// Work with RSS/Atom/JSON feeds: discover, read, and track read state.
     ///
     /// Typical workflow: `trakktor feed discover <page-url>` finds the feeds a
@@ -189,6 +204,131 @@ enum Command {
         #[command(subcommand)]
         command: SkillCommand,
     },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum OcrCommand {
+    /// Read pages with the PaddleOCR PP-OCRv5 pipeline.
+    ///
+    /// A detector finds the text lines on the page, each line is straightened
+    /// out of it, and a recognizer reads the line. Twelve recognizers cover
+    /// the scripts between them and `--lang` picks one; the models download on
+    /// first use into the model directory (~/.trakktor by default) and later
+    /// runs reuse them. The full working set for a language is about 13 MB.
+    Paddle(Box<OcrPaddleArgs>),
+}
+
+#[derive(Args)]
+pub(crate) struct OcrPaddleArgs {
+    /// Page images to read, in reading order: each file is one page of the
+    /// result. PNG, JPEG, TIFF, WebP, BMP and GIF are understood.
+    #[arg(value_name = "page")]
+    pub(crate) pages: Vec<PathBuf>,
+
+    /// Language of the page, which chooses the recognizer. Pass `list` to
+    /// print every code. A recognizer is trained on one script and can only
+    /// emit characters from its own alphabet, so a page in a script other than
+    /// the one selected comes back empty or as nonsense even though its lines
+    /// were found.
+    #[arg(long, default_value = "ru", value_name = "code")]
+    pub(crate) lang: String,
+
+    /// Form of the text result: `lines` prints the recognized lines as they
+    /// were found, `md` assembles Markdown — paragraphs, reading order,
+    /// headings and footnotes worked out from the geometry of the page.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = OcrFormatArg::Lines,
+        value_name = "form"
+    )]
+    pub(crate) format: OcrFormatArg,
+
+    /// Write the text result to this file as well as reporting it. With
+    /// `--format md` any illustrations found on the page are written next to
+    /// it, in an `imgs` directory, and linked from the Markdown.
+    #[arg(long, value_name = "path")]
+    pub(crate) out: Option<PathBuf>,
+
+    /// Write every recognized line as its own image into this directory — the
+    /// straightened crop the recognizer actually read. Useful for telling a
+    /// detection mistake from a recognition one.
+    #[arg(long, value_name = "dir")]
+    pub(crate) crops: Option<PathBuf>,
+
+    /// Longest side, in pixels, the page is scaled to before detection. This
+    /// is the setting that decides whether small type is found at all: an A4
+    /// page scanned at 300 dpi is 3508 pixels tall, so the default shrinks it
+    /// nearly fourfold and footnote-sized text stops being detected. Raising
+    /// it to 1536 or 2048 finds those lines, and costs time in proportion to
+    /// the area.
+    #[arg(long, default_value_t = 960, value_name = "px")]
+    pub(crate) limit_side_len: usize,
+
+    /// Text detection model. Defaults to the small one, which is what makes a
+    /// page take seconds rather than a minute.
+    #[arg(long, value_name = "name|dir")]
+    pub(crate) det_model: Option<String>,
+
+    /// Text recognition model, overriding the one `--lang` would choose.
+    #[arg(long, value_name = "name|dir")]
+    pub(crate) rec_model: Option<String>,
+
+    /// Probability above which a pixel counts as text when the detector's map
+    /// is thresholded.
+    #[arg(long, default_value_t = 0.3, value_name = "p")]
+    pub(crate) thresh: f32,
+
+    /// Mean probability a detected box must reach to be kept. Lower it to
+    /// recover faint lines, at the price of boxes over background.
+    #[arg(long, default_value_t = 0.6, value_name = "p")]
+    pub(crate) box_thresh: f32,
+
+    /// How far a detected box is expanded before the line is cut out. The
+    /// detector marks a shrunken core of each line, so some expansion is
+    /// always needed; more of it captures tall letters and accents, and
+    /// eventually the neighbouring line.
+    #[arg(long, default_value_t = 1.5, value_name = "ratio")]
+    pub(crate) unclip_ratio: f32,
+
+    /// Lines the recognizer read with less confidence than this are dropped.
+    /// Zero keeps everything, which is what to use when a line is missing and
+    /// you want to know whether it was found at all.
+    #[arg(long, default_value_t = 0.5, value_name = "p")]
+    pub(crate) drop_score: f32,
+
+    /// Also run the text-line orientation classifier, which turns a line
+    /// around when it was set upside down. Costs a little per line and rarely
+    /// fires on a scanned book.
+    #[arg(long)]
+    pub(crate) textline_orientation: bool,
+
+    /// Runtime for the neural networks.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = RuntimeArg::Candle,
+        value_name = "engine"
+    )]
+    pub(crate) runtime: RuntimeArg,
+
+    /// Device to run on.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = DeviceArg::Cpu,
+        value_name = "device"
+    )]
+    pub(crate) device: DeviceArg,
+}
+
+/// Form of the text an OCR run reports.
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
+pub(crate) enum OcrFormatArg {
+    /// The recognized lines, one per line of the page.
+    Lines,
+    /// Markdown, with paragraphs and a reading order.
+    Md,
 }
 
 #[derive(Subcommand)]
@@ -2218,6 +2358,14 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                 global.pretty,
             ),
             TextCommand::Stress(args) => crate::stress::run_stress(
+                args,
+                &global.model_dir()?,
+                global.json(),
+                global.pretty,
+            ),
+        },
+        Command::Ocr { command } => match command {
+            OcrCommand::Paddle(args) => crate::ocr::run_paddle(
                 args,
                 &global.model_dir()?,
                 global.json(),

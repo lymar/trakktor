@@ -9,7 +9,7 @@ license.workspace = true
 
 [features]
 # GPU acceleration on macOS for `asr`, `text structify`, `text punctuate`,
-# `text stress`, and `tts` (`--device metal`).
+# `text stress`, `tts`, and `ocr` (`--device metal`).
 metal = [
     "trakktor_core/whisper-metal",
     "trakktor_core/gigaam-metal",
@@ -18,10 +18,11 @@ metal = [
     "trakktor_core/punctuate-metal",
     "trakktor_core/stress-metal",
     "trakktor_core/tts-metal",
+    "trakktor_core/ocr-metal",
 ]
 # The burn runtime for `asr whisper`, `asr gigaam`, `asr vosk`, `text
-# structify`, `text punctuate`, `text stress`, and `tts` (`--runtime burn`),
-# with its own CPU and Metal backends.
+# structify`, `text punctuate`, `text stress`, `tts`, and `ocr`
+# (`--runtime burn`), with its own CPU and Metal backends.
 burn = [
     "trakktor_core/whisper-burn",
     "trakktor_core/gigaam-burn",
@@ -30,6 +31,7 @@ burn = [
     "trakktor_core/punctuate-burn",
     "trakktor_core/stress-burn",
     "trakktor_core/tts-burn",
+    "trakktor_core/ocr-burn",
 ]
 
 [[bin]]

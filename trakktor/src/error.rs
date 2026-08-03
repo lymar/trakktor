@@ -10,6 +10,7 @@ use trakktor_core::{
     audio::AudioError,
     feed::FeedError,
     http::HttpError,
+    ocr::OcrError,
     punctuate::PunctuateError,
     skill::SkillError,
     stress::StressError,
@@ -41,6 +42,8 @@ pub enum CliError {
     Structify(StructifyError),
     /// An error from the `text punctuate` feature.
     Punctuate(PunctuateError),
+    /// An error from the OCR feature.
+    Ocr(OcrError),
     /// An error from the `text stress` feature.
     Stress(StressError),
     /// An error from the Qwen3-TTS engine.
@@ -65,6 +68,7 @@ impl CliError {
             CliError::Skill(err) => skill_code(err),
             CliError::Structify(err) => structify_code(err),
             CliError::Punctuate(err) => punctuate_code(err),
+            CliError::Ocr(err) => ocr_code(err),
             CliError::Stress(err) => stress_code(err),
             CliError::Qwen3Tts(err) => qwen3_tts_code(err),
             CliError::Espeech(err) => espeech_code(err),
@@ -85,6 +89,7 @@ impl std::fmt::Display for CliError {
             CliError::Skill(err) => write!(f, "{err}"),
             CliError::Structify(err) => write!(f, "{err}"),
             CliError::Punctuate(err) => write!(f, "{err}"),
+            CliError::Ocr(err) => write!(f, "{err}"),
             CliError::Stress(err) => write!(f, "{err}"),
             CliError::Qwen3Tts(err) => write!(f, "{err}"),
             CliError::Espeech(err) => write!(f, "{err}"),
@@ -127,6 +132,10 @@ impl From<StructifyError> for CliError {
 
 impl From<PunctuateError> for CliError {
     fn from(err: PunctuateError) -> Self { CliError::Punctuate(err) }
+}
+
+impl From<OcrError> for CliError {
+    fn from(err: OcrError) -> Self { CliError::Ocr(err) }
 }
 
 impl From<StressError> for CliError {
@@ -236,6 +245,24 @@ fn structify_code(err: &StructifyError) -> &'static str {
         StructifyError::InvalidOptions(_) => "invalid_options",
         StructifyError::Io(_) => "io_error",
         StructifyError::HomeDirUnknown => "no_home_dir",
+    }
+}
+
+/// Maps an [`OcrError`] to its stable `code`.
+fn ocr_code(err: &OcrError) -> &'static str {
+    match err {
+        OcrError::ImageRead { .. } |
+        OcrError::NoPages |
+        OcrError::PageNotFound { .. } |
+        OcrError::EmptyPage { .. } => "invalid_input",
+        OcrError::UnsupportedLanguage { .. } => "unsupported_language",
+        OcrError::UnknownModel { .. } |
+        OcrError::ModelDownload(_) |
+        OcrError::Artifact(_) |
+        OcrError::ModelFile { .. } => "model_unavailable",
+        OcrError::InvalidOptions(_) => "invalid_options",
+        OcrError::Write { .. } => "io_error",
+        OcrError::Runtime(_) => "runtime_error",
     }
 }
 

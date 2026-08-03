@@ -8,6 +8,7 @@ mod asr;
 mod burn_notice;
 mod cli;
 mod error;
+mod ocr;
 mod output;
 mod punctuate;
 mod skill;

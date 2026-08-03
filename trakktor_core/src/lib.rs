@@ -10,6 +10,8 @@ pub mod audio;
 pub mod download;
 pub mod feed;
 pub mod http;
+#[cfg(feature = "ocr-runtime")]
+pub mod ocr;
 #[cfg(feature = "punctuate-runtime")]
 pub mod punctuate;
 pub mod skill;

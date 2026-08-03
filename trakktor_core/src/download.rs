@@ -176,6 +176,19 @@ pub fn hugging_face_url(repo: &str, file: &str) -> String {
     format!("https://huggingface.co/{repo}/resolve/main/{file}")
 }
 
+/// The URL a file resolves to at a fixed revision, rather than at whatever the
+/// main branch currently holds.
+///
+/// Publishers re-publish weights over a moving branch, so a catalog that pins
+/// sizes and digests has to ask for the revision those were taken at —
+/// otherwise the digest check turns every upstream update into a download
+/// failure instead of a deliberate decision. `revision` is a commit hash or a
+/// tag.
+#[must_use]
+pub fn hugging_face_url_at(repo: &str, revision: &str, file: &str) -> String {
+    format!("https://huggingface.co/{repo}/resolve/{revision}/{file}")
+}
+
 /// Errors a download can fail with.
 ///
 /// Callers map these into their own error type; the text is what the user

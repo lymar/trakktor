@@ -55,6 +55,17 @@ Apache-licensed:
   `v5_cis_base_nostress` are MIT, and everything else in that repository is
   CC BY-NC-SA 4.0 and is reachable only behind
   `--allow-non-commercial-models`.
+- [**`ocr paddle`**](features/ocr/README.md) —
+  [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) (Apache-2.0) by the
+  PaddlePaddle authors: the PP-OCRv5 pipeline — a differentiable-binarization
+  text detector, a CTC text recognizer and a text-line orientation
+  classifier — ported to the same candle runtime, reading PaddleOCR's own
+  published inference artifacts directly. The detection algorithm comes from
+  [DB](https://github.com/MhLiao/DB) (Apache-2.0; Liao et al.,
+  *Real-time Scene Text Detection with Differentiable Binarization*, AAAI 2020)
+  by way of [DBNet.pytorch](https://github.com/WenmuZhou/DBNet.pytorch), which
+  PaddleOCR names as its source. Please cite the PaddleOCR 3.0 technical report
+  (arXiv:2507.05595) and the DB paper if you use these models.
 - [**`vad`**](features/vad/README.md), and
   [**`asr --vad`**](features/asr/whisper.md#voice-activity-detection-vad) —
   [Silero-VAD](https://github.com/snakers4/silero-vad)

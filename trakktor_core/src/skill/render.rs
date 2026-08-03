@@ -23,20 +23,20 @@ const DESCRIPTION_MAX: usize = 1024;
 /// so a new feature does not reach skill discovery on its own.
 const STUB_DESCRIPTION: &str =
     "Use {name}, a predictable, automation-friendly CLI toolbox for coding \
-     agents: for feeds, audio, and text. Feeds: discover the RSS/Atom/JSON \
-     feeds a page declares, read unread entries as JSON, track read state. \
-     Speech: transcribe audio with a local Whisper, GigaAM, or Vosk model, or \
-     translate it to English; read text or Markdown aloud into an audio file, \
-     Russian included, in a preset voice or one cloned from a recording. \
-     Audio: by voice-activity detection, report a speech/silence timeline, \
-     cut silence, or split a recording per utterance. Text: restore \
-     punctuation and capitalization in a raw transcript, split a wall of text \
-     into paragraphs, and mark where the stress falls in Russian words for a \
-     synthesizer — offline, multilingual. Reach for it whenever a task \
-     involves a feed or blog/news URL, polling a site for new posts, turning \
-     audio into a transcript or captions, reading an article aloud, cloning a \
-     voice, removing dead air, restoring punctuation, grouping text into \
-     paragraphs, or Russian stress marks.";
+     agents: for feeds, audio, images, and text. Feeds: discover the \
+     RSS/Atom/JSON feeds a page declares, read unread entries as JSON, track \
+     read state. Speech: transcribe audio with a local Whisper, GigaAM, or \
+     Vosk model, or translate it to English; read text or Markdown aloud into \
+     an audio file, Russian included, in a preset or cloned voice. Audio: by \
+     voice-activity detection, report a speech/silence timeline, cut silence, \
+     or split a recording per utterance. Images: read the text off scans, \
+     photographs and screenshots, page by page, in a dozen scripts, as JSON \
+     lines with boxes or as Markdown. Text: restore punctuation and casing, \
+     split text into paragraphs, mark Russian stress — offline. Reach for it \
+     whenever a task involves a feed or news URL, turning audio into a \
+     transcript, reading an article aloud, cloning a voice, removing dead \
+     air, extracting text from an image, scan or PDF page, restoring \
+     punctuation, or Russian stress marks.";
 
 /// Renders the agent-facing guide (`trakktor skill show`).
 ///

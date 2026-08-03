@@ -18,6 +18,7 @@ default = [
     "punctuate-runtime",
     "stress-runtime",
     "tts-runtime",
+    "ocr-runtime",
 ]
 # Built-in audio decoding (symphonia), the sample-rate/channel conversion
 # pipeline, and the WAV/FLAC encoders. Off the default set the crate builds
@@ -108,6 +109,23 @@ tts-runtime = [
 # the candle one. Builds on top of the candle runtime (shared checkpoint reader
 # and model plumbing).
 tts-burn = ["tts-runtime", "dep:burn"]
+# The candle-backed OCR runtime (`ocr paddle`): text detection, text-line
+# orientation classification and text recognition, reading PaddleOCR's own
+# inference artifacts. Needs candle, `image` for decoding the page, `imageproc`
+# and `clipper2-rust` for the geometry around the networks. Off the default set
+# the crate builds without it.
+ocr-runtime = [
+    "dep:candle-core",
+    "dep:candle-nn",
+    "dep:serde_json",
+    "dep:image",
+    "dep:imageproc",
+    "dep:clipper2-rust",
+]
+# The burn-backed alternative OCR runtime, selectable at run time next to the
+# candle one. Builds on top of the candle runtime (shared artifact reader and
+# model plumbing).
+ocr-burn = ["ocr-runtime", "dep:burn"]
 # GPU acceleration for the Whisper runtime.
 whisper-metal = ["whisper-runtime", "candle-core/metal", "candle-nn/metal"]
 whisper-cuda = ["whisper-runtime", "candle-core/cuda", "candle-nn/cuda"]
@@ -129,6 +147,9 @@ stress-cuda = ["stress-runtime", "candle-core/cuda", "candle-nn/cuda"]
 # GPU acceleration for the Qwen3-TTS runtime.
 tts-metal = ["tts-runtime", "candle-core/metal", "candle-nn/metal"]
 tts-cuda = ["tts-runtime", "candle-core/cuda", "candle-nn/cuda"]
+# GPU acceleration for the OCR runtime.
+ocr-metal = ["ocr-runtime", "candle-core/metal", "candle-nn/metal"]
+ocr-cuda = ["ocr-runtime", "candle-core/cuda", "candle-nn/cuda"]
 
 [dependencies]
 base64.workspace = true
@@ -140,10 +161,13 @@ chrono.workspace = true
 # clap is used only to introspect the CLI definition (`Command`) when rendering
 # the skill — the single source of truth for commands/flags.
 clap.workspace = true
+clipper2-rust = { workspace = true, optional = true }
 feedparser-rs.workspace = true
 flacenc = { workspace = true, optional = true }
 flate2.workspace = true
 hound = { workspace = true, optional = true }
+image = { workspace = true, optional = true }
+imageproc = { workspace = true, optional = true }
 # One of the two digests the shared downloader verifies models against (blake3
 # is the other): which one to expect is the publisher's choice, not a feature.
 md-5.workspace = true

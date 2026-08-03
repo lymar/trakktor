@@ -29,12 +29,30 @@ candle-core = "0.11"
 candle-nn = "0.11"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 clap = { version = "4", features = ["derive", "env"] }
+# Polygon offsetting for the OCR detector's box expansion: a pure-Rust port of
+# Clipper2, so the pipeline keeps its no-C-dependency property.
+clipper2-rust = "1.1"
 feedparser-rs = { version = "0.5", default-features = false }
 # Pure-Rust audio encoders for the VAD editing feature: WAV (hound) and FLAC
 # (flacenc). flacenc's defaults pull rayon/log/serde we do not need.
 flacenc = { version = "0.5", default-features = false }
 flate2 = "1"
 hound = "3"
+# Decoding the page images OCR reads. Only the pure-Rust decoders trakktor
+# needs are enabled; the default set also pulls encoders and formats it never
+# writes.
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "jpeg",
+    "tiff",
+    "webp",
+    "bmp",
+    "gif",
+] }
+# Computational geometry around the OCR detector: connected-component contours,
+# minimum-area rectangles and the perspective warp that straightens a detected
+# text line before recognition.
+imageproc = { version = "0.27", default-features = false }
 # Reading NeMo `.nemo` archives (a plain or gzip tar) to extract the model
 # weights for `text punctuate`.
 tar = "0.4"
