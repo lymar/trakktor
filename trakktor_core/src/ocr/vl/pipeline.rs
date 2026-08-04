@@ -327,8 +327,8 @@ impl Engine {
 
 /// The reader's networks on the burn runtime.
 ///
-/// burn computes in f32 on either device — on the CPU as candle does there,
-/// and on Metal too, where its f16 backend cannot run this model yet (see
+/// burn matches candle's precision on either device — f32 on the CPU, f16 on
+/// Metal (on the unfused backend; see
 /// [`runtime_burn`](super::runtime_burn)).
 #[cfg(feature = "ocr-burn")]
 fn burn_networks(

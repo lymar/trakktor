@@ -3,18 +3,20 @@
 //! An alternative [`VlModel`] implementation on [burn](burn), selectable at
 //! run time next to the candle one. Backends: ndarray on the CPU (f32 —
 //! the ndarray backend has no half-precision element), and wgpu with
-//! MSL-compiled kernels on Metal, with operator fusion and autotuning.
+//! MSL-compiled kernels on Metal, in f16 — the same precision the candle
+//! runtime uses there — with autotuning.
 //!
-//! **This runtime computes in f32 only**, on either device — on Metal too,
-//! where the candle runtime runs at f16. Not the port's choice: on the f16
-//! backend (burn 0.21 / cubecl 0.10) the operator-fusion engine's kernel
-//! planner panics on this model's cast-mixed elementwise chains
-//! (`burn-cubecl-fusion .../codegen/ir.rs` `resolve_arg`, an index out of
-//! bounds, after which the fusion stream is poisoned and every later call
-//! fails), with the tensors' f32 pins removed just the same. The f32 path
-//! compiles and runs the same chains cleanly. Half precision here is memory,
-//! not correctness — the parity contract is stated in f32 — so it waits for
-//! an upstream fix rather than a workaround.
+//! **The Metal backend is the plain one, with the operator-fusion layer left
+//! out.** Not the port's choice: with fusion enabled, the f16 backend
+//! (burn 0.21 / cubecl 0.10) panics mid-page in the fusion engine's kernel
+//! planner — planning a fused reduce over the decoder's final-norm chain, it
+//! emits a kernel argument referencing a tensor the plan never registered
+//! (`resolve_arg`, an index out of bounds, in burn-cubecl-fusion's codegen),
+//! after which the fusion stream is poisoned and every later call fails. The
+//! same graph in f32 fuses and runs cleanly — the casts are no-ops there, so
+//! the planner never sees this model's mixed-precision chains. Dropping
+//! fusion costs far less than staying in f32: the halved weight traffic is
+//! worth more than the fused elementwise chains.
 //!
 //! The checkpoint is the same published directory the candle runtime loads:
 //! tensors are read through candle's safetensors reader and converted through
@@ -42,7 +44,7 @@ use std::path::Path;
 use burn::{
     backend::{
         ndarray::{NdArray, NdArrayDevice},
-        wgpu::{Metal, WgpuDevice},
+        wgpu::{CubeBackend, WgpuDevice, WgpuRuntime},
     },
     tensor::{DType, Int, Tensor, TensorData, backend::Backend},
 };
@@ -457,8 +459,9 @@ pub fn load_cpu(
 }
 
 /// Loads a checkpoint on the burn Metal backend (wgpu with MSL-compiled
-/// kernels), in f32 — the one precision this runtime serves (see the module
-/// notes on the f16 backend).
+/// kernels), in f16 — the same precision the candle runtime uses on Metal.
+/// The backend is the plain one, without the operator-fusion layer (see the
+/// module notes on why).
 ///
 /// # Errors
 ///
@@ -467,9 +470,7 @@ pub fn load_metal(
     dir: &Path,
     cfg: ModelConfig,
 ) -> Result<Box<dyn VlModel>, OcrError> {
-    Ok(Box::new(BurnModel::<Metal<f32>>::load(
-        dir,
-        cfg,
-        WgpuDevice::default(),
-    )?))
+    Ok(Box::new(BurnModel::<
+        CubeBackend<WgpuRuntime, burn::tensor::f16, i32, u8>,
+    >::load(dir, cfg, WgpuDevice::default())?))
 }

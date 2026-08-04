@@ -472,9 +472,10 @@ pub(crate) struct OcrVlArgs {
     #[arg(long, default_value_t = 0.35, value_name = "ratio")]
     pub(crate) block_padding: f32,
 
-    /// Inference runtime executing the model. Both read the pages the same;
-    /// `burn` needs a build with the `burn` feature enabled, and computes in
-    /// f32 only. The detection stage runs on candle either way.
+    /// Inference runtime executing the model. Both read the pages the same,
+    /// at the same precision (f16 on Metal, f32 on the CPU); `burn` needs a
+    /// build with the `burn` feature enabled. The detection stage runs on
+    /// candle either way.
     #[arg(
         long,
         value_enum,
