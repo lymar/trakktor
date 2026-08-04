@@ -4,6 +4,13 @@
 //! turn, one picture and one instruction, so a template engine would be a
 //! dependency to spell four constants.
 //!
+//! Everything in this module is arithmetic-free and shared: the prompt and
+//! its three-axis positions, the greedy choice, the repeat guard and the
+//! confidence are the same whichever runtime runs the tensors. The tensor
+//! side sits behind [`VlModel`], and no tensor crosses that seam — the driver
+//! hands over host-side patches, token ids and positions, and receives
+//! probability rows.
+//!
 //! Stopping is the interesting part. A generative reader does not fail by
 //! emitting a wrong glyph; it fails by **never stopping** — the same syllable,
 //! or the same short phrase, repeated until the caller's budget runs out. That
@@ -11,16 +18,13 @@
 //! handed more than it can parse, so the loop watches for it explicitly and
 //! reports it, rather than returning a page of noise as if it were text.
 
-use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::ops::softmax_last_dim;
 use tokenizers::Tokenizer;
 
 use super::{
     config::{ImageConfig, ModelConfig},
-    ernie::{Cache, Decoder},
     image::Prepared,
-    vision::{Projector, Tower},
 };
+use crate::ocr::error::OcrError;
 
 /// What the model is asked to do with the picture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,17 +116,50 @@ pub struct Answer {
     pub truncated: bool,
 }
 
+/// The networks of one loaded checkpoint, reading one picture at a time — the
+/// seam behind which the runtimes (candle, burn) are interchangeable.
+///
+/// No tensor crosses it: the driver hands over host-side patches, token ids
+/// and positions, and receives the softmaxed probability row of the next
+/// token — softmaxed on the device, so the 103 424 numbers a greedy choice
+/// needs arrive in one transfer. The generation state (the key/value cache,
+/// the rotary rows) lives behind the seam; priming again starts a fresh
+/// generation.
+pub trait VlModel {
+    /// Starts a generation: encodes the picture, splices it into the prompt
+    /// where its placeholders sit, prefills the decoder, and returns the
+    /// probability row of the first answer token.
+    ///
+    /// `positions` carries the three-axis rotary position of every position
+    /// the generation may reach — the prompt's, then one per allowed answer
+    /// token — so its length is also the key/value capacity to reserve.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OcrError`] on a backend failure.
+    fn prime(
+        &mut self,
+        picture: &Prepared,
+        tokens: &[u32],
+        image_at: usize,
+        positions: &[[i64; 3]],
+    ) -> Result<Vec<f32>, OcrError>;
+
+    /// Feeds the chosen token and returns the probability row after it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OcrError`] on a backend failure.
+    fn step(&mut self, token: u32) -> Result<Vec<f32>, OcrError>;
+}
+
 /// The loaded networks and the tokenizer: everything needed to turn a picture
 /// into text.
 pub struct Reader {
-    tower: Tower,
-    projector: Projector,
-    decoder: Decoder,
+    model: Box<dyn VlModel>,
     tokenizer: Tokenizer,
     cfg: ModelConfig,
     image_cfg: ImageConfig,
-    device: Device,
-    dtype: DType,
     /// Ids that end an answer.
     stops: Vec<u32>,
     /// The id the prompt repeats once per place the picture takes.
@@ -130,20 +167,15 @@ pub struct Reader {
 }
 
 impl Reader {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
-        tower: Tower,
-        projector: Projector,
-        decoder: Decoder,
+        model: Box<dyn VlModel>,
         tokenizer: Tokenizer,
         cfg: ModelConfig,
         image_cfg: ImageConfig,
-        device: Device,
-        dtype: DType,
-    ) -> Result<Self> {
+    ) -> Result<Self, OcrError> {
         let id = |token: &str| tokenizer.token_to_id(token);
         let placeholder = id("<|IMAGE_PLACEHOLDER|>").ok_or_else(|| {
-            candle_core::Error::Msg(
+            OcrError::Artifact(
                 "the tokenizer has no <|IMAGE_PLACEHOLDER|> token".into(),
             )
         })?;
@@ -152,14 +184,10 @@ impl Reader {
             .filter_map(|token| id(token))
             .collect::<Vec<_>>();
         Ok(Self {
-            tower,
-            projector,
-            decoder,
+            model,
             tokenizer,
             cfg,
             image_cfg,
-            device,
-            dtype,
             stops,
             placeholder,
         })
@@ -167,15 +195,13 @@ impl Reader {
 
     pub fn image_config(&self) -> &ImageConfig { &self.image_cfg }
 
-    pub fn device(&self) -> &Device { &self.device }
-
     /// Reads one prepared picture.
     pub fn read(
-        &self,
+        &mut self,
         picture: &Prepared,
         task: Task,
         limits: &Limits,
-    ) -> Result<Answer> {
+    ) -> Result<Answer, OcrError> {
         // A ceiling of zero admits no answer; say so without running anything.
         if limits.max_tokens == 0 {
             return Ok(Answer {
@@ -189,64 +215,25 @@ impl Reader {
         let merge = self.cfg.vision.spatial_merge_size;
         let places = picture.tokens(merge);
 
-        // 1. The picture, once: patches → tower → projector.
-        let pixels = Tensor::from_vec(
-            picture.pixels.clone(),
-            (picture.patches(), picture.pixels.len() / picture.patches()),
-            &self.device,
-        )?
-        .to_dtype(self.dtype)?;
-        let features = self.tower.forward(&pixels, picture.grid)?;
-        let vision = self.projector.forward(&features, picture.grid)?;
-
-        // 2. The prompt around it.
+        // The prompt around the picture, and the three-axis position of every
+        // position the answer could reach — known before the first token, so
+        // the model can size its cache and rotary rows once.
         let (tokens, image_at) = self.prompt(task, places)?;
-        let positions = self.positions(tokens.len(), image_at, picture.grid);
-
-        // 3. The picture's tokens take the placeholders' places.
-        let embedded = self.decoder.embed(&tokens, &self.device)?;
-        let mut parts = Vec::with_capacity(3);
-        if image_at > 0 {
-            parts.push(embedded.narrow(1, 0, image_at)?);
-        }
-        parts.push(vision.unsqueeze(0)?);
-        let after = image_at + places;
-        if after < tokens.len() {
-            parts.push(embedded.narrow(1, after, tokens.len() - after)?);
-        }
-        let inputs = Tensor::cat(&parts, 1)?.contiguous()?;
-
-        // 4. Prefill, then one token at a time. The cache and the rotary
-        // tables are sized once, up front, for the whole answer the limits
-        // allow: every position the generation can reach is known before its
-        // first token, so nothing about positions needs rebuilding per step.
-        let prompt = tokens.len();
+        let mut positions =
+            self.positions(tokens.len(), image_at, picture.grid);
         let next = positions.last().map(|axes| axes[0] + 1).unwrap_or_default();
-        let mut positions = positions;
         positions
             .extend((0..limits.max_tokens as i64).map(|step| [next + step; 3]));
-        let (cos, sin) =
-            self.decoder.tables(&positions, &self.device, self.dtype)?;
 
-        let mut cache = Cache::new(
-            &self.cfg,
-            prompt + limits.max_tokens,
-            self.dtype,
-            &self.device,
-        )?;
-        let mut logits = self.decoder.forward(
-            &inputs,
-            &cos.narrow(0, 0, prompt)?,
-            &sin.narrow(0, 0, prompt)?,
-            &mut cache,
-        )?;
+        let mut row =
+            self.model.prime(picture, &tokens, image_at, &positions)?;
 
         let mut generated: Vec<u32> = Vec::new();
         let mut scores: Vec<f32> = Vec::new();
         let mut truncated = false;
 
         loop {
-            let (token, probability) = self.pick(&logits)?;
+            let (token, probability) = pick(&row);
             if self.stops.contains(&token) {
                 break;
             }
@@ -264,20 +251,13 @@ impl Reader {
                 break;
             }
 
-            let embedded = self.decoder.embed(&[token], &self.device)?;
-            let row = prompt + generated.len() - 1;
-            logits = self.decoder.forward(
-                &embedded,
-                &cos.narrow(0, row, 1)?,
-                &sin.narrow(0, row, 1)?,
-                &mut cache,
-            )?;
+            row = self.model.step(token)?;
         }
 
         let text = self
             .tokenizer
             .decode(&generated, true)
-            .map_err(|e| candle_core::Error::Msg(format!("decoding: {e}")))?;
+            .map_err(|e| OcrError::Runtime(format!("decoding: {e}")))?;
         let score = if scores.is_empty() {
             0.0
         } else {
@@ -296,13 +276,13 @@ impl Reader {
         &self,
         task: Task,
         places: usize,
-    ) -> Result<(Vec<u32>, usize)> {
-        let encode = |text: &str| -> Result<Vec<u32>> {
+    ) -> Result<(Vec<u32>, usize), OcrError> {
+        let encode = |text: &str| -> Result<Vec<u32>, OcrError> {
             self.tokenizer
                 .encode(text, false)
                 .map(|encoded| encoded.get_ids().to_vec())
                 .map_err(|e| {
-                    candle_core::Error::Msg(format!("encoding the prompt: {e}"))
+                    OcrError::Runtime(format!("encoding the prompt: {e}"))
                 })
         };
         let prefix = encode("<|begin_of_sentence|>User: <|IMAGE_START|>")?;
@@ -354,27 +334,6 @@ impl Reader {
         positions
     }
 
-    /// The greedy choice and how sure the model was of it.
-    ///
-    /// The softmax stays on the device; the whole probability row comes back
-    /// in one transfer and the argmax happens here — one synchronization per
-    /// token where an on-device argmax plus a gather would cost two, and the
-    /// wait is what the step's time is made of. Ties resolve to the first
-    /// maximum, as the device kernel resolves them.
-    fn pick(&self, logits: &Tensor) -> Result<(u32, f32)> {
-        let probabilities = softmax_last_dim(&logits.to_dtype(DType::F32)?)?
-            .to_vec1::<f32>()?;
-        let mut token = 0usize;
-        let mut best = f32::NEG_INFINITY;
-        for (index, &probability) in probabilities.iter().enumerate() {
-            if probability > best {
-                best = probability;
-                token = index;
-            }
-        }
-        Ok((token as u32, best))
-    }
-
     /// Where to cut, if the answer has started going in circles.
     ///
     /// Two shapes of loop, because they are two different failures: one token
@@ -413,4 +372,19 @@ impl Reader {
         }
         None
     }
+}
+
+/// The greedy choice and how sure the model was of it.
+///
+/// Ties resolve to the first maximum, as the device kernels resolve them.
+fn pick(probabilities: &[f32]) -> (u32, f32) {
+    let mut token = 0usize;
+    let mut best = f32::NEG_INFINITY;
+    for (index, &probability) in probabilities.iter().enumerate() {
+        if probability > best {
+            best = probability;
+            token = index;
+        }
+    }
+    (token as u32, best)
 }

@@ -22,7 +22,7 @@ use trakktor_core::ocr::{
 };
 
 use crate::{
-    cli::{OcrFormatArg, OcrPaddleArgs, OcrTaskArg, OcrVlArgs},
+    cli::{OcrFormatArg, OcrPaddleArgs, OcrTaskArg, OcrVlArgs, RuntimeArg},
     error::CliError,
 };
 
@@ -43,6 +43,16 @@ pub(crate) fn run_paddle(
             pretty,
         );
         return Ok(());
+    }
+
+    // A flag that silently changed nothing would be worse than a refusal.
+    if matches!(args.runtime, RuntimeArg::Burn) {
+        return Err(OcrError::InvalidOptions(
+            "the classic engine has no burn runtime; use `--runtime candle`, \
+             or `ocr vl` for the engine that has one"
+                .into(),
+        )
+        .into());
     }
 
     if args.pages.is_empty() {
@@ -186,9 +196,20 @@ pub(crate) fn run_vl(
         figures: matches!(args.format, OcrFormatArg::Md) && args.out.is_some(),
     };
 
-    let engine = vl::Engine::load(
+    let runtime = match args.runtime {
+        RuntimeArg::Candle => vl::pipeline::Runtime::Candle,
+        RuntimeArg::Burn => vl::pipeline::Runtime::Burn,
+    };
+    if runtime == vl::pipeline::Runtime::Burn &&
+        matches!(args.device, crate::cli::DeviceArg::Metal)
+    {
+        announce_burn_gpu();
+    }
+
+    let mut engine = vl::Engine::load(
         model_dir,
         device(args.device),
+        runtime,
         options,
         &mut crate::asr::progress::download_progress(),
     )?;
@@ -236,6 +257,16 @@ fn device(chosen: crate::cli::DeviceArg) -> Device {
         crate::cli::DeviceArg::Metal => Device::Metal,
     }
 }
+
+/// The kernel compile/autotune heads-up before a burn GPU run (builds with
+/// the `burn` feature).
+#[cfg(feature = "burn")]
+fn announce_burn_gpu() { crate::burn_notice::announce_cold_gpu_start(); }
+
+/// Without the `burn` feature the load fails with its own message; there is
+/// nothing to announce.
+#[cfg(not(feature = "burn"))]
+fn announce_burn_gpu() {}
 
 /// The live stderr line of a `ocr vl` run.
 ///

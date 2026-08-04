@@ -20,14 +20,16 @@ use tokenizers::Tokenizer;
 
 use super::{
     config::{ImageConfig, ModelConfig, TOKENIZER_FILE, WEIGHTS_FILE},
-    ernie::Decoder,
     generate::{Limits, Reader, Task},
-    image, model,
-    vision::{Projector, Tower},
+    image, model, runtime,
+    runtime::{
+        ernie::Decoder,
+        vision::{Projector, Tower},
+    },
 };
 
 /// Where the checkpoint lives.
-fn checkpoint() -> PathBuf {
+pub(crate) fn checkpoint() -> PathBuf {
     PathBuf::from(std::env::var("HOME").expect("HOME"))
         .join(".trakktor/ocr/vl")
         .join(model::DEFAULT_MODEL)
@@ -39,7 +41,7 @@ fn golden() -> PathBuf {
 }
 
 /// Reads one raw little-endian `f32` blob.
-fn blob(name: &str) -> Vec<f32> {
+pub(crate) fn blob(name: &str) -> Vec<f32> {
     let bytes = std::fs::read(golden().join(format!("{name}.bin")))
         .unwrap_or_else(|e| panic!("reading the {name} dump: {e}"));
     bytes
@@ -48,13 +50,13 @@ fn blob(name: &str) -> Vec<f32> {
         .collect()
 }
 
-fn trace() -> serde_json::Value {
+pub(crate) fn trace() -> serde_json::Value {
     serde_json::from_slice(&std::fs::read(golden().join("trace.json")).unwrap())
         .unwrap()
 }
 
 /// The picture the trace was taken on.
-fn picture() -> image::Prepared {
+pub(crate) fn picture() -> image::Prepared {
     let path = golden().join("page.png");
     let rgb = ::image::open(&path)
         .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()))
@@ -73,7 +75,7 @@ fn worst(ours: &[f32], theirs: &[f32]) -> f32 {
 
 /// The largest difference relative to the reference's own scale — the honest
 /// measure for an activation whose values run into the hundreds.
-fn relative(ours: &[f32], theirs: &[f32]) -> f32 {
+pub(crate) fn relative(ours: &[f32], theirs: &[f32]) -> f32 {
     let scale = theirs.iter().fold(0f32, |most, v| most.max(v.abs()));
     worst(ours, theirs) / scale.max(f32::MIN_POSITIVE)
 }
@@ -94,18 +96,11 @@ fn loaded() -> (Tower, Projector, Decoder, Reader) {
     let tower = Tower::load(&cfg.vision, vb.pp("visual")).unwrap();
     let projector =
         Projector::load(&cfg.vision, cfg.hidden_size, vb.pp("mlp_AR")).unwrap();
-    let decoder = Decoder::load(&cfg, vb.clone()).unwrap();
-    let reader = Reader::new(
-        Tower::load(&cfg.vision, vb.pp("visual")).unwrap(),
-        Projector::load(&cfg.vision, cfg.hidden_size, vb.pp("mlp_AR")).unwrap(),
-        Decoder::load(&cfg, vb).unwrap(),
-        tokenizer,
-        cfg,
-        image_cfg,
-        Device::Cpu,
-        DType::F32,
-    )
-    .unwrap();
+    let decoder = Decoder::load(&cfg, vb).unwrap();
+    let networks =
+        runtime::load(&dir, cfg.clone(), Device::Cpu, DType::F32).unwrap();
+    let reader =
+        Reader::new(Box::new(networks), tokenizer, cfg, image_cfg).unwrap();
     (tower, projector, decoder, reader)
 }
 
@@ -214,7 +209,7 @@ fn the_prompt_and_its_positions_match_the_reference() {
 #[ignore = "needs ~/.trakktor/ocr/vl and tmp/ocr/vl/golden"]
 fn the_generated_tokens_match_the_reference() {
     let prepared = picture();
-    let (_, _, _, reader) = loaded();
+    let (_, _, _, mut reader) = loaded();
     let trace = trace();
 
     let answer = reader

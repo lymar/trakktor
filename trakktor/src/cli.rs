@@ -324,7 +324,8 @@ pub(crate) struct OcrPaddleArgs {
     #[arg(long)]
     pub(crate) textline_orientation: bool,
 
-    /// Runtime for the neural networks.
+    /// Inference runtime executing the models. This engine serves `candle`
+    /// only; of the OCR engines, `ocr vl` is the one with a burn runtime.
     #[arg(
         long,
         value_enum,
@@ -471,7 +472,9 @@ pub(crate) struct OcrVlArgs {
     #[arg(long, default_value_t = 0.35, value_name = "ratio")]
     pub(crate) block_padding: f32,
 
-    /// Runtime for the neural networks.
+    /// Inference runtime executing the model. Both read the pages the same;
+    /// `burn` needs a build with the `burn` feature enabled, and computes in
+    /// f32 only. The detection stage runs on candle either way.
     #[arg(
         long,
         value_enum,

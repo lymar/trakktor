@@ -71,7 +71,8 @@ Apache-licensed:
   (Apache-2.0) by the PaddlePaddle authors: a 0.9-billion-parameter document
   model — a variable-resolution vision tower, a patch-merging projector and an
   [ERNIE-4.5](https://huggingface.co/baidu/ERNIE-4.5-0.3B-Paddle) (Apache-2.0)
-  decoder — ported to the same candle runtime. Where the checkpoint's own code
+  decoder — ported to the same candle and burn runtimes. Where the
+  checkpoint's own code
   and the native implementation in
   [Transformers](https://github.com/huggingface/transformers) (Apache-2.0)
   disagree on interpolating the vision tower's position grid, the port follows

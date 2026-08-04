@@ -133,6 +133,21 @@ Half precision is used on the GPU and full precision on the CPU. The weights are
 published in bfloat16 and the three precisions were measured to produce the same
 text, so the choice costs nothing but memory and speed.
 
+## Runtime
+
+```
+--runtime <candle|burn>    # default: candle
+```
+
+Two independent implementations of the same networks, reading the pages the
+same. `candle` is the default and the fast one. `burn` sits behind the `burn`
+build feature and computes in f32 on either device — its half-precision Metal
+backend cannot run this model yet — which on a GPU makes it measurably slower
+than candle's f16; it is kept as a second, independently written implementation
+to check the first against, not as a speed play. The detection stage runs on
+candle either way. Of the two OCR engines only `vl` has a burn runtime;
+`ocr paddle --runtime burn` is a validation error.
+
 ## Languages
 
 There is no `--lang`. The model has one vocabulary for every writing system it

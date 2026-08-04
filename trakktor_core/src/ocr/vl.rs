@@ -37,12 +37,14 @@ mod tests;
 pub mod blocks;
 pub mod config;
 pub mod download;
-pub mod ernie;
 pub mod generate;
 pub mod image;
 pub mod model;
 pub mod pipeline;
-pub mod vision;
+pub mod runtime;
+#[cfg(feature = "ocr-burn")]
+pub mod runtime_burn;
+pub mod tables;
 
 pub use generate::{Answer, Limits, Task};
 pub use pipeline::{Engine, Options, Read};

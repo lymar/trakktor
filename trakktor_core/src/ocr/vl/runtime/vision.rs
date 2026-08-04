@@ -24,14 +24,10 @@
 use candle_core::{D, DType, Device, Result, Tensor};
 use candle_nn::{Linear, Module, VarBuilder, ops::softmax_last_dim};
 
-use super::config::VisionConfig;
+use crate::ocr::vl::{config::VisionConfig, tables};
 
 /// How many query positions are scored against the keys at a time.
 const ATTENTION_CHUNK: usize = 1024;
-
-/// The base of the two-dimensional rotary embedding. Not the decoder's
-/// `rope_theta` — the tower has its own, and it is not in the config file.
-const ROPE_THETA: f64 = 10_000.0;
 
 /// Layer normalization with a learned gain and offset.
 fn layer_norm(
@@ -99,58 +95,6 @@ impl Embeddings {
         })
     }
 
-    /// The position vectors for a `height × width` patch grid, laid out one
-    /// per patch in row-major order.
-    ///
-    /// The sample points are `linspace(0, side − 1, n)` in each direction, so
-    /// the corners of the learned grid land exactly on the corners of the
-    /// target one and everything between is a bilinear blend of four
-    /// neighbours.
-    fn interpolate(&self, height: usize, width: usize) -> Vec<f32> {
-        let axis = |n: usize| -> Vec<(usize, usize, f32)> {
-            (0..n)
-                .map(|i| {
-                    let at = if n > 1 {
-                        i as f32 * (self.side - 1) as f32 / (n - 1) as f32
-                    } else {
-                        0.0
-                    };
-                    let low = at as usize;
-                    let high = (low + 1).min(self.side - 1);
-                    (low, high, at - low as f32)
-                })
-                .collect()
-        };
-        let rows = axis(height);
-        let columns = axis(width);
-
-        let mut out = vec![0f32; height * width * self.dim];
-        for (y, &(top, bottom, fy)) in rows.iter().enumerate() {
-            for (x, &(left, right, fx)) in columns.iter().enumerate() {
-                let corners = [
-                    (
-                        (top * self.side + left) * self.dim,
-                        (1.0 - fy) * (1.0 - fx),
-                    ),
-                    ((top * self.side + right) * self.dim, (1.0 - fy) * fx),
-                    ((bottom * self.side + left) * self.dim, fy * (1.0 - fx)),
-                    ((bottom * self.side + right) * self.dim, fy * fx),
-                ];
-                let at = (y * width + x) * self.dim;
-                let slot = &mut out[at..at + self.dim];
-                for (base, weight) in corners {
-                    for (value, source) in slot
-                        .iter_mut()
-                        .zip(&self.positions[base..base + self.dim])
-                    {
-                        *value += source * weight;
-                    }
-                }
-            }
-        }
-        out
-    }
-
     /// Projects the patches and adds their positions.
     ///
     /// `pixels` is `[patches, channels × patch × patch]`.
@@ -163,7 +107,13 @@ impl Embeddings {
             pixels.matmul(&self.projection)?.broadcast_add(&self.bias)?;
         let (_, height, width) = grid;
         let positions = Tensor::from_vec(
-            self.interpolate(height, width),
+            tables::interpolate_positions(
+                &self.positions,
+                self.side,
+                self.dim,
+                height,
+                width,
+            ),
             (height * width, self.dim),
             embedded.device(),
         )?
@@ -342,35 +292,19 @@ impl Tower {
         })
     }
 
-    /// Builds the two-dimensional rotary tables for a patch grid, one row per
-    /// patch, `[patches, head_dim / 2]`: the patch's row angles fill the
-    /// first quarter of the head dimension and its column angles the second.
-    /// The rotation pairs channel `i` with channel `i + head_dim / 2`, so
-    /// each angle is carried once.
+    /// Lifts the two-dimensional rotary tables for a patch grid onto the
+    /// device, `[patches, head_dim / 2]` each.
     fn rotary(
         &self,
         grid: (usize, usize, usize),
         device: &Device,
     ) -> Result<(Tensor, Tensor)> {
         let (_, height, width) = grid;
-        let quarter = self.head_dim / 4;
-        let inverse: Vec<f32> = (0..quarter)
-            .map(|i| {
-                (1.0 / ROPE_THETA
-                    .powf(2.0 * i as f64 / (self.head_dim / 2) as f64))
-                    as f32
-            })
-            .collect();
-
-        let half = self.head_dim / 2;
-        let mut angles = Vec::with_capacity(height * width * half);
-        for row in 0..height {
-            for column in 0..width {
-                angles.extend(inverse.iter().map(|f| row as f32 * f));
-                angles.extend(inverse.iter().map(|f| column as f32 * f));
-            }
-        }
-        let angles = Tensor::from_vec(angles, (height * width, half), device)?;
+        let angles = Tensor::from_vec(
+            tables::tower_angles(grid, self.head_dim),
+            (height * width, self.head_dim / 2),
+            device,
+        )?;
         Ok((angles.cos()?, angles.sin()?))
     }
 

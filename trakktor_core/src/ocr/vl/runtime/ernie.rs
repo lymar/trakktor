@@ -28,7 +28,7 @@ mod tests;
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{Embedding, Linear, Module, VarBuilder, ops::softmax_last_dim};
 
-use super::config::ModelConfig;
+use crate::ocr::vl::{config::ModelConfig, tables};
 
 /// The keys and values already seen, in one preallocated buffer per layer.
 ///
@@ -135,55 +135,39 @@ fn linear(
 
 /// The three-axis rotary tables.
 struct Rotary {
-    inverse: Vec<f32>,
     /// How the head dimension is split between the axes.
     section: Vec<usize>,
+    rope_theta: f64,
     head_dim: usize,
 }
 
 impl Rotary {
     fn new(cfg: &ModelConfig) -> Self {
-        let head_dim = cfg.head_dim;
         Self {
-            inverse: (0..head_dim / 2)
-                .map(|i| {
-                    (1.0 / cfg
-                        .rope_theta
-                        .powf(2.0 * i as f64 / head_dim as f64))
-                        as f32
-                })
-                .collect(),
             section: cfg.mrope_section.clone(),
-            head_dim,
+            rope_theta: cfg.rope_theta,
+            head_dim: cfg.head_dim,
         }
     }
 
-    /// Cosine and sine for `positions`, one row per position, laid out
-    /// `[seq, head_dim / 2]`: the rotation pairs channel `i` with channel
-    /// `i + head_dim / 2`, so each angle is carried once. Within a row the
-    /// channels are split between the three axes by section.
+    /// Lifts the cosine and sine rows for `positions` onto the device,
+    /// `[seq, head_dim / 2]` each.
     fn tables(
         &self,
         positions: &[[i64; 3]],
         device: &Device,
         dtype: DType,
     ) -> Result<(Tensor, Tensor)> {
-        let seq = positions.len();
-        let half = self.head_dim / 2;
-        let mut angles = vec![0f32; seq * half];
-        for (row, axes) in positions.iter().enumerate() {
-            let slot = &mut angles[row * half..(row + 1) * half];
-            let mut at = 0;
-            for (&size, &position) in self.section.iter().zip(axes.iter()) {
-                for (channel, angle) in
-                    slot[at..at + size].iter_mut().enumerate()
-                {
-                    *angle = position as f32 * self.inverse[at + channel];
-                }
-                at += size;
-            }
-        }
-        let angles = Tensor::from_vec(angles, (seq, half), device)?;
+        let angles = Tensor::from_vec(
+            tables::decoder_angles(
+                positions,
+                &self.section,
+                self.rope_theta,
+                self.head_dim,
+            ),
+            (positions.len(), self.head_dim / 2),
+            device,
+        )?;
         Ok((
             angles.cos()?.to_dtype(dtype)?,
             angles.sin()?.to_dtype(dtype)?,

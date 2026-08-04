@@ -14,19 +14,16 @@
 
 use std::path::Path;
 
-use candle_core::{DType, Tensor};
-use candle_nn::VarBuilder;
+use candle_core::{DType, Device as CandleDevice, Tensor};
 use image::RgbImage;
 use tokenizers::Tokenizer;
 
 use super::{
     blocks::{self, Settings as BlockSettings},
-    config::{ImageConfig, ModelConfig, TOKENIZER_FILE, WEIGHTS_FILE},
+    config::{ImageConfig, ModelConfig, TOKENIZER_FILE},
     download,
-    ernie::Decoder,
-    generate::{Answer, Limits, Reader, Task},
-    image as picture, model,
-    vision::{Projector, Tower},
+    generate::{Answer, Limits, Reader, Task, VlModel},
+    image as picture, model, runtime,
 };
 use crate::{
     download::Progress,
@@ -103,9 +100,24 @@ pub const DEFAULT_LIMIT_SIDE_LEN: usize = 1440;
 /// sits lower on that scale than a correct reading of Latin prose.
 pub const DEFAULT_DROP_SCORE: f32 = 0.3;
 
+/// Which runtime executes the reader's networks. The detector stays on candle
+/// either way: it is the classic engine's, borrowed, and four megabytes of
+/// convolutions are not what a second runtime is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Runtime {
+    /// The candle runtime (the default).
+    #[default]
+    Candle,
+    /// The burn runtime; needs a build with the `ocr-burn` feature.
+    Burn,
+}
+
 /// A loaded engine.
 pub struct Engine {
     detector: Detector,
+    /// The device the detector computes on. The reader's own device lives
+    /// behind its runtime seam and need not be the same one.
+    device: CandleDevice,
     reader: Reader,
     detection_name: String,
     model_name: String,
@@ -114,23 +126,16 @@ pub struct Engine {
 
 impl Engine {
     /// Resolves the models named by `options`, downloading what is missing,
-    /// and loads them onto `device`.
+    /// and loads them onto `device`, with the reader's networks on `runtime`.
     pub fn load(
         models_dir: &Path,
         device: Device,
+        runtime: Runtime,
         options: Options,
         progress: Progress<'_>,
     ) -> Result<Self, OcrError> {
+        let requested = device;
         let device = device.resolve()?;
-        // Half precision on a GPU: the weights are published in bfloat16 and
-        // the three precisions were measured to produce the same text, so this
-        // is memory and speed for nothing. On the CPU candle has no fast half
-        // path, so full precision is the faster choice there.
-        let dtype = if device.is_cpu() {
-            DType::F32
-        } else {
-            DType::F16
-        };
 
         let detection = paddle_download::resolve(
             models_dir,
@@ -154,24 +159,34 @@ impl Engine {
             OcrError::Artifact(format!("cannot read the tokenizer: {e}"))
         })?;
 
-        let weights = checkpoint.dir.join(WEIGHTS_FILE);
-        // SAFETY: the weights are memory-mapped and must not change while the
-        // engine is loaded; they are ours, under the model directory, and
-        // verified against a digest when they were fetched.
-        let vb = unsafe {
-            VarBuilder::from_mmaped_safetensors(&[weights], dtype, &device)?
+        let networks: Box<dyn VlModel> = match runtime {
+            Runtime::Candle => {
+                // Half precision on a GPU: the weights are published in
+                // bfloat16 and the three precisions were measured to produce
+                // the same text, so this is memory and speed for nothing. On
+                // the CPU candle has no fast half path, so full precision is
+                // the faster choice there.
+                let dtype = if device.is_cpu() {
+                    DType::F32
+                } else {
+                    DType::F16
+                };
+                Box::new(runtime::load(
+                    &checkpoint.dir,
+                    cfg.clone(),
+                    device.clone(),
+                    dtype,
+                )?)
+            },
+            Runtime::Burn => {
+                burn_networks(&checkpoint.dir, cfg.clone(), requested)?
+            },
         };
-        let tower = Tower::load(&cfg.vision, vb.pp("visual"))?;
-        let projector =
-            Projector::load(&cfg.vision, cfg.hidden_size, vb.pp("mlp_AR"))?;
-        let decoder = Decoder::load(&cfg, vb)?;
-
-        let reader = Reader::new(
-            tower, projector, decoder, tokenizer, cfg, image_cfg, device, dtype,
-        )?;
+        let reader = Reader::new(networks, tokenizer, cfg, image_cfg)?;
 
         Ok(Self {
             detector,
+            device,
             reader,
             detection_name: detection
                 .name
@@ -198,7 +213,7 @@ impl Engine {
     /// how many there are — a page is tens of seconds and a caller that shows
     /// nothing for that long looks stuck.
     pub fn read_page(
-        &self,
+        &mut self,
         page: &RawPage,
         number: usize,
         source: &str,
@@ -257,7 +272,7 @@ impl Engine {
 
     /// Reads a page image from a file.
     pub fn read_file(
-        &self,
+        &mut self,
         path: &Path,
         number: usize,
         report: &mut dyn FnMut(usize, usize),
@@ -271,13 +286,13 @@ impl Engine {
     }
 
     /// Reads one already-cut picture.
-    pub fn read_block(&self, picture: &RgbImage) -> Result<Answer, OcrError> {
+    pub fn read_block(
+        &mut self,
+        picture: &RgbImage,
+    ) -> Result<Answer, OcrError> {
         let prepared = picture::prepare(picture, self.reader.image_config())?;
-        Ok(self.reader.read(
-            &prepared,
-            self.options.task,
-            &self.options.limits,
-        )?)
+        self.reader
+            .read(&prepared, self.options.task, &self.options.limits)
     }
 
     /// Runs the detector and returns the line boxes in reading order.
@@ -291,7 +306,7 @@ impl Engine {
         let tensor = Tensor::from_vec(
             input.data,
             (1, raw::CHANNELS, input.height, input.width),
-            self.reader.device(),
+            &self.device,
         )?
         .to_dtype(DType::F32)?;
         let map = self.detector.forward(&tensor)?;
@@ -308,6 +323,38 @@ impl Engine {
         sort_boxes(&mut boxes);
         Ok(boxes.into_iter().map(|(quad, _)| quad).collect())
     }
+}
+
+/// The reader's networks on the burn runtime.
+///
+/// burn computes in f32 on either device — on the CPU as candle does there,
+/// and on Metal too, where its f16 backend cannot run this model yet (see
+/// [`runtime_burn`](super::runtime_burn)).
+#[cfg(feature = "ocr-burn")]
+fn burn_networks(
+    checkpoint: &Path,
+    cfg: ModelConfig,
+    device: Device,
+) -> Result<Box<dyn VlModel>, OcrError> {
+    use super::runtime_burn;
+    match device {
+        Device::Cpu => runtime_burn::load_cpu(checkpoint, cfg),
+        Device::Metal => runtime_burn::load_metal(checkpoint, cfg),
+    }
+}
+
+/// Without the `ocr-burn` feature there is no burn runtime to load.
+#[cfg(not(feature = "ocr-burn"))]
+fn burn_networks(
+    _checkpoint: &Path,
+    _cfg: ModelConfig,
+    _device: Device,
+) -> Result<Box<dyn VlModel>, OcrError> {
+    Err(OcrError::InvalidOptions(
+        "this build has no burn runtime; install or build trakktor with the \
+         `burn` feature"
+            .into(),
+    ))
 }
 
 /// Turns one block's answer into result lines.
