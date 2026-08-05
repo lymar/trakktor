@@ -55,10 +55,13 @@ fn analysed(
         width: 1000,
         height: 1400,
         lines,
+        reflowed: false,
     };
     let blocks = blocks
         .into_iter()
         .map(|(kind, lines)| Block {
+            label: None,
+            score: None,
             quad: cover(&page, &lines),
             kind,
             lines,
@@ -102,10 +105,14 @@ const SEAMS: &[(&str, &str, &str)] = &[
     ("λόγος", "νέος", "λόγος νέος"),
     ("word,", "next", "word, next"),
     ("2024", "was", "2024 was"),
-    // Scripts written without word spaces get none.
+    // Scripts written without word spaces get none — between themselves.
     ("第一页结束", "于句中并继续", "第一页结束于句中并继续"),
     ("བཀྲ་ཤིས་", "བདེ་ལེགས", "བཀྲ་ཤིས་བདེ་ལེགས"),
-    ("word", "བདེ", "wordབདེ"),
+    // But a change of script is not a word boundary that needs no space, it is
+    // two different things meeting: welding them makes one unreadable word.
+    ("word", "བདེ", "word བདེ"),
+    ("МОЛИТВА", "ཧཱུྃ", "МОЛИТВА ཧཱུྃ"),
+    ("བདེ", "ХУНГ", "བདེ ХУНГ"),
 ];
 
 #[test]
@@ -325,6 +332,8 @@ fn a_footnote_between_the_two_halves_does_not_break_the_join() {
         .lines
         .push(short("1. Сноска первой страницы.", 1200.0));
     let note = Block {
+        label: None,
+        score: None,
         kind: BlockKind::Footnote,
         lines: vec![first.0.lines.len() - 1],
         quad: cover(&first.0, &[first.0.lines.len() - 1]),
@@ -423,6 +432,7 @@ fn plain_text_names_every_page_after_the_first() {
         width: 1000,
         height: 1400,
         lines: vec![short("Первая строка.", 100.0), short("Вторая.", 130.0)],
+        reflowed: false,
     };
     let second = Page {
         number: 2,
@@ -430,6 +440,7 @@ fn plain_text_names_every_page_after_the_first() {
         width: 1000,
         height: 1400,
         lines: vec![short("Строка второй страницы.", 100.0)],
+        reflowed: false,
     };
     assert_eq!(
         plain(std::slice::from_ref(&first)),
@@ -440,4 +451,42 @@ fn plain_text_names_every_page_after_the_first() {
         "Первая строка.\nВторая.\n\n=== page 2 · b.png ===\n\nСтрока второй \
          страницы.\n"
     );
+}
+
+/// A reader that reflowed the text itself already decided where the lines are,
+/// and the assembly must not decide again: a verse and the gloss under it are
+/// not a paragraph.
+#[test]
+fn a_reflowed_page_keeps_the_lines_the_reader_chose() {
+    let mut analysed = paragraph(
+        1,
+        "a.png",
+        vec![
+            full("ཧཱུྃཿ་ཨོ་རྒྱན་ཡུལ་གྱི་ནུབ་བྱང་མཚམས༔", 100.0),
+            full("ХУНГ ОРГЬЕН ЮЛ ГЬИ НУБ ДЖАНГ ЦАМ", 130.0),
+            short("На северо-западной границе страны Уддияны", 160.0),
+        ],
+    );
+    analysed.0.reflowed = true;
+    let out = render(&[analysed], &Options::default());
+    assert_eq!(
+        out,
+        "ཧཱུྃཿ་ཨོ་རྒྱན་ཡུལ་གྱི་ནུབ་བྱང་མཚམས༔\\\nХУНГ ОРГЬЕН ЮЛ ГЬИ НУБ ДЖАНГ ЦАМ\\\nНа \
+         северо-западной границе страны Уддияны\n"
+    );
+}
+
+/// …while a recognizer's lines are printed rows and still become a paragraph.
+#[test]
+fn a_page_of_printed_rows_is_still_reflowed() {
+    let analysed = paragraph(
+        1,
+        "a.png",
+        vec![
+            full("Слово раз-", 100.0),
+            short("бивается на строки.", 130.0),
+        ],
+    );
+    let out = render(&[analysed], &Options::default());
+    assert_eq!(out, "Слово разбивается на строки.\n");
 }

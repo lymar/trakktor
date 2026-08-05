@@ -37,11 +37,47 @@
 //! short string sits at the same height on many pages. That pass is therefore
 //! separate: [`document_furniture`] builds the histogram over a whole document
 //! and [`analyse`] consumes its verdict.
+//!
+//! # When a layout model has run
+//!
+//! Everything above is what geometry can reach on its own. A caller that ran
+//! the [layout model](detect) hands its [regions](region::Region) to
+//! [`analyse_with`], and the passes stop guessing where the model spoke: a
+//! block's kind comes from its label, and the cut treats a region as one
+//! object rather than as the lines inside it.
+//!
+//! The model is an *improvement*, not a precondition, and the code is written
+//! that way on purpose. It is trained on Chinese and English documents, and its
+//! confidence outside that circle drops to where a threshold decides whether a
+//! page marks up at all (measured: 0.97 for an English paragraph against 0.40
+//! for a Tibetan one). So a line that fell in no region is *not* dropped —
+//! which is what the reference pipeline does with it — and a page with no
+//! regions is read exactly as it would have been without the model.
 
+#[cfg(feature = "ocr-runtime")]
+pub mod config;
+#[cfg(feature = "ocr-runtime")]
+pub mod detect;
+#[cfg(feature = "ocr-runtime")]
+pub mod download;
+#[cfg(feature = "ocr-runtime")]
+pub mod image;
+#[cfg(feature = "ocr-runtime")]
+pub mod model;
+#[cfg(feature = "ocr-runtime")]
+pub mod net;
+#[cfg(all(feature = "ocr-runtime", feature = "ocr-burn"))]
+pub mod net_burn;
+pub mod post;
+pub mod region;
+#[cfg(feature = "ocr-runtime")]
+pub mod sampling;
 #[cfg(test)]
 mod tests;
 
 use std::collections::{HashMap, HashSet};
+
+pub use region::{Label, Region};
 
 use crate::ocr::page::{Line, Page, Quad};
 
@@ -79,6 +115,16 @@ pub struct Block {
     /// rectangle because the analysis works on a deskewed page and maps its
     /// result back onto the original one.
     pub quad: Quad,
+    /// What the layout model called this block, when one ran and claimed it.
+    ///
+    /// `kind` is what this module made of the block and is always there;
+    /// `label` is what the model said and is finer — it tells a table from a
+    /// paragraph, an abstract from running text, a stamp from a picture.
+    /// Reporting both is the point: the kind drives the Markdown, the label is
+    /// what a caller can act on.
+    pub label: Option<Label>,
+    /// The model's confidence in the label.
+    pub score: Option<f32>,
 }
 
 /// A page's blocks, in reading order.
@@ -114,6 +160,8 @@ impl Layout {
                     kind: BlockKind::Figure { index },
                     lines: Vec::new(),
                     quad: *quad,
+                    label: None,
+                    score: None,
                 },
             );
         }
@@ -562,6 +610,364 @@ pub fn analyse(
 }
 
 // ------------------------------------------------------------------------
+// With a layout model
+// ------------------------------------------------------------------------
+
+/// Turns one page's lines into ordered, typed blocks, using a layout model's
+/// regions where they reach and the geometry everywhere else.
+///
+/// What the labels replace is **classification**, not the reading of the page:
+/// a region says what a block *is*, and it says where a paragraph ends — the
+/// model returns one box per paragraph, which is the split the geometry has to
+/// guess from leading and indents. What the labels do *not* replace is the
+/// ordering, which stays this module's own recursive cut, run over regions as
+/// whole objects rather than over the lines inside them. That is what puts a
+/// page whose text wraps around a picture back in order.
+///
+/// Lines that fell in no region are not dropped. They are cut, grouped and
+/// classified exactly as [`analyse`] would have done, and take their place
+/// among the regions by position. On a page the model said nothing about, this
+/// function and [`analyse`] agree.
+pub fn analyse_with(
+    page: &Page,
+    regions: &[Region],
+    repeated: &Repeated,
+    settings: &Settings,
+) -> Layout {
+    let sheet = Sheet::new(page, settings);
+    if sheet.lines.is_empty() && regions.is_empty() {
+        return Layout {
+            blocks: Vec::new(),
+            figures: Vec::new(),
+        };
+    }
+    let unit = sheet.median_height();
+
+    // Regions come in page coordinates and the analysis works on a deskewed
+    // page, so they are turned the same way the lines were.
+    let placed: Vec<(Label, Rect)> = regions
+        .iter()
+        .map(|region| {
+            let points = region
+                .quad
+                .points
+                .map(|p| unrotate(p, sheet.center, sheet.sin, sheet.cos));
+            (region.label, bounds(&points))
+        })
+        .collect();
+
+    // Which region each line belongs to. The rule is the innermost container,
+    // not the largest overlap — see [`region::owner`], which both this and the
+    // generative engine's block assembly go through so they cannot disagree
+    // about what is inside what.
+    let deskewed: Vec<Region> = placed
+        .iter()
+        .zip(regions)
+        .map(|((label, rect), region)| Region {
+            label: *label,
+            score: region.score,
+            quad: Quad::new([
+                (rect.x0, rect.y0),
+                (rect.x1, rect.y0),
+                (rect.x1, rect.y1),
+                (rect.x0, rect.y1),
+            ]),
+        })
+        .collect();
+    let owner: Vec<Option<usize>> = sheet
+        .lines
+        .iter()
+        .map(|line| {
+            region::owner(
+                (line.rect.x0, line.rect.y0, line.rect.x1, line.rect.y1),
+                &deskewed,
+            )
+        })
+        .collect();
+
+    // Pictures have no lines to carry them; they are their own blocks and the
+    // caller crops them from the region, not from the ink.
+    let mut figures = Vec::new();
+    let mut figure_labels = Vec::new();
+    let mut figure_scores = Vec::new();
+    let mut figure_of: HashMap<usize, usize> = HashMap::new();
+    for (index, (label, _)) in placed.iter().enumerate() {
+        if label.is_pictorial() {
+            figure_of.insert(index, figures.len());
+            figures.push(regions[index].quad);
+            figure_labels.push(*label);
+            figure_scores.push(regions[index].score);
+        }
+    }
+
+    // One segment per region that caught something, plus the geometric
+    // segments of everything that fell outside every region.
+    let mut segments: Vec<Segment> = Vec::new();
+    let mut labels: Vec<Option<Label>> = Vec::new();
+    let mut scores: Vec<Option<f32>> = Vec::new();
+    for (index, (label, rect)) in placed.iter().enumerate() {
+        if label.is_pictorial() {
+            continue;
+        }
+        let lines: Vec<usize> = (0..sheet.lines.len())
+            .filter(|at| owner[*at] == Some(index))
+            .collect();
+        if lines.is_empty() {
+            continue;
+        }
+        segments.push(sheet.segment_of(&lines, *rect, unit, settings));
+        labels.push(Some(*label));
+        scores.push(Some(regions[index].score));
+    }
+
+    let orphans: Vec<usize> = (0..sheet.lines.len())
+        .filter(|at| owner[*at].is_none())
+        .collect();
+    let mut furniture = Furniture {
+        taken: HashSet::new(),
+        top: Vec::new(),
+        bottom: Vec::new(),
+    };
+    if !orphans.is_empty() {
+        furniture =
+            strip_furniture_of(&sheet, &orphans, repeated, unit, settings);
+        let body: Vec<usize> = orphans
+            .iter()
+            .copied()
+            .filter(|at| !furniture.taken.contains(at))
+            .collect();
+        if !body.is_empty() {
+            let column = sheet.bounds_of(&body);
+            let leaves = xy_cut(&sheet, &body, column, unit, settings);
+            for seg in segment(&sheet, &leaves, unit, settings) {
+                segments.push(seg);
+                labels.push(None);
+                scores.push(None);
+            }
+        }
+    }
+
+    // Reading order over whole blocks. Figures take part in it: a picture the
+    // text wraps around is an obstacle, and leaving it out is exactly what
+    // makes the geometric layer rebuild the page wrongly.
+    let mut atoms: Vec<(Rect, Piece)> = segments
+        .iter()
+        .enumerate()
+        .map(|(at, seg)| (seg.rect, Piece::Segment(at)))
+        .collect();
+    for (index, at) in &figure_of {
+        atoms.push((placed[*index].1, Piece::Figure(*at)));
+    }
+    let order = order_blocks(&atoms, unit, settings);
+
+    let stats = Stats::new(&sheet, &segments, unit);
+    let mut kinds: Vec<BlockKind> = segments
+        .iter()
+        .zip(&labels)
+        .enumerate()
+        .map(|(at, (seg, label))| match label {
+            Some(label) => kind_of(*label),
+            None => classify(seg, &stats, at + 1 == segments.len(), settings),
+        })
+        .collect();
+    assign_levels(&segments, &mut kinds, &stats);
+
+    // The ranking above judges by size, which is the right answer when nothing
+    // else is known and the wrong one here: the model has already said which
+    // heading is *the* title, and a numbered section heading set in the same
+    // size as the title would otherwise rank alongside it. So a labelled
+    // heading takes its level from the label, and its numbering below that.
+    for (at, label) in labels.iter().enumerate() {
+        let level = match label {
+            Some(Label::DocTitle) => 1,
+            Some(Label::ParagraphTitle) => {
+                1 + leading_number(&segments[at].lead).unwrap_or(1)
+            },
+            _ => continue,
+        };
+        kinds[at] = BlockKind::Heading {
+            level: level.min(MAX_LEVEL),
+        };
+    }
+
+    let mut blocks = Vec::with_capacity(atoms.len() + 2);
+    for row in &furniture.top {
+        blocks.push(sheet.block(
+            BlockKind::PageFurniture,
+            &row.lines,
+            row.rect,
+        ));
+    }
+    let mut notes = Vec::new();
+    for at in order {
+        match atoms[at].1 {
+            Piece::Figure(index) => blocks.push(Block {
+                kind: BlockKind::Figure { index },
+                lines: Vec::new(),
+                quad: figures[index],
+                label: Some(figure_labels[index]),
+                score: Some(figure_scores[index]),
+            }),
+            Piece::Segment(at) => {
+                let mut block = sheet.block(
+                    kinds[at],
+                    &segments[at].lines,
+                    segments[at].rect,
+                );
+                block.label = labels[at];
+                block.score = scores[at];
+                // Notes go after the body of the page, as they do without a
+                // model: a note in the middle of a column would otherwise cut
+                // the text in two.
+                if kinds[at] == BlockKind::Footnote {
+                    notes.push(block);
+                } else {
+                    blocks.push(block);
+                }
+            },
+        }
+    }
+    blocks.extend(notes);
+    for row in &furniture.bottom {
+        blocks.push(sheet.block(
+            BlockKind::PageFurniture,
+            &row.lines,
+            row.rect,
+        ));
+    }
+    Layout { blocks, figures }
+}
+
+/// What sits at one place in the reading order.
+#[derive(Debug, Clone, Copy)]
+enum Piece {
+    Segment(usize),
+    Figure(usize),
+}
+
+/// The block a label stands for.
+///
+/// Two of the twenty are deliberately *not* mapped to something of their own.
+/// A `formula` and a `table` are read as running text here, because that is
+/// what the recognizer gave us for them — the label says what the block is, and
+/// a caller that can do better with it (the generative engine can) reads the
+/// label itself.
+fn kind_of(label: Label) -> BlockKind {
+    match label {
+        // The level is provisional; the ranking pass replaces it.
+        Label::DocTitle => BlockKind::Heading { level: 1 },
+        Label::ParagraphTitle => BlockKind::Heading { level: 2 },
+        Label::Footnote => BlockKind::Footnote,
+        Label::Header | Label::Footer | Label::Number | Label::AsideText => {
+            BlockKind::PageFurniture
+        },
+        Label::FigureTitle | Label::FormulaNumber => BlockKind::Caption,
+        Label::Image | Label::Chart | Label::Seal => {
+            // Pictures never reach here — they carry no lines — but the match
+            // has to be total.
+            BlockKind::Paragraph
+        },
+        _ => BlockKind::Paragraph,
+    }
+}
+
+/// Orders whole blocks: columns first, then bands, recursively.
+///
+/// The same cut as [`xy_cut`], on boxes that have already swallowed the space
+/// between their own lines — which is what lets the gap that separates two
+/// columns be measured against the page's line height rather than guessed.
+fn order_blocks(
+    atoms: &[(Rect, Piece)],
+    unit: f32,
+    settings: &Settings,
+) -> Vec<usize> {
+    fn cut(
+        atoms: &[(Rect, Piece)],
+        ids: &[usize],
+        unit: f32,
+        settings: &Settings,
+        out: &mut Vec<usize>,
+    ) {
+        if ids.len() <= 1 {
+            out.extend_from_slice(ids);
+            return;
+        }
+        let gutter = settings.gutter_height * unit;
+        let columns = split_rects(atoms, ids, Axis::X, gutter);
+        if columns.len() >= 2 {
+            // Side by side only if they share a vertical span; otherwise these
+            // are bands that happen to start at different indents.
+            let first = union_of(atoms, &columns[0]);
+            let last = union_of(atoms, columns.last().expect("a column"));
+            if first.y_overlap(&last) >= settings.column_y_overlap {
+                for column in &columns {
+                    cut(atoms, column, unit, settings, out);
+                }
+                return;
+            }
+        }
+        let bands = split_rects(atoms, ids, Axis::Y, 0.0);
+        if bands.len() >= 2 {
+            for band in &bands {
+                cut(atoms, band, unit, settings, out);
+            }
+            return;
+        }
+        let mut sorted = ids.to_vec();
+        sorted.sort_by(|a, b| {
+            let (l, r) = (atoms[*a].0, atoms[*b].0);
+            compare(l.y0, r.y0).then(compare(l.x0, r.x0))
+        });
+        out.extend(sorted);
+    }
+
+    let ids: Vec<usize> = (0..atoms.len()).collect();
+    let mut out = Vec::with_capacity(atoms.len());
+    cut(atoms, &ids, unit, settings, &mut out);
+    out
+}
+
+/// Sorts blocks along one axis and cuts wherever they leave a gap.
+fn split_rects(
+    atoms: &[(Rect, Piece)],
+    ids: &[usize],
+    axis: Axis,
+    min_gap: f32,
+) -> Vec<Vec<usize>> {
+    let span = |at: &usize| {
+        let rect = &atoms[*at].0;
+        match axis {
+            Axis::X => (rect.x0, rect.x1),
+            Axis::Y => (rect.y0, rect.y1),
+        }
+    };
+    let mut sorted = ids.to_vec();
+    sorted.sort_by(|a, b| compare(span(a).0, span(b).0));
+
+    let mut parts: Vec<Vec<usize>> = Vec::new();
+    let mut end = f32::NEG_INFINITY;
+    for at in sorted {
+        let (start, stop) = span(&at);
+        if parts.is_empty() || start - end >= min_gap.max(f32::EPSILON) {
+            parts.push(Vec::new());
+            end = stop;
+        } else {
+            end = end.max(stop);
+        }
+        parts.last_mut().expect("a part").push(at);
+    }
+    parts
+}
+
+fn union_of(atoms: &[(Rect, Piece)], ids: &[usize]) -> Rect {
+    let mut rect = atoms[ids[0]].0;
+    for at in &ids[1..] {
+        rect.merge(&atoms[*at].0);
+    }
+    rect
+}
+
+// ------------------------------------------------------------------------
 // Geometry
 // ------------------------------------------------------------------------
 
@@ -701,6 +1107,49 @@ impl<'a> Sheet<'a> {
         rect
     }
 
+    /// Builds a segment out of the lines a layout region caught.
+    ///
+    /// The region *is* the paragraph — the model returns one box per paragraph
+    /// — so there is nothing to split here; what still has to be measured is
+    /// everything the classification and the heading ranking read: how many
+    /// rows, at what pitch, in what script, opening with what.
+    fn segment_of(
+        &self,
+        lines: &[usize],
+        rect: Rect,
+        unit: f32,
+        settings: &Settings,
+    ) -> Segment {
+        let rows = make_rows(self, lines, unit, settings);
+        let mut tops: Vec<f32> = rows.iter().map(|row| row.rect.y0).collect();
+        tops.sort_by(|a, b| compare(*a, *b));
+        let mut steps: Vec<f32> = tops
+            .windows(2)
+            .map(|pair| pair[1] - pair[0])
+            .filter(|step| *step > 0.0)
+            .collect();
+        let mut heights: Vec<f32> =
+            lines.iter().map(|at| self.lines[*at].height).collect();
+        let lead: Vec<&str> = rows
+            .first()
+            .map(|row| row.lines.iter().map(|at| self.text(*at)).collect())
+            .unwrap_or_default();
+        Segment {
+            lines: lines.to_vec(),
+            rect,
+            column: rect,
+            rows: rows.len(),
+            pitch: median(&mut steps).filter(|pitch| *pitch > 0.0),
+            height: median(&mut heights).unwrap_or(unit),
+            script: dominant_script(self, lines),
+            floating: false,
+            gap_above: f32::INFINITY,
+            gap_below: f32::INFINITY,
+            from_end: 0,
+            lead: lead.join(" "),
+        }
+    }
+
     /// Builds a block, mapping its extent back onto the original page and its
     /// line positions back onto [`Page::lines`].
     fn block(&self, kind: BlockKind, lines: &[usize], rect: Rect) -> Block {
@@ -716,6 +1165,8 @@ impl<'a> Sheet<'a> {
             quad: Quad::new(
                 corners.map(|p| rotate(p, self.center, self.sin, self.cos)),
             ),
+            label: None,
+            score: None,
         }
     }
 }
@@ -804,21 +1255,37 @@ fn strip_furniture(
     unit: f32,
     settings: &Settings,
 ) -> Furniture {
+    let all: Vec<usize> = (0..sheet.lines.len()).collect();
+    strip_furniture_of(sheet, &all, repeated, unit, settings)
+}
+
+/// The same pass over a subset of the page's lines — what is left after a
+/// layout model has claimed the rest.
+fn strip_furniture_of(
+    sheet: &Sheet,
+    ids: &[usize],
+    repeated: &Repeated,
+    unit: f32,
+    settings: &Settings,
+) -> Furniture {
     let mut taken: HashSet<usize> = HashSet::new();
 
     // Whatever the document-level pass called repeated: running heads and
     // feet, and watermarks, which sit nowhere near a margin and would
     // otherwise be interleaved into the body.
-    for (at, geom) in sheet.lines.iter().enumerate() {
+    for at in ids {
+        let geom = &sheet.lines[*at];
         if repeated.contains(&sheet.page.lines[geom.index], sheet.page.height) {
-            taken.insert(at);
+            taken.insert(*at);
         }
     }
 
     // Page numbers. Peeling rows rather than looking only at the first and the
     // last lets a foot carrying two numbers — one at each margin, which the
     // row merge deliberately keeps apart — come off in one piece.
-    let rest: Vec<usize> = (0..sheet.lines.len())
+    let rest: Vec<usize> = ids
+        .iter()
+        .copied()
         .filter(|at| !taken.contains(at))
         .collect();
     if !rest.is_empty() {

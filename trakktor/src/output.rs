@@ -1290,12 +1290,15 @@ mod tests;
 pub fn print_ocr(
     pages: &[trakktor_core::ocr::Page],
     figures: &[Vec<trakktor_core::ocr::Quad>],
+    // What the layout model made of each page, when it ran at all. Empty means
+    // it did not, and the analysis falls back to geometry — which is also what
+    // happens page by page where the model found nothing.
+    regions: &[Vec<trakktor_core::ocr::layout::Region>],
     // The language the run was told to read, when the engine takes one at all:
     // a generative engine works the writing system out for itself, and
     // reporting a language it never used would be an invention.
     language: Option<&str>,
-    detection: &str,
-    recognition: &str,
+    models: OcrModels<'_>,
     markdown: bool,
     out: Option<&std::path::Path>,
     json: bool,
@@ -1311,9 +1314,20 @@ pub fn print_ocr(
         .iter()
         .enumerate()
         .map(|(at, page)| {
-            let layout = layout::analyse(page, &repeated, &settings);
-            let found = figures.get(at).cloned().unwrap_or_default();
-            (page.clone(), layout.with_figures(found))
+            let marked = regions.get(at).map(Vec::as_slice).unwrap_or_default();
+            if marked.is_empty() {
+                let layout = layout::analyse(page, &repeated, &settings);
+                let found = figures.get(at).cloned().unwrap_or_default();
+                (page.clone(), layout.with_figures(found))
+            } else {
+                // The model's own pictures replace the ink-based ones: it says
+                // what a picture *is*, and the raster path only says where ink
+                // stands that no text box covers.
+                (
+                    page.clone(),
+                    layout::analyse_with(page, marked, &repeated, &settings),
+                )
+            }
         })
         .collect();
 
@@ -1341,8 +1355,10 @@ pub fn print_ocr(
     if json {
         let pages_json: Vec<Value> = pages
             .iter()
-            .map(|page| {
-                json!({
+            .zip(&analysed)
+            .enumerate()
+            .map(|(at, (page, (_, layout)))| {
+                let mut item = json!({
                     "number": page.number,
                     "source": page.source,
                     "width": page.width,
@@ -1364,12 +1380,21 @@ pub fn print_ocr(
                         }
                         item
                     }).collect::<Vec<_>>(),
-                })
+                });
+                // Blocks are the layout model's word, so they appear only when
+                // it ran. The geometry's own guesses stay where they are used —
+                // in the Markdown — rather than being reported as facts.
+                let marked =
+                    regions.get(at).map(Vec::as_slice).unwrap_or_default();
+                if !marked.is_empty() {
+                    item["blocks"] = json!(blocks_json(layout));
+                }
+                item
             })
             .collect();
         let mut envelope = json!({
             "pages": pages_json,
-            "models": { "detection": detection, "recognition": recognition },
+            "models": models.json(),
         });
         if let Some(language) = language {
             envelope["language"] = json!(language);
@@ -1386,6 +1411,135 @@ pub fn print_ocr(
 
     print!("{text}");
     Ok(())
+}
+
+/// The models a run went through, for the result envelope.
+pub struct OcrModels<'a> {
+    pub detection: &'a str,
+    pub recognition: &'a str,
+    /// The layout model, when one ran.
+    pub layout: Option<&'a str>,
+}
+
+impl OcrModels<'_> {
+    fn json(&self) -> Value {
+        let mut models = json!({
+            "detection": self.detection,
+            "recognition": self.recognition,
+        });
+        if let Some(layout) = self.layout {
+            models["layout"] = json!(layout);
+        }
+        models
+    }
+}
+
+/// One page's blocks, in reading order, each with the lines it caught.
+///
+/// Two names travel with a block and they are not the same thing: `label` is
+/// the layout model's word, present only where the model claimed the block,
+/// and `kind` is what the analysis made of it, which is what the Markdown was
+/// built from. A block the model never saw carries the kind alone.
+fn blocks_json(layout: &trakktor_core::ocr::layout::Layout) -> Vec<Value> {
+    use trakktor_core::ocr::layout::BlockKind;
+
+    layout
+        .blocks
+        .iter()
+        .map(|block| {
+            let kind = match block.kind {
+                BlockKind::Figure { .. } => "figure",
+                BlockKind::Heading { .. } => "heading",
+                BlockKind::Paragraph => "paragraph",
+                BlockKind::Footnote => "footnote",
+                BlockKind::PageFurniture => "furniture",
+                BlockKind::Caption => "caption",
+            };
+            let mut item = json!({
+                "kind": kind,
+                "quad": block.quad.points.iter()
+                    .map(|(x, y)| json!([round1(*x), round1(*y)]))
+                    .collect::<Vec<_>>(),
+                "lines": block.lines,
+            });
+            if let Some(label) = block.label {
+                item["label"] = json!(label.name());
+            }
+            if let Some(score) = block.score {
+                item["score"] = json!(round4(score));
+            }
+            if let BlockKind::Heading { level } = block.kind {
+                item["level"] = json!(level);
+            }
+            item
+        })
+        .collect()
+}
+
+/// Prints what the layout stage made of the pages, on its own.
+///
+/// No text: this command answers "what is on this page", and the blocks come
+/// back in the order the model ranked them — by confidence, which is what the
+/// caller wants when the question is what the model is sure of. Reading order
+/// is a property of a *read* page and belongs to the engines.
+pub fn print_ocr_layout(
+    pages: &[(
+        usize,
+        String,
+        u32,
+        u32,
+        Vec<trakktor_core::ocr::layout::Region>,
+    )],
+    model: &str,
+    json: bool,
+    pretty: bool,
+) {
+    if json {
+        let pages_json: Vec<Value> = pages
+            .iter()
+            .map(|(number, source, width, height, regions)| {
+                json!({
+                    "number": number,
+                    "source": source,
+                    "width": width,
+                    "height": height,
+                    "blocks": regions.iter().map(|region| json!({
+                        "label": region.label.name(),
+                        "score": round4(region.score),
+                        "quad": region.quad.points.iter()
+                            .map(|(x, y)| json!([round1(*x), round1(*y)]))
+                            .collect::<Vec<_>>(),
+                    })).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        print_json(
+            &json!({ "pages": pages_json, "models": { "layout": model } }),
+            pretty,
+        );
+        return;
+    }
+
+    for (at, (number, source, _, _, regions)) in pages.iter().enumerate() {
+        if at > 0 {
+            println!();
+        }
+        if pages.len() > 1 {
+            println!("=== page {number} · {source} ===");
+        }
+        for region in regions {
+            let (x0, y0, x1, y1) = region.bounds();
+            println!(
+                "{:<16} {:.2}  {:.0},{:.0} {:.0}×{:.0}",
+                region.label.name(),
+                region.score,
+                x0,
+                y0,
+                x1 - x0,
+                y1 - y0
+            );
+        }
+    }
 }
 
 /// Prints the language codes an OCR engine covers, with the recognizer each

@@ -33,9 +33,10 @@ const DEFAULT_MODEL_DIR_NAME: &str = ".trakktor";
 /// audio file to timestamped text, reading a text or Markdown file aloud into
 /// an audio file — in a preset voice or in one cloned from a sample
 /// recording — cutting the silence out of a recording, reading the text off a
-/// scan or a screenshot page by page, restoring punctuation to a raw
-/// transcript, splitting a transcript into readable paragraphs, or marking
-/// where the stress falls in Russian text.
+/// scan or a screenshot page by page, marking a page up into labelled blocks
+/// (title, heading, paragraph, footnote, table, formula, picture), restoring
+/// punctuation to a raw transcript, splitting a transcript into readable
+/// paragraphs, or marking where the stress falls in Russian text.
 ///
 /// Output is JSON by default (`--pretty` indents it); pass `--text` for
 /// human-readable text. Results go to stdout, errors to stderr. Exit codes are
@@ -180,6 +181,14 @@ enum Command {
     /// page whose script it does not cover, for one that mixes scripts, or
     /// when a table or a formula is wanted as structure rather than as lines —
     /// about 1.9 GB downloaded once, and tens of seconds per page.
+    ///
+    /// Both engines also run a layout model, which labels the blocks of the
+    /// page — document title, section heading, paragraph, abstract, footnote,
+    /// running head, page number, table, formula, picture, caption — so that
+    /// the structure is read rather than guessed. It costs 129 MB, downloaded
+    /// once, and about a second a page; `--no-layout` skips it when only the
+    /// lines are wanted. `ocr layout` runs the same model on its own and
+    /// answers "what is on this page" without reading a word of it.
     Ocr {
         #[command(subcommand)]
         command: OcrCommand,
@@ -237,6 +246,20 @@ pub(crate) enum OcrCommand {
     /// The price is the model: about 1.9 GB downloaded once, and tens of
     /// seconds a page. Prefer `ocr paddle` unless you need what this buys.
     Vl(Box<OcrVlArgs>),
+
+    /// Mark up the structure of a page without reading it.
+    ///
+    /// A layout model returns the blocks a page is made of, each with a label:
+    /// document title, section heading, paragraph, abstract, footnote, running
+    /// head, page number, table, formula, picture, caption, stamp, chart. It
+    /// reads no text — this is the answer to "what is on this page", not "what
+    /// does it say".
+    ///
+    /// The same model runs inside `ocr paddle` and `ocr vl` unless
+    /// `--no-layout` turns it off, where the labels drive the Markdown and,
+    /// for `ocr vl`, the blocks the model is asked to read. It downloads once,
+    /// about 129 MB, and takes about a second a page.
+    Layout(Box<OcrLayoutArgs>),
 }
 
 #[derive(Args)]
@@ -323,6 +346,22 @@ pub(crate) struct OcrPaddleArgs {
     /// fires on a scanned book.
     #[arg(long)]
     pub(crate) textline_orientation: bool,
+
+    /// Skip the layout model, which otherwise labels the blocks of the page —
+    /// heading, paragraph, footnote, running head, page number, table,
+    /// formula, picture. Without those labels the structure is guessed from
+    /// the geometry, and the guess fails where it matters most: a title set in
+    /// capitals makes *shorter* boxes than the text below it, so it is not
+    /// found by size at all.
+    ///
+    /// Use this when only the lines are wanted and their structure is not, or
+    /// to avoid the 129 MB model. It saves about a second a page.
+    #[arg(long)]
+    pub(crate) no_layout: bool,
+
+    /// Layout model to run.
+    #[arg(long, value_name = "name|dir")]
+    pub(crate) layout_model: Option<String>,
 
     /// Inference runtime executing the models. This engine serves `candle`
     /// only; of the OCR engines, `ocr vl` is the one with a burn runtime.
@@ -472,6 +511,21 @@ pub(crate) struct OcrVlArgs {
     #[arg(long, default_value_t = 0.35, value_name = "ratio")]
     pub(crate) block_padding: f32,
 
+    /// Skip the layout model, and go back to building the blocks out of line
+    /// geometry alone. The labels are what lets a block be cut along the
+    /// structure of the page rather than across it: with them a table goes to
+    /// the model whole, as a table, and a formula goes as a formula; without
+    /// them a table comes back as strips with its columns doubled.
+    ///
+    /// It saves a 129 MB model and about a second a page — next to nothing
+    /// beside this engine's own price.
+    #[arg(long)]
+    pub(crate) no_layout: bool,
+
+    /// Layout model to run.
+    #[arg(long, value_name = "name|dir")]
+    pub(crate) layout_model: Option<String>,
+
     /// Inference runtime executing the model. Both read the pages the same,
     /// at the same precision (f16 on Metal, f32 on the CPU); `burn` needs a
     /// build with the `burn` feature enabled. The detection stage runs on
@@ -492,6 +546,52 @@ pub(crate) struct OcrVlArgs {
         long,
         value_enum,
         default_value_t = DEFAULT_VL_DEVICE,
+        value_name = "device"
+    )]
+    pub(crate) device: DeviceArg,
+}
+
+#[derive(Args)]
+pub(crate) struct OcrLayoutArgs {
+    /// Page images to mark up, in reading order: each file is one page of the
+    /// result. PNG, JPEG, TIFF, WebP, BMP and GIF are understood.
+    #[arg(value_name = "page")]
+    pub(crate) pages: Vec<PathBuf>,
+
+    /// Layout model to run.
+    #[arg(long, value_name = "name|dir")]
+    pub(crate) model: Option<String>,
+
+    /// One score floor for every block kind, replacing the per-kind defaults.
+    ///
+    /// The defaults are not a formality: the model is as sure of a paragraph
+    /// as the writing system is familiar — around 0.98 for English, around
+    /// 0.45 for Tibetan — so a flat half hides most of a page in an unfamiliar
+    /// script. Lower this to see what the model nearly said; raise it to keep
+    /// only what it is certain of.
+    #[arg(long, value_name = "p")]
+    pub(crate) threshold: Option<f32>,
+
+    /// Write every block as its own image into this directory — the crop the
+    /// label describes.
+    #[arg(long, value_name = "dir")]
+    pub(crate) crops: Option<PathBuf>,
+
+    /// Inference runtime executing the model. Both mark the pages up the same,
+    /// in f32 on either device; `burn` needs a build with the `burn` feature.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = RuntimeArg::Candle,
+        value_name = "engine"
+    )]
+    pub(crate) runtime: RuntimeArg,
+
+    /// Device to run on.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = DeviceArg::Cpu,
         value_name = "device"
     )]
     pub(crate) device: DeviceArg,
@@ -2566,6 +2666,12 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                 global.pretty,
             ),
             OcrCommand::Vl(args) => crate::ocr::run_vl(
+                args,
+                &global.model_dir()?,
+                global.json(),
+                global.pretty,
+            ),
+            OcrCommand::Layout(args) => crate::ocr::run_layout(
                 args,
                 &global.model_dir()?,
                 global.json(),

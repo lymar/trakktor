@@ -99,11 +99,19 @@ impl Artifact {
                     param.name, param.dims, record.dims
                 )));
             }
+            let payload = &bytes[record.payload.clone()];
+            let data = match record.data_type {
+                DATA_TYPE_BOOL => payload
+                    .iter()
+                    .map(|b| if *b == 0 { 0.0 } else { 1.0 })
+                    .collect(),
+                _ => f32_le(payload),
+            };
             tensors.insert(
                 param.name.clone(),
                 RawTensor {
                     dims: record.dims.clone(),
-                    data: f32_le(&bytes[record.payload.clone()]),
+                    data,
                 },
             );
         }
@@ -141,6 +149,11 @@ impl Artifact {
 
     /// Whether a weight of this name is present.
     pub fn has(&self, name: &str) -> bool { self.tensors.contains_key(name) }
+
+    /// Every weight name the file carries, in no particular order.
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.tensors.keys().map(String::as_str)
+    }
 
     /// Number of weights read.
     pub fn len(&self) -> usize { self.tensors.len() }
@@ -183,6 +196,7 @@ struct Parameter {
 /// payload lives inside the file.
 struct Record {
     dims: Vec<usize>,
+    data_type: u64,
     payload: std::ops::Range<usize>,
 }
 
@@ -366,14 +380,18 @@ fn records(bytes: &[u8]) -> Result<Vec<Record>, OcrError> {
         let (data_type, dims) = tensor_desc(&bytes[at..end])?;
         at = end;
 
-        if data_type != DATA_TYPE_FP32 {
-            return Err(artifact(format!(
-                "tensor data type {data_type} is not float32; this reader \
-                 only handles the float32 models PaddleOCR publishes"
-            )));
-        }
+        let width = match data_type {
+            DATA_TYPE_FP32 => 4,
+            DATA_TYPE_BOOL => 1,
+            other => {
+                return Err(artifact(format!(
+                    "tensor data type {other} is neither float32 nor bool; \
+                     this reader only handles what the published models carry"
+                )));
+            },
+        };
         let numel: usize = dims.iter().product();
-        let payload = numel.checked_mul(4).ok_or_else(|| {
+        let payload = numel.checked_mul(width).ok_or_else(|| {
             artifact("a tensor is too large to address".into())
         })?;
         let end = at
@@ -382,6 +400,7 @@ fn records(bytes: &[u8]) -> Result<Vec<Record>, OcrError> {
             .ok_or_else(|| artifact("the weights file is truncated".into()))?;
         records.push(Record {
             dims,
+            data_type,
             payload: at..end,
         });
         at = end;
@@ -389,9 +408,15 @@ fn records(bytes: &[u8]) -> Result<Vec<Record>, OcrError> {
     Ok(records)
 }
 
-/// `VarType::TensorDesc.data_type` for float32. The enum is not contiguous,
-/// so no arithmetic may be done on it; every published OCR weight is float32.
+/// `VarType::TensorDesc.data_type` for float32 and for bool. The enum is not
+/// contiguous, so no arithmetic may be done on it.
+///
+/// Almost every published weight is float32; the layout detector carries one
+/// `bool` tensor — the mask of valid anchor positions, folded into the graph
+/// because that model was exported at a fixed input size. A bool is read as
+/// 0.0/1.0, which is how the graph uses it (it multiplies the memory).
 const DATA_TYPE_FP32: u64 = 5;
+const DATA_TYPE_BOOL: u64 = 0;
 
 /// Parses the `VarType::TensorDesc` protobuf: field 1 is the data type, field
 /// 2 is a repeated dim. Proto2 leaves the repeated field unpacked, but the

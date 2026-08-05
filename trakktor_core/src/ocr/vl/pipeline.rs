@@ -30,6 +30,7 @@ use crate::{
     ocr::{
         error::OcrError,
         figures::{self, Figure},
+        layout::Region,
         paddle::{
             artifact::Artifact,
             db::{self, Params},
@@ -219,6 +220,22 @@ impl Engine {
         source: &str,
         report: &mut dyn FnMut(usize, usize),
     ) -> Result<Read, OcrError> {
+        self.read_page_marked(page, number, source, &[], report)
+    }
+
+    /// Reads one page, building the blocks inside a layout model's regions.
+    ///
+    /// An empty `marked` is the same run as [`read_page`](Self::read_page):
+    /// the labels are an improvement, not a precondition, and a page the model
+    /// said nothing about is read exactly as it would have been.
+    pub fn read_page_marked(
+        &mut self,
+        page: &RawPage,
+        number: usize,
+        source: &str,
+        marked: &[Region],
+        report: &mut dyn FnMut(usize, usize),
+    ) -> Result<Read, OcrError> {
         let quads = self.detect(page)?;
         let size = (page.width, page.height);
 
@@ -228,7 +245,17 @@ impl Engine {
             vec![blocks::whole(&quads, size)]
         } else {
             let ink = blocks::ink_profile(&page.bgr, size);
-            blocks::assemble(&quads, size, Some(&ink), &self.options.blocks)
+            if marked.is_empty() {
+                blocks::assemble(&quads, size, Some(&ink), &self.options.blocks)
+            } else {
+                blocks::assemble_in(
+                    &quads,
+                    marked,
+                    size,
+                    Some(&ink),
+                    &self.options.blocks,
+                )
+            }
         };
 
         let mut lines = Vec::new();
@@ -236,7 +263,7 @@ impl Engine {
         for (index, region) in regions.iter().enumerate() {
             report(index, regions.len());
             let cut = blocks::cut(&page.bgr, size, region);
-            let answer = self.read_block(&cut)?;
+            let answer = self.read_block_as(&cut, region.task)?;
             if answer.score < self.options.drop_score || answer.text.is_empty()
             {
                 continue;
@@ -265,6 +292,7 @@ impl Engine {
                 width: page.width,
                 height: page.height,
                 lines,
+                reflowed: true,
             },
             crops,
         })
@@ -277,12 +305,23 @@ impl Engine {
         number: usize,
         report: &mut dyn FnMut(usize, usize),
     ) -> Result<Read, OcrError> {
+        self.read_file_marked(path, number, &[], report)
+    }
+
+    /// Reads a page image from a file, with a layout model's regions.
+    pub fn read_file_marked(
+        &mut self,
+        path: &Path,
+        number: usize,
+        marked: &[Region],
+        report: &mut dyn FnMut(usize, usize),
+    ) -> Result<Read, OcrError> {
         let page = RawPage::load(path)?;
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.display().to_string());
-        self.read_page(&page, number, &name, report)
+        self.read_page_marked(&page, number, &name, marked, report)
     }
 
     /// Reads one already-cut picture.
@@ -290,9 +329,22 @@ impl Engine {
         &mut self,
         picture: &RgbImage,
     ) -> Result<Answer, OcrError> {
+        self.read_block_as(picture, None)
+    }
+
+    /// Reads one already-cut picture, asking a different question of it than
+    /// the run's own when the layout model said it is a table or a formula.
+    pub fn read_block_as(
+        &mut self,
+        picture: &RgbImage,
+        task: Option<Task>,
+    ) -> Result<Answer, OcrError> {
         let prepared = picture::prepare(picture, self.reader.image_config())?;
-        self.reader
-            .read(&prepared, self.options.task, &self.options.limits)
+        self.reader.read(
+            &prepared,
+            task.unwrap_or(self.options.task),
+            &self.options.limits,
+        )
     }
 
     /// Runs the detector and returns the line boxes in reading order.

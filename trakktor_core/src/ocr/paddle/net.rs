@@ -27,11 +27,65 @@ use crate::ocr::{
 pub struct Loader<'a> {
     artifact: &'a Artifact,
     device: &'a Device,
+    /// Published names grouped by the name they are copies of, each group in
+    /// declaration order. See [`Loader::copy`].
+    copies: std::collections::HashMap<String, Vec<String>>,
 }
 
 impl<'a> Loader<'a> {
     pub fn new(artifact: &'a Artifact, device: &'a Device) -> Self {
-        Self { artifact, device }
+        let mut copies: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        for name in artifact.names() {
+            let base = base_name(name);
+            if base != name {
+                copies
+                    .entry(base.to_string())
+                    .or_default()
+                    .push(name.to_string());
+            }
+        }
+        for group in copies.values_mut() {
+            group.sort_by_key(|name| copy_indices(name));
+        }
+        Self {
+            artifact,
+            device,
+            copies,
+        }
+    }
+
+    /// One copy of a weight that a repeated module owns.
+    ///
+    /// A module the exporter duplicated — the six decoder layers of the layout
+    /// detector, say — declares the *same* parameter name six times and tells
+    /// the copies apart only by a `_deepcopy_<n>` suffix chain the exporter
+    /// appends. The suffixes rise with declaration order, and declaration order
+    /// is layer order, so a group sorted by them is indexable by layer. That is
+    /// the whole of the mapping; nothing else in the artifact records it.
+    pub fn copy(
+        &self,
+        base: &str,
+        copy: usize,
+        dims: &[usize],
+    ) -> Result<Tensor, OcrError> {
+        let group = self.copies.get(base).ok_or_else(|| {
+            OcrError::Artifact(format!("no weight is a copy of `{base}`"))
+        })?;
+        let name = group.get(copy).ok_or_else(|| {
+            OcrError::Artifact(format!(
+                "`{base}` has {} copies, not {}",
+                group.len(),
+                copy + 1
+            ))
+        })?;
+        let raw = self.artifact.shaped(name, dims)?;
+        Ok(Tensor::from_slice(&raw.data, dims, self.device)?)
+    }
+
+    /// How many copies of a weight the artifact carries.
+    pub fn copy_count(&self, base: &str) -> usize {
+        self.copies.get(base).map_or(0, Vec::len)
     }
 
     pub fn artifact(&self) -> &Artifact { self.artifact }
@@ -52,13 +106,14 @@ impl<'a> Loader<'a> {
         if self.artifact.has(name) {
             return name.to_string();
         }
-        for index in 0..self.artifact.len() {
-            let suffixed = format!("{name}_deepcopy_{index}");
-            if self.artifact.has(&suffixed) {
-                return suffixed;
-            }
+        // A name the exporter suffixed. When it did so once there is nothing to
+        // choose between; when it did so several times the caller wants
+        // [`Loader::copy`] and asking for the bare name is a mistake, so the
+        // ambiguous case is left to fail as a missing weight.
+        match self.copies.get(name).map(Vec::as_slice) {
+            Some([only]) => only.clone(),
+            _ => name.to_string(),
         }
-        name.to_string()
     }
 
     /// Whether the artifact carries this weight, under either spelling.
@@ -101,6 +156,45 @@ impl<'a> Loader<'a> {
     pub fn scalar(&self, name: &str) -> Result<f32, OcrError> {
         Ok(self.raw(name, &[1])?.data[0])
     }
+}
+
+/// A published name with every `_deepcopy_<n>` the exporter appended stripped
+/// off.
+fn base_name(name: &str) -> &str {
+    let mut base = name;
+    while let Some(cut) = base.rfind("_deepcopy_") {
+        let (head, tail) = base.split_at(cut);
+        if tail["_deepcopy_".len()..]
+            .chars()
+            .all(|c| c.is_ascii_digit()) &&
+            tail.len() > "_deepcopy_".len()
+        {
+            base = head;
+        } else {
+            break;
+        }
+    }
+    base
+}
+
+/// The suffix numbers of a copied name, outermost last — the key its group is
+/// ordered by.
+fn copy_indices(name: &str) -> Vec<u64> {
+    let mut indices = Vec::new();
+    let mut rest = name;
+    while let Some(cut) = rest.rfind("_deepcopy_") {
+        let (head, tail) = rest.split_at(cut);
+        let digits = &tail["_deepcopy_".len()..];
+        match digits.parse::<u64>() {
+            Ok(index) => {
+                indices.push(index);
+                rest = head;
+            },
+            Err(_) => break,
+        }
+    }
+    indices.reverse();
+    indices
 }
 
 /// A convolution with an optional bias, as the graph applies it: the bias is a
@@ -252,13 +346,20 @@ impl BatchNorm {
 /// comes off disk. Handing it to a layer that expects `[out, in]` fails
 /// loudly on a rectangular weight and, worse, silently succeeds on a square
 /// one.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Linear {
     weight: Tensor,
     bias: Option<Tensor>,
 }
 
 impl Linear {
+    /// Builds the layer from tensors a caller read itself — the way a module
+    /// the exporter duplicated has to, since its weights are addressed by copy
+    /// rather than by name.
+    pub fn from_parts(weight: Tensor, bias: Option<Tensor>) -> Self {
+        Self { weight, bias }
+    }
+
     pub fn load(
         loader: &Loader,
         name: &str,
@@ -292,7 +393,7 @@ impl Linear {
 /// one) and the epsilon sits inside the square root, which is what every
 /// published graph does — but *which* epsilon differs between layers of the
 /// same network, so it is a parameter rather than a constant here.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LayerNorm {
     scale: Tensor,
     shift: Tensor,
@@ -300,6 +401,11 @@ pub struct LayerNorm {
 }
 
 impl LayerNorm {
+    /// Builds the layer from tensors a caller read itself.
+    pub fn from_parts(scale: Tensor, shift: Tensor, eps: f64) -> Self {
+        Self { scale, shift, eps }
+    }
+
     pub fn load(
         loader: &Loader,
         name: &str,

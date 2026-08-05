@@ -85,6 +85,20 @@ pub struct Page {
     pub height: u32,
     /// The lines, in reading order.
     pub lines: Vec<Line>,
+    /// Whether these lines are the **reader's** own, rather than the rows the
+    /// page was printed in.
+    ///
+    /// An engine that classifies characters returns one line per detected row,
+    /// and a paragraph has to be put back together out of them — that is what
+    /// the Markdown assembly is for. A generative engine reflows the text
+    /// itself: it joins words broken across a printed line and runs the rows
+    /// of a paragraph together, so the lines it *does* return are lines it
+    /// kept apart on purpose — a verse, a gloss under it, a list.
+    ///
+    /// Reflowing those a second time runs the verse into a paragraph, which is
+    /// why the two cases are told apart here rather than guessed at
+    /// downstream.
+    pub reflowed: bool,
 }
 
 impl Page {

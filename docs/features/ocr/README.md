@@ -16,15 +16,26 @@ Two engines, both fully offline once their models are downloaded.
   can return a table as markup or a formula as LaTeX. About 1.9 GB downloaded
   once, and tens of seconds per page.
 
+There is also a [**layout stage**](layout.md), shared by both engines and
+available on its own: a model that labels the blocks of a page — document title,
+section heading, paragraph, abstract, footnote, running head, page number,
+table, formula, picture, caption — without reading any text. About 129 MB
+downloaded once, and about a second per page. Both engines run it by default;
+`--no-layout` skips it, and `ocr layout` runs it alone.
+
 ```sh
 trakktor ocr paddle page.png                     # JSON: pages, lines, boxes, scores
 trakktor ocr paddle page.png --text              # the recognized lines
 trakktor ocr paddle p1.png p2.png p3.png         # one document, three pages
 trakktor ocr paddle scan.png --lang en           # pick the recognizer by language
 trakktor ocr paddle scan.png --format md --out doc.md
+trakktor ocr paddle scan.png --format md --no-layout --out doc.md  # skip the labels
 
 trakktor ocr vl scan.png --text                  # no --lang: the model works it out
 trakktor ocr vl table.png --task table --text    # the table as markup
+trakktor ocr vl page.png --no-layout --text      # blocks from geometry alone
+
+trakktor ocr layout page.png --text              # what is on this page
 ```
 
 ## Pages, not files

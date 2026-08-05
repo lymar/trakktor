@@ -43,10 +43,27 @@ classic catalog could read.
 
 Two consequences worth knowing:
 
-- **Both models are downloaded**, the 1.9 GB one and the detector.
-- **The quality of the reading depends on the grouping.** Where the geometry
-  groups badly — a caption wrapped around a picture, a table split into
-  columns — the model gets the input it is weakest on.
+- **Three models are downloaded**: the 1.9 GB one, the detector, and the
+  129 MB layout model below.
+- **The quality of the reading depends on the grouping.** Where the grouping is
+  bad — a caption wrapped around a picture, a table split into columns — the
+  model gets the input it is weakest on.
+
+### The layout model does the grouping
+
+By default the blocks are cut along the **regions a layout model found**, not
+across them. That is what a table needs: grouped by geometry alone it comes back
+as strips with its columns doubled, because the rows of a table look alike and
+sit near each other. Grouped by its region it goes to the model whole and is
+asked for **as a table** — and a formula is asked for as a formula.
+
+Measured on a calendar page mixing Tibetan, English and Devanagari: seven blocks
+instead of sixteen, the table returned as cell markup instead of doubled
+columns, and the page read in 21 seconds instead of 89.
+
+`--no-layout` goes back to grouping by geometry alone, and the knobs below are
+what shape it then. They still apply to the lines the layout model did not
+claim.
 
 The grouping is adjustable:
 

@@ -79,17 +79,28 @@ line and rarely fires on a scanned book.
 
 ## What Markdown does and does not do
 
-`--format md` works from geometry alone: line spacing, indents, the width of the
-column and where each line ends. That is enough for reading order (including
-columns), paragraphs, joining hyphenated line breaks, and continuing a paragraph
-across a page break.
+`--format md` works from two things: the geometry of the lines — spacing,
+indents, the width of the column, where each line ends — and the **labels** of
+the layout model, which runs by default.
 
-It is **not** enough to tell what a block *is*. Headings are guessed from
+The geometry gives the reading order (including columns), the paragraphs, the
+joining of hyphenated line breaks, and the continuation of a paragraph across a
+page break. The labels give what a block *is*: document title, section heading,
+abstract, footnote, running head, page number, table, formula, picture, caption.
+That second half is what geometry cannot reach — a title set in capitals makes
+*shorter* boxes than the text below it, so it is not found by size at all.
+
+`--no-layout` drops back to geometry alone. Then headings are guessed from
 centring and isolation rather than known; running heads, page numbers and
 footnotes are separated by position and type size; tables come out as text; and
 illustrations are found by looking for ink that no text box covers, which finds
-pictures but also finds large tables and display formulas. Deciding those
-properly needs a document-layout model, which this engine does not carry yet.
+pictures but also finds large tables and display formulas.
+
+The layout model is imperfect in its own way: it is trained on Chinese and
+English documents, and on a page in an unfamiliar script it is much less sure
+of itself — the blocks are still in the right places, but closer to the score
+floor that keeps them. A page it says nothing about is read exactly as
+`--no-layout` would read it, and a line that fell in no block is never dropped.
 
 ## Speed
 

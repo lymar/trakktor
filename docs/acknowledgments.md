@@ -80,6 +80,18 @@ Apache-licensed:
   consulted as prior art for the same checkpoint on candle. Weights are
   downloaded at runtime. Please cite the PaddleOCR-VL technical report
   (arXiv:2510.14528) if you use this model.
+- [**`ocr layout`**](features/ocr/README.md), and the layout stage both OCR
+  engines run by default —
+  [PP-DocLayout_plus-L](https://huggingface.co/PaddlePaddle/PP-DocLayout_plus-L)
+  (Apache-2.0) by the PaddlePaddle authors: a twenty-class document-layout
+  detector built on [RT-DETR](https://github.com/lyuwenyu/RT-DETR)
+  (Apache-2.0; Zhao et al., *DETRs Beat YOLOs on Real-time Object Detection*,
+  CVPR 2024), ported to the same candle and burn runtimes. The box
+  post-processing around it, and the per-class settings the layout stage runs
+  with, follow the PP-StructureV3 pipeline in
+  [PaddleX](https://github.com/PaddlePaddle/PaddleX) (Apache-2.0). Weights are
+  downloaded at runtime. Please cite the PaddleOCR 3.0 technical report
+  (arXiv:2507.05595) and the RT-DETR paper if you use this model.
 - [**`vad`**](features/vad/README.md), and
   [**`asr --vad`**](features/asr/whisper.md#voice-activity-detection-vad) —
   [Silero-VAD](https://github.com/snakers4/silero-vad)

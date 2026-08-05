@@ -310,6 +310,7 @@ impl Engine {
                 width: page.width,
                 height: page.height,
                 lines,
+                reflowed: false,
             },
             crops: kept_crops,
         })

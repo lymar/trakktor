@@ -28,13 +28,21 @@ mod tests;
 
 use image::RgbImage;
 
-use crate::ocr::page::Quad;
+use crate::ocr::{
+    layout::{Label, Region},
+    page::Quad,
+    vl::generate::Task,
+};
 
 /// A run of lines the model reads in one go.
 #[derive(Debug, Clone)]
 pub struct Block {
     /// Indices into the line list this block was built from, in reading order.
     pub lines: Vec<usize>,
+    /// What to ask the model for this block, when the layout model said
+    /// something that changes the question. A table asked for as text comes
+    /// back as text and its structure is gone.
+    pub task: Option<Task>,
     /// The rectangle to cut, already padded and clamped to the page.
     pub rect: Rect,
     /// The page rows this block owns, as `(top, bottom)` in page pixels.
@@ -301,17 +309,37 @@ pub fn assemble(
     ink: Option<&[u32]>,
     settings: &Settings,
 ) -> Vec<Block> {
-    let mut open: Vec<Open> = Vec::new();
-    let mut done: Vec<Open> = Vec::new();
-
     let all = rows(quads, settings);
-    // Every row on the page, sorted by where it starts, so a block's padding
-    // can be stopped before it reaches a row that is not its own.
-    let mut spans: Vec<(f32, f32)> = all
+    let spans = row_spans(&all);
+    group(all, &spans, page, ink, settings)
+}
+
+/// Every row's vertical span, sorted by where it starts, so a block's padding
+/// can be stopped before it reaches a row that is not its own.
+fn row_spans(rows: &[Row]) -> Vec<(f32, f32)> {
+    let mut spans: Vec<(f32, f32)> = rows
         .iter()
         .map(|row| (row.bounds.y0, row.bounds.y1))
         .collect();
     spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+    spans
+}
+
+/// Groups rows that belong together into blocks.
+///
+/// `spans` is every row of the **page**, not only the ones being grouped: the
+/// grouping is a question about these rows, but where to stop a block's margin
+/// is a question about the page, and answering it from a subset lets the margin
+/// reach into a line that is not in the subset — which the model then reads.
+fn group(
+    all: Vec<Row>,
+    spans: &[(f32, f32)],
+    page: (u32, u32),
+    ink: Option<&[u32]>,
+    settings: &Settings,
+) -> Vec<Block> {
+    let mut open: Vec<Open> = Vec::new();
+    let mut done: Vec<Open> = Vec::new();
 
     for row in all {
         let bounds = row.bounds;
@@ -378,12 +406,13 @@ pub fn assemble(
             let bands: Vec<(f32, f32)> = block
                 .rows
                 .iter()
-                .map(|row| grown(*row, margin, &spans, &block.rows, ink))
+                .map(|row| grown(*row, margin, spans, &block.rows, ink))
                 .collect();
             let mut bounds = block.bounds;
             bounds.y0 = bands.iter().map(|b| b.0).fold(f32::MAX, f32::min);
             bounds.y1 = bands.iter().map(|b| b.1).fold(f32::MIN, f32::max);
             Block {
+                task: None,
                 // The sides still get the full margin: nothing of a
                 // neighbouring column reaches into a block that was cut from
                 // it by a gutter wider than this.
@@ -502,10 +531,172 @@ fn clamp(bounds: Bounds, sides: f32, ends: f32, page: (u32, u32)) -> Rect {
     }
 }
 
+/// Groups quadrangles into blocks **inside** a layout model's regions.
+///
+/// The geometry above builds a block out of lines that look alike and sit near
+/// each other, which is the best a line list allows — and it is exactly what
+/// cuts a table into strips, because the rows of a table look alike and sit
+/// near each other. A region says where the table is, so here the region is the
+/// block:
+///
+/// - a line goes to the region it overlaps most, and the lines of one region
+///   become one block whatever their heights and gaps say;
+/// - a `table` block is asked of the model **as a table** and a `formula` block
+///   **as a formula**, which is the whole reason a table needs the labels: read
+///   as text it comes back as text, and its structure is gone;
+/// - a picture is not read at all;
+/// - lines that fell in no region are grouped by [`assemble`] as before, so a
+///   page the model said little about still reads.
+///
+/// The row-count guard still applies to a region's lines: a long table is split
+/// into several blocks rather than handed over whole, because the length of the
+/// answer is what the model loses its place in.
+pub fn assemble_in(
+    quads: &[Quad],
+    regions: &[Region],
+    page: (u32, u32),
+    ink: Option<&[u32]>,
+    settings: &Settings,
+) -> Vec<Block> {
+    let all = rows(quads, settings);
+    let mut spans: Vec<(f32, f32)> = all
+        .iter()
+        .map(|row| (row.bounds.y0, row.bounds.y1))
+        .collect();
+    spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+    // Which region each row belongs to: the innermost one that holds it. The
+    // rule lives with the regions themselves, so this and the Markdown layer
+    // cannot disagree about what is inside what — and it is not "the largest
+    // overlap", which hands every row to a page-sized region when the model
+    // returns one.
+    let owner: Vec<Option<usize>> = all
+        .iter()
+        .map(|row| {
+            crate::ocr::layout::region::owner(
+                (row.bounds.x0, row.bounds.y0, row.bounds.x1, row.bounds.y1),
+                regions,
+            )
+        })
+        .collect();
+
+    let mut built: Vec<(usize, Block)> = Vec::new();
+    for (index, region) in regions.iter().enumerate() {
+        if region.label.is_pictorial() {
+            continue;
+        }
+        let mine: Vec<usize> = (0..all.len())
+            .filter(|at| owner[*at] == Some(index))
+            .collect();
+        if mine.is_empty() {
+            continue;
+        }
+        let task = match region.label {
+            Label::Table => Some(Task::Table),
+            Label::Formula => Some(Task::Formula),
+            Label::Chart => Some(Task::Chart),
+            _ => None,
+        };
+        if task.is_some() {
+            // A table is asked for as a table, and that only means anything if
+            // it goes over whole: cutting it up is what destroys the structure
+            // the question is about. The row cap still applies — a very long
+            // table is answered in pieces rather than lost to the length of
+            // the answer.
+            for chunk in mine.chunks(settings.max_lines) {
+                let rows: Vec<&Row> =
+                    chunk.iter().map(|at| &all[*at]).collect();
+                built.push((
+                    rows[0].lines[0],
+                    block_of(&rows, task, &spans, page, ink, settings),
+                ));
+            }
+            continue;
+        }
+        // Everything else: the region is a **boundary**, not a block. The
+        // geometry still runs inside it, and it has to — a region of running
+        // text can hold a verse in a stacking script with its transliteration
+        // and its translation under it, and those must not be handed over as
+        // one block. That is measured, not theoretical: merged, they come back
+        // as fluent nonsense in a third script. What the region buys is that
+        // the same rule no longer reaches *across* the structure of the page.
+        let rows: Vec<Row> = mine.iter().map(|at| all[*at].clone()).collect();
+        let first = rows[0].lines[0];
+        for block in group(rows, &spans, page, ink, settings) {
+            built.push((block.lines.first().copied().unwrap_or(first), block));
+        }
+    }
+
+    // Whatever the model did not claim goes through the geometric assembly, on
+    // its own lines only.
+    let orphans: Vec<usize> = (0..quads.len())
+        .filter(|line| {
+            all.iter()
+                .position(|row| row.lines.contains(line))
+                .is_none_or(|row| owner[row].is_none())
+        })
+        .collect();
+    if !orphans.is_empty() {
+        let subset: Vec<Quad> = orphans.iter().map(|at| quads[*at]).collect();
+        for mut block in assemble(&subset, page, ink, settings) {
+            block.lines = block.lines.iter().map(|at| orphans[*at]).collect();
+            built.push((block.lines[0], block));
+        }
+    }
+
+    built.sort_by_key(|(first, _)| *first);
+    built.into_iter().map(|(_, block)| block).collect()
+}
+
+/// Builds one block out of rows that are already known to belong together.
+fn block_of(
+    rows: &[&Row],
+    task: Option<Task>,
+    spans: &[(f32, f32)],
+    page: (u32, u32),
+    ink: Option<&[u32]>,
+    settings: &Settings,
+) -> Block {
+    let mut heights: Vec<f32> =
+        rows.iter().map(|row| row.bounds.height()).collect();
+    heights.sort_by(f32::total_cmp);
+    let unit = heights[heights.len() / 2];
+    let margin = settings.padding * unit;
+    let mine: Vec<(f32, f32)> = rows
+        .iter()
+        .map(|row| (row.bounds.y0, row.bounds.y1))
+        .collect();
+    let bands: Vec<(f32, f32)> = mine
+        .iter()
+        .map(|row| grown(*row, margin, spans, &mine, ink))
+        .collect();
+    let mut bounds = rows[0].bounds;
+    for row in &rows[1..] {
+        bounds.join(&row.bounds);
+    }
+    bounds.y0 = bands.iter().map(|b| b.0).fold(f32::MAX, f32::min);
+    bounds.y1 = bands.iter().map(|b| b.1).fold(f32::MIN, f32::max);
+    Block {
+        lines: rows.iter().flat_map(|row| row.lines.clone()).collect(),
+        task,
+        rect: clamp(bounds, margin, 0.0, page),
+        bands: bands
+            .iter()
+            .map(|(top, bottom)| {
+                (
+                    top.floor().max(0.0) as u32,
+                    (bottom.ceil().max(0.0) as u32).min(page.1),
+                )
+            })
+            .collect(),
+    }
+}
+
 /// The whole page as one block: nothing painted out, every line inside.
 pub fn whole(quads: &[Quad], page: (u32, u32)) -> Block {
     Block {
         lines: (0..quads.len()).collect(),
+        task: None,
         rect: Rect {
             x: 0,
             y: 0,

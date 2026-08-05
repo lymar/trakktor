@@ -21,6 +21,7 @@ fn sheet(width: u32, height: u32, lines: Vec<Line>) -> Page {
         width,
         height,
         lines,
+        reflowed: false,
     }
 }
 

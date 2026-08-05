@@ -35,6 +35,7 @@
 //! a last line that reached the right margin followed by a first line that is
 //! not indented.
 
+pub mod table;
 #[cfg(test)]
 mod tests;
 
@@ -179,6 +180,18 @@ impl<'a> Document<'a> {
             if text.is_empty() {
                 continue;
             }
+            // A table the model answered with cell markup is a table, whatever
+            // the analysis made of the block it sits in: the markup *is* the
+            // structure, and it is the one thing on the page that Markdown can
+            // represent better than the text it came from.
+            if table::is_markup(&text) {
+                if let Some(rendered) = table::to_markdown(&text) {
+                    self.push(&mut separator, rendered);
+                    self.open = None;
+                    opening = false;
+                    continue;
+                }
+            }
             match block.kind {
                 BlockKind::Figure { .. } => {},
                 BlockKind::PageFurniture => {},
@@ -200,11 +213,12 @@ impl<'a> Document<'a> {
                     }
                 },
                 BlockKind::Heading { level } => {
-                    self.push(&mut separator, heading(level, &text));
+                    self.push(&mut separator, heading(level, &one_line(&text)));
                     self.open = None;
                     opening = false;
                 },
                 BlockKind::Caption => {
+                    let text = one_line(&text);
                     self.push(&mut separator, format!("*{text}*"));
                     self.open = None;
                     opening = false;
@@ -293,6 +307,14 @@ impl<'a> Document<'a> {
     }
 }
 
+/// Flattens a block that must occupy one line.
+///
+/// A heading and a caption are single-line constructs in Markdown: a hard break
+/// inside either is not a break, it is a stray backslash. They are the only two
+/// places where the reader's own line structure has to give way to the
+/// format's.
+fn one_line(text: &str) -> String { text.replace(HARD_BREAK, " ") }
+
 /// A heading line at the level the layout assigned. Markdown has six levels;
 /// a deeper one is written at the deepest that exists rather than dropped.
 fn heading(level: u8, text: &str) -> String {
@@ -319,7 +341,21 @@ fn plain_marker(page: &Page) -> String {
     }
 }
 
+/// The hard line break: a backslash at the end of a line.
+///
+/// The other spelling — two trailing spaces — is invisible in the source and
+/// is stripped by half the tools that touch a file, so a break written that way
+/// is a break that quietly stops being one.
+const HARD_BREAK: &str = "\\\n";
+
 /// One block's lines, glued back into running text.
+///
+/// Whether they *should* be glued depends on where they came from
+/// ([`Page::reflowed`]): a recognizer's lines are the printed rows and a
+/// paragraph has to be reassembled out of them, while a generative reader has
+/// already done that and the lines it returns are the ones it meant to keep
+/// apart. Running the second kind together turns a verse and its gloss into one
+/// paragraph.
 fn block_text(page: &Page, block: &Block) -> String {
     let mut text = String::new();
     for &index in &block.lines {
@@ -327,7 +363,15 @@ fn block_text(page: &Page, block: &Block) -> String {
             continue;
         };
         let piece = line.text.trim();
-        if !piece.is_empty() {
+        if piece.is_empty() {
+            continue;
+        }
+        if page.reflowed {
+            if !text.is_empty() {
+                text.push_str(HARD_BREAK);
+            }
+            text.push_str(piece);
+        } else {
             append(&mut text, None, piece);
         }
     }
@@ -395,7 +439,13 @@ fn glue(text: &str, next: &str) -> Glue {
         // A range broken over the line end: `358–` then `359`.
         return Glue::Direct;
     }
-    if !uses_spaces(last) || !uses_spaces(first) {
+    // A script that writes without word spaces joins to itself without one —
+    // but only to itself. Across a **change** of script the seam is not a word
+    // boundary that happens to need no space, it is two different things
+    // meeting, and welding them produces `МОЛИТВАཧཱུྃ`. The reference makes no
+    // such distinction (it tests only for Latin); this is the second place
+    // where this port parts company with it, for the same reason as the first.
+    if !uses_spaces(last) && !uses_spaces(first) {
         return Glue::Direct;
     }
     Glue::Space

@@ -44,7 +44,12 @@ Each command is documented in full on its own page under
   returns a table as markup or a formula as LaTeX — for about 1.9 GB of weights
   and tens of seconds a page. Output either way is JSON with every line's box
   and confidence, plain text, or Markdown with paragraphs and a reading order
-  worked out from the geometry.
+  worked out from the geometry. A third model
+  ([`layout`](docs/features/ocr/layout.md), 129 MB, about a second a page)
+  labels the blocks of the page — title, heading, paragraph, footnote, running
+  head, page number, table, formula, picture — so the structure is read rather
+  than guessed; it runs by default, `--no-layout` skips it, and `ocr layout`
+  runs it on its own and answers "what is on this page" without reading a word.
 - [**`vad` — voice-activity audio editing**](docs/features/vad/README.md):
   find the speech in an audio file and report it, cut the silence out, or
   split the recording into clips.

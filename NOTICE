@@ -218,6 +218,28 @@ PaddleOCR — Apache-2.0 License
   (huggingface.co/PaddlePaddle) at runtime and are not redistributed in this
   repository.
 
+PP-DocLayout / PaddleX — Apache-2.0 License
+  Copyright (c) 2016 PaddlePaddle Authors
+  https://huggingface.co/PaddlePaddle/PP-DocLayout_plus-L
+  https://github.com/PaddlePaddle/PaddleX
+  The `ocr layout` stage ports the PP-DocLayout_plus-L document-layout
+  detector: the PPHGNetV2 backbone, the hybrid encoder (an intra-scale
+  transformer layer over the coarsest feature map, then a top-down and a
+  bottom-up feature pyramid with CSP rep-blocks) and the RT-DETR decoder with
+  multi-scale deformable attention, together with the box post-processing
+  PaddleX's object-detection predictor applies (per-class thresholds, the
+  class-aware suppression, the containment merge and the widening) and the
+  per-class settings PaddleX's PP-StructureV3 pipeline configures it with.
+  Model weights are downloaded from Hugging Face
+  (huggingface.co/PaddlePaddle/PP-DocLayout_plus-L) at runtime and are not
+  redistributed in this repository.
+
+RT-DETR — Apache-2.0 License
+  Copyright (c) 2023 Baidu, Inc.
+  https://github.com/lyuwenyu/RT-DETR
+  The real-time detection transformer that PP-DocLayout_plus-L is built on,
+  and which the `ocr layout` stage ports.
+
 DBNet / DB (Differentiable Binarization) — Apache-2.0 License
   Copyright (c) 2019 Minghui Liao et al.; Copyright (c) 2020 WenmuZhou
   https://github.com/MhLiao/DB

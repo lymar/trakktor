@@ -10,6 +10,11 @@ use std::{
 use trakktor_core::ocr::{
     OcrError, Page, Quad,
     figures::{self, Figure},
+    layout::{
+        Region,
+        detect::{self, Detector},
+        post,
+    },
     markdown,
     paddle::{
         crop::{self, Crop},
@@ -22,8 +27,12 @@ use trakktor_core::ocr::{
 };
 
 use crate::{
-    cli::{OcrFormatArg, OcrPaddleArgs, OcrTaskArg, OcrVlArgs, RuntimeArg},
+    cli::{
+        OcrFormatArg, OcrLayoutArgs, OcrPaddleArgs, OcrTaskArg, OcrVlArgs,
+        RuntimeArg,
+    },
     error::CliError,
+    output::OcrModels,
 };
 
 /// Runs one OCR pass: resolve the models, then read every page in turn.
@@ -96,24 +105,47 @@ pub(crate) fn run_paddle(
         options,
         &mut crate::asr::progress::download_progress(),
     )?;
+    let marker = (!args.no_layout)
+        .then(|| {
+            load_layout(
+                model_dir,
+                args.layout_model.as_deref(),
+                device(args.device),
+                RuntimeArg::Candle,
+            )
+        })
+        .transpose()?;
 
     let mut pages: Vec<Page> = Vec::with_capacity(args.pages.len());
     let mut figures: Vec<Vec<Quad>> = Vec::with_capacity(args.pages.len());
+    let mut regions: Vec<Vec<Region>> = Vec::with_capacity(args.pages.len());
     for (index, path) in args.pages.iter().enumerate() {
         let read = engine.read_file(path, index + 1)?;
         if let Some(dir) = &args.crops {
             write_crops(dir, index + 1, &read.crops)?;
         }
-        if !read.figures.is_empty() {
+        let marked = match &marker {
+            None => Vec::new(),
+            Some(marker) => marker.detect_file(path)?,
+        };
+        // With a layout model the pictures are its own: it says what a picture
+        // is, where the raster path only says where ink stands that no text
+        // box covers.
+        let found: Vec<Figure> = if marked.is_empty() {
+            read.figures.clone()
+        } else {
+            marked
+                .iter()
+                .filter(|r| r.label.is_pictorial())
+                .map(figure_of)
+                .collect()
+        };
+        if !found.is_empty() {
             let raster = RawPage::load(path)?;
-            write_figures(
-                args.out.as_deref(),
-                index + 1,
-                &raster,
-                &read.figures,
-            )?;
+            write_figures(args.out.as_deref(), index + 1, &raster, &found)?;
         }
-        figures.push(read.figures.iter().map(Figure::quad).collect());
+        figures.push(found.iter().map(Figure::quad).collect());
+        regions.push(marked);
         pages.push(read.page);
     }
 
@@ -122,15 +154,57 @@ pub(crate) fn run_paddle(
     crate::output::print_ocr(
         &pages,
         &figures,
+        &regions,
         Some(&args.lang),
-        detection,
-        recognition,
+        OcrModels {
+            detection,
+            recognition,
+            layout: marker.as_ref().map(Detector::model),
+        },
         markdown,
         args.out.as_deref(),
         json,
         pretty,
     )
     .map_err(CliError::from)
+}
+
+/// Resolves and loads the layout model.
+fn load_layout(
+    model_dir: &Path,
+    model: Option<&str>,
+    device: Device,
+    runtime: RuntimeArg,
+) -> Result<Detector, CliError> {
+    let options = detect::Options {
+        model: model.map(str::to_string).unwrap_or_else(|| {
+            trakktor_core::ocr::layout::model::DEFAULT_MODEL.to_string()
+        }),
+        post: post::Settings::default(),
+    };
+    let runtime = match runtime {
+        RuntimeArg::Candle => detect::Runtime::Candle,
+        RuntimeArg::Burn => detect::Runtime::Burn,
+    };
+    Detector::load(
+        model_dir,
+        device,
+        runtime,
+        options,
+        &mut crate::asr::progress::download_progress(),
+    )
+    .map_err(CliError::from)
+}
+
+/// A labelled picture as the figure writer wants it.
+fn figure_of(region: &Region) -> Figure {
+    let (x0, y0, x1, y1) = region.bounds();
+    Figure {
+        x: x0.max(0.0) as u32,
+        y: y0.max(0.0) as u32,
+        width: (x1 - x0).max(1.0) as u32,
+        height: (y1 - y0).max(1.0) as u32,
+    }
 }
 
 /// Runs one `ocr vl` pass.
@@ -214,21 +288,48 @@ pub(crate) fn run_vl(
         &mut crate::asr::progress::download_progress(),
     )?;
 
+    let marker = (!args.no_layout)
+        .then(|| {
+            load_layout(
+                model_dir,
+                args.layout_model.as_deref(),
+                device(args.device),
+                args.runtime,
+            )
+        })
+        .transpose()?;
+
     let mut pages: Vec<Page> = Vec::with_capacity(args.pages.len());
     let mut figures: Vec<Vec<Quad>> = Vec::with_capacity(args.pages.len());
+    let mut regions: Vec<Vec<Region>> = Vec::with_capacity(args.pages.len());
     let started = Instant::now();
     for (index, path) in args.pages.iter().enumerate() {
         let number = index + 1;
         let mut report = block_progress(started, number, args.pages.len());
-        let read = engine.read_file(path, number, &mut report)?;
+        let marked = match &marker {
+            None => Vec::new(),
+            Some(marker) => marker.detect_file(path)?,
+        };
+        let read =
+            engine.read_file_marked(path, number, &marked, &mut report)?;
         if let Some(dir) = &args.crops {
             write_blocks(dir, number, &read)?;
         }
-        if !read.figures.is_empty() {
+        let found: Vec<Figure> = if marked.is_empty() {
+            read.figures.clone()
+        } else {
+            marked
+                .iter()
+                .filter(|r| r.label.is_pictorial())
+                .map(figure_of)
+                .collect()
+        };
+        if !found.is_empty() {
             let raster = RawPage::load(path)?;
-            write_figures(args.out.as_deref(), number, &raster, &read.figures)?;
+            write_figures(args.out.as_deref(), number, &raster, &found)?;
         }
-        figures.push(read.figures.iter().map(Figure::quad).collect());
+        figures.push(found.iter().map(Figure::quad).collect());
+        regions.push(marked);
         pages.push(read.page);
     }
     finish_progress();
@@ -237,15 +338,110 @@ pub(crate) fn run_vl(
     crate::output::print_ocr(
         &pages,
         &figures,
+        &regions,
         None,
-        detection,
-        recognition,
+        OcrModels {
+            detection,
+            recognition,
+            layout: marker.as_ref().map(Detector::model),
+        },
         matches!(args.format, OcrFormatArg::Md),
         args.out.as_deref(),
         json,
         pretty,
     )
     .map_err(CliError::from)
+}
+
+/// Runs `ocr layout`: the markup stage on its own.
+pub(crate) fn run_layout(
+    args: &OcrLayoutArgs,
+    model_dir: &Path,
+    json: bool,
+    pretty: bool,
+) -> Result<(), CliError> {
+    if args.pages.is_empty() {
+        return Err(OcrError::NoPages.into());
+    }
+    for page in &args.pages {
+        if !page.is_file() {
+            return Err(OcrError::PageNotFound {
+                path: page.display().to_string(),
+            }
+            .into());
+        }
+    }
+    if matches!(args.runtime, RuntimeArg::Burn) &&
+        matches!(args.device, crate::cli::DeviceArg::Metal)
+    {
+        announce_burn_gpu();
+    }
+
+    let mut options = detect::Options {
+        model: args.model.clone().unwrap_or_else(|| {
+            trakktor_core::ocr::layout::model::DEFAULT_MODEL.to_string()
+        }),
+        post: post::Settings::default(),
+    };
+    options.post.threshold = args.threshold;
+    let runtime = match args.runtime {
+        RuntimeArg::Candle => detect::Runtime::Candle,
+        RuntimeArg::Burn => detect::Runtime::Burn,
+    };
+    let marker = Detector::load(
+        model_dir,
+        device(args.device),
+        runtime,
+        options,
+        &mut crate::asr::progress::download_progress(),
+    )?;
+
+    let mut pages = Vec::with_capacity(args.pages.len());
+    for (index, path) in args.pages.iter().enumerate() {
+        let raster = RawPage::load(path)?;
+        let regions = marker.detect(&raster)?;
+        if let Some(dir) = &args.crops {
+            write_regions(dir, index + 1, &raster, &regions)?;
+        }
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string());
+        pages.push((index + 1, name, raster.width, raster.height, regions));
+    }
+
+    crate::output::print_ocr_layout(&pages, marker.model(), json, pretty);
+    Ok(())
+}
+
+/// Writes one page's block pictures.
+fn write_regions(
+    dir: &Path,
+    page: usize,
+    raster: &RawPage,
+    regions: &[Region],
+) -> Result<(), CliError> {
+    std::fs::create_dir_all(dir).map_err(|source| OcrError::Write {
+        path: dir.display().to_string(),
+        source,
+    })?;
+    for (index, region) in regions.iter().enumerate() {
+        let png = figures::crop_png(
+            &raster.bgr,
+            raster.width as usize,
+            raster.height as usize,
+            &figure_of(region),
+        )?;
+        let path = dir.join(format!(
+            "p{page:03}-b{index:02}-{}.png",
+            region.label.name()
+        ));
+        std::fs::write(&path, png).map_err(|source| OcrError::Write {
+            path: path.display().to_string(),
+            source,
+        })?;
+    }
+    Ok(())
 }
 
 /// The device the run asks for. Whether this build can serve it is the
