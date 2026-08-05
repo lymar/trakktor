@@ -8,6 +8,12 @@
 //!
 //! The three tests are the three layers the port is held to: the input tensor
 //! and the probability map are compared numerically, the boxes by overlap.
+//!
+//! One test compares nothing against the reference and is here for a different
+//! reason: the large detector convolves with a kernel big enough that the Metal
+//! backend used to return a wrong answer without saying so. That failure has no
+//! symptom other than the page reading differently, so it is checked directly
+//! — the same input on both devices, and the two maps must agree.
 
 use std::path::PathBuf;
 
@@ -21,10 +27,14 @@ use crate::ocr::paddle::{
     net::Loader,
 };
 
-fn golden_dir() -> PathBuf {
+/// The dumps of one reference run.
+fn golden(run: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../tmp/ocr/golden/mobile_eslav")
+        .join("../tmp/ocr/golden")
+        .join(run)
 }
+
+fn golden_dir() -> PathBuf { golden("mobile_eslav") }
 
 fn page_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tmp/ocr/golden/page.png")
@@ -45,11 +55,68 @@ fn read_f32(path: &std::path::Path) -> Vec<f32> {
         .collect()
 }
 
-fn trace() -> serde_json::Value {
+fn trace_of(run: &str) -> serde_json::Value {
     serde_json::from_slice(
-        &std::fs::read(golden_dir().join("trace.json")).unwrap(),
+        &std::fs::read(golden(run).join("trace.json")).unwrap(),
     )
     .unwrap()
+}
+
+/// Runs one detector over the input tensor a reference run was given and
+/// compares the probability map it returns with the one that run recorded.
+///
+/// The map is a sigmoid, so most of it sits in the flat tail where large logit
+/// differences vanish; what the port is held to is the part that decides
+/// anything — no pixel may fall on the other side of the binarization
+/// threshold.
+fn probability_map_matches(run: &str, model: &str) {
+    let trace = trace_of(run);
+    let shape = trace["det_input_shape"].as_array().unwrap();
+    let (height, width) = (
+        shape[2].as_u64().unwrap() as usize,
+        shape[3].as_u64().unwrap() as usize,
+    );
+
+    let device = Device::Cpu;
+    let artifact = Artifact::load(&model_dir(model)).unwrap();
+    let detector = Detector::load(&Loader::new(&artifact, &device)).unwrap();
+
+    let golden_input = read_f32(&golden_dir().join("det_input.bin"));
+    let input =
+        Tensor::from_vec(golden_input, (1, 3, height, width), &device).unwrap();
+    let map = detector.forward(&input).unwrap();
+    assert_eq!(map.dims(), &[1, 1, height, width]);
+
+    let ours = map.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+    let reference = read_f32(&golden(run).join("det_prob.bin"));
+    assert_eq!(ours.len(), reference.len());
+
+    let worst = ours
+        .iter()
+        .zip(&reference)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f32, f32::max);
+    let big = ours
+        .iter()
+        .zip(&reference)
+        .filter(|(a, b)| (**a - **b).abs() > 1e-5)
+        .count();
+    eprintln!(
+        "{model}: worst {worst:e}, over 1e-5: {big} of {}",
+        ours.len()
+    );
+    assert!(worst < 1e-3, "worst probability differs by {worst}");
+
+    let threshold = trace["det_thresh"].as_f64().unwrap() as f32;
+    let disagreements = ours
+        .iter()
+        .zip(&reference)
+        .filter(|(a, b)| (**a >= threshold) != (**b >= threshold))
+        .count();
+    assert_eq!(
+        disagreements, 0,
+        "pixels that cross the threshold differently"
+    );
 }
 
 /// The side-length limit the golden run used.
@@ -89,52 +156,55 @@ fn preprocessing_matches_the_reference_tensor() {
 #[test]
 #[ignore = "needs tmp/ocr/golden and ~/.trakktor/ocr/paddle"]
 fn the_probability_map_matches_the_reference() {
-    let trace = trace();
-    let shape = trace["det_input_shape"].as_array().unwrap();
-    let (height, width) = (
-        shape[2].as_u64().unwrap() as usize,
-        shape[3].as_u64().unwrap() as usize,
-    );
+    probability_map_matches("mobile_eslav", "PP-OCRv5_mobile_det");
+}
 
-    let device = Device::Cpu;
-    let artifact = Artifact::load(&model_dir("PP-OCRv5_mobile_det")).unwrap();
-    let detector = Detector::load(&Loader::new(&artifact, &device)).unwrap();
+#[test]
+#[ignore = "needs tmp/ocr/golden and ~/.trakktor/ocr/paddle"]
+fn the_server_probability_map_matches_the_reference() {
+    probability_map_matches("server_eslav", "PP-OCRv5_server_det");
+}
 
-    let golden_input = read_f32(&golden_dir().join("det_input.bin"));
-    let input =
-        Tensor::from_vec(golden_input, (1, 3, height, width), &device).unwrap();
-    let map = detector.forward(&input).unwrap();
-    assert_eq!(map.dims(), &[1, 1, height, width]);
+/// The large detector on a page-sized input, on both devices.
+///
+/// The size is the point: it is a scanned A4 page at `--limit-side-len 1920`,
+/// which is where the convolutions grow past what the GPU backend computes
+/// correctly. A smaller input proves nothing here.
+#[cfg(feature = "ocr-metal")]
+#[test]
+#[ignore = "needs ~/.trakktor/ocr/paddle and a Metal device"]
+fn the_server_detector_agrees_between_devices() {
+    let (height, width) = (1920usize, 1376usize);
+    let page: Vec<f32> = (0..3 * height * width)
+        .map(|i| ((i % 251) as f32 - 125.0) / 125.0)
+        .collect();
 
-    let ours = map.flatten_all().unwrap().to_vec1::<f32>().unwrap();
-    let golden = read_f32(&golden_dir().join("det_prob.bin"));
-    assert_eq!(ours.len(), golden.len());
+    let map = |device: Device| {
+        let artifact =
+            Artifact::load(&model_dir("PP-OCRv5_server_det")).unwrap();
+        let detector =
+            Detector::load(&Loader::new(&artifact, &device)).unwrap();
+        let input =
+            Tensor::from_vec(page.clone(), (1, 3, height, width), &device)
+                .unwrap();
+        detector
+            .forward(&input)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap()
+    };
 
-    // The map is a sigmoid, so most of it sits in the flat tail where large
-    // logit differences vanish; compare where it matters, around and above
-    // the binarization threshold, as well as overall.
-    let worst = ours
+    let cpu = map(Device::Cpu);
+    let metal = map(Device::new_metal(0).expect("a Metal device"));
+    let worst = cpu
         .iter()
-        .zip(&golden)
+        .zip(&metal)
         .map(|(a, b)| (a - b).abs())
         .fold(0.0f32, f32::max);
-    let big = ours
-        .iter()
-        .zip(&golden)
-        .filter(|(a, b)| (**a - **b).abs() > 1e-5)
-        .count();
-    eprintln!("worst {worst:e}, over 1e-5: {big} of {}", ours.len());
-    assert!(worst < 1e-3, "worst probability differs by {worst}");
-
-    let disagreements = ours
-        .iter()
-        .zip(&golden)
-        .filter(|(a, b)| (**a >= 0.3) != (**b >= 0.3))
-        .count();
-    assert_eq!(
-        disagreements, 0,
-        "pixels that cross the threshold differently"
-    );
+    eprintln!("cpu vs metal: worst {worst:e} over {} pixels", cpu.len());
+    assert!(worst < 1e-3, "the two devices disagree by {worst}");
 }
 
 /// Intersection over union of two axis-aligned bounds.
@@ -153,8 +223,18 @@ fn iou(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> f32 {
 
 #[test]
 #[ignore = "needs tmp/ocr/golden"]
-fn the_boxes_match_the_reference_by_overlap() {
-    let trace = trace();
+fn the_boxes_match_the_reference_by_overlap() { boxes_match("mobile_eslav"); }
+
+#[test]
+#[ignore = "needs tmp/ocr/golden"]
+fn the_server_boxes_match_the_reference_by_overlap() {
+    boxes_match("server_eslav");
+}
+
+/// Turns one reference run's probability map into boxes and compares them with
+/// the boxes that run recorded.
+fn boxes_match(run: &str) {
+    let trace = trace_of(run);
     let shape = trace["det_prob_shape"].as_array().unwrap();
     let (height, width) = (
         shape[2].as_u64().unwrap() as usize,
@@ -165,7 +245,7 @@ fn the_boxes_match_the_reference_by_overlap() {
         trace["page_size"][1].as_u64().unwrap() as u32,
     );
 
-    let prob = read_f32(&golden_dir().join("det_prob.bin"));
+    let prob = read_f32(&golden(run).join("det_prob.bin"));
     let boxes = db::boxes_from_bitmap(
         &prob,
         width,

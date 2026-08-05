@@ -57,14 +57,17 @@ Apache-licensed:
   `--allow-non-commercial-models`.
 - [**`ocr paddle`**](features/ocr/README.md) —
   [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) (Apache-2.0) by the
-  PaddlePaddle authors: the PP-OCRv5 pipeline — a differentiable-binarization
-  text detector, a CTC text recognizer and a text-line orientation
+  PaddlePaddle authors: the PP-OCRv5 pipeline — two differentiable-binarization
+  text detectors, a CTC text recognizer and a text-line orientation
   classifier — ported to the same candle runtime, reading PaddleOCR's own
   published inference artifacts directly. The detection algorithm comes from
   [DB](https://github.com/MhLiao/DB) (Apache-2.0; Liao et al.,
   *Real-time Scene Text Detection with Differentiable Binarization*, AAAI 2020)
   by way of [DBNet.pytorch](https://github.com/WenmuZhou/DBNet.pytorch), which
-  PaddleOCR names as its source. Please cite the PaddleOCR 3.0 technical report
+  PaddleOCR names as its source; the large detector's intra-class block is
+  adapted by PaddleOCR from
+  [I3CL](https://github.com/ViTAE-Transformer/I3CL), which its own source
+  names. Please cite the PaddleOCR 3.0 technical report
   (arXiv:2507.05595) and the DB paper if you use these models.
 - [**`ocr vl`**](features/ocr/README.md) —
   [PaddleOCR-VL 1.6](https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.6)

@@ -12,7 +12,7 @@ That is a different bargain from [`paddle`](paddle.md), not a better one:
 
 | | `paddle` | `vl` |
 |---|---|---|
-| download | ~13 MB per language | **~1.9 GB**, once |
+| download | ~13 MB per language | **~2 GB**, once |
 | a page | a second or two | tens of seconds |
 | alphabet | the recognizer's dictionary | whatever the model knows |
 | tables, formulas | lines of text | markup, LaTeX |
@@ -35,16 +35,28 @@ to lose its place and repeat itself; given one isolated line it has too little
 context to settle on a writing system and will happily invent an alphabet. Given
 a few lines that belong together it does its best work.
 
-So `vl` does not run alone. It borrows `paddle`'s text detector — the same 4.7 MB
-model, and one that looks for text as such regardless of script — groups the
-lines it finds into blocks, and reads a block at a time. The detector is what
-makes the arrangement work: it finds lines in scripts that no recognizer in the
-classic catalog could read.
+So `vl` does not run alone. It borrows `paddle`'s text detector — one that
+looks for text as such regardless of script — groups the lines it finds into
+blocks, and reads a block at a time. The detector is what makes the arrangement
+work: it finds lines in scripts that no recognizer in the classic catalog could
+read.
+
+**The default detector here is the large one** (`PP-OCRv5_server_det`, 88 MB),
+where `paddle` defaults to the small one. A line the small detector misses is
+not merely missing from the result here: it also changes how the lines around it
+are grouped, so a footnote can come back as a fragment with its opening gone.
+That is worth about three seconds on a page that already takes thirty. Pass
+`--det-model PP-OCRv5_mobile_det` for the fast one.
+
+One caveat comes with it, and it applies here as much as in `paddle`: the large
+detector's probability map is sharper, so an ordinary line can score just under
+the default `--box-thresh 0.6` and be dropped before the blocks are cut. If a
+block comes back short of a line, try `--box-thresh 0.4`.
 
 Two consequences worth knowing:
 
-- **Three models are downloaded**: the 1.9 GB one, the detector, and the
-  129 MB layout model below.
+- **Three models are downloaded**: the 1.92 GB one, the 88 MB detector, and the
+  129 MB layout model below — about 2.1 GB in all.
 - **The quality of the reading depends on the grouping.** Where the grouping is
   bad — a caption wrapped around a picture, a table split into columns — the
   model gets the input it is weakest on.

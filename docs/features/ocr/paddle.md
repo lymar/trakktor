@@ -21,11 +21,24 @@ is about 13 MB, downloaded on first use into `~/.trakktor/ocr/paddle/`.
 --rec-model <name|dir>     # overrides what --lang chose
 ```
 
-One detector serves every language: it looks for text as such and does not care
+A detector serves every language: it looks for text as such and does not care
 what script it is. Twelve recognizers cover the scripts between them — Eastern
 Slavic, wider Cyrillic, Latin, English, Arabic, Devanagari, Korean, Thai, Greek,
 Telugu, Tamil, and Chinese/Japanese. They share an architecture and differ only
 in the alphabet they were trained on.
+
+There are two detectors, and the default is the small one:
+
+| `--det-model` | download | a page | what it changes |
+|---|---:|---:|---|
+| `PP-OCRv5_mobile_det` | 4.7 MB | ~1 s | the default |
+| `PP-OCRv5_server_det` | 88 MB | ~12 s | finds short lines and superscript footnote markers the small one drops, and keeps a line whole where the small one splits it |
+
+The large one is worth its time on a densely set page — footnotes, marginal
+numbers, a line of two words — and not otherwise. It is also, on one measured
+page, slightly more likely to lose an ordinary line of body text to
+`--box-thresh`: its probability map is sharper, so a box score can land just
+under the default 0.6. If a line goes missing with it, try `--box-thresh 0.4`.
 
 Either flag also takes a **path** to a directory holding a model's
 `inference.json`, `inference.pdiparams` and `config.json`, which is how to run a

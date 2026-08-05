@@ -13,7 +13,7 @@ Two engines, both fully offline once their models are downloaded.
 - [**`vl`**](vl.md) — a port of the PaddleOCR-VL document model, which writes
   out what it sees rather than picking characters from a dictionary. It works
   out the writing system itself, reads scripts `paddle` has no model for, and
-  can return a table as markup or a formula as LaTeX. About 1.9 GB downloaded
+  can return a table as markup or a formula as LaTeX. About 2 GB downloaded
   once, and tens of seconds per page.
 
 There is also a [**layout stage**](layout.md), shared by both engines and
@@ -84,6 +84,9 @@ JSON (the default) is one object for the run:
   than a rectangle.
 - `score` is the mean probability of the characters that were kept.
 - `lines` are in reading order, not in the order the detector found them.
+- `models` names what actually ran. The two engines default to **different
+  detectors** — `paddle` to the small one, `vl` to the large one — so this field
+  is how to tell which reading a result came from.
 
 `--text` prints the lines, with the pages separated by a marker that is part of
 the data (`=== page 2 · scan-02.png ===`) — without it the text of a multi-page

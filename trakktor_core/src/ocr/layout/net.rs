@@ -2,11 +2,12 @@
 //!
 //! Four parts, and only the last one is unusual:
 //!
-//! - **`PPHGNetV2-L`** — an ordinary convolutional backbone. Its weights are
-//!   numbered in declaration order, so the port walks the same structure with a
-//!   counter rather than spelling eighty names out; the accompanying batch
-//!   normalization is always `batch_norm2d_{n + 80}`, a rule that holds across
-//!   the whole artifact.
+//! - **`PPHGNetV2-L`** — an ordinary convolutional backbone, and the same one
+//!   the server text detector runs, so it lives in
+//!   [`crate::ocr::paddle::hgnet`] rather than here. Its weights are numbered
+//!   in declaration order, and the accompanying batch normalization is always
+//!   `batch_norm2d_{n + 80}` — a rule that holds across the whole artifact, so
+//!   everything below is loaded by number too.
 //! - **`HybridEncoder`** — three 1×1 projections to 256 channels, one
 //!   transformer layer over the coarsest map, and two feature pyramids running
 //!   in opposite directions.
@@ -36,7 +37,10 @@ use candle_core::{D, DType, Device, Tensor};
 use super::sampling::{self, Level};
 use crate::ocr::{
     error::OcrError,
-    paddle::net::{BatchNorm, Conv, LayerNorm, Loader},
+    paddle::{
+        hgnet,
+        net::{Conv, ConvBn, LayerNorm, Loader},
+    },
 };
 
 /// Channels the encoder and the decoder work in.
@@ -70,319 +74,22 @@ pub struct Prediction {
     pub classes: usize,
 }
 
-/// A convolution followed by inference-time batch normalization.
-#[derive(Debug)]
-struct ConvBn {
-    conv: Conv,
-    norm: BatchNorm,
-}
-
-impl ConvBn {
-    fn load(
-        loader: &Loader,
-        index: usize,
-        dims: [usize; 4],
-        stride: usize,
-        padding: usize,
-        groups: usize,
-    ) -> Result<Self, OcrError> {
-        Ok(Self {
-            conv: Conv::load(
-                loader,
-                &format!("conv2d_{index}"),
-                dims,
-                stride,
-                padding,
-                groups,
-            )?,
-            norm: BatchNorm::load(
-                loader,
-                &format!("batch_norm2d_{}", index + BN_OFFSET),
-                dims[0],
-            )?,
-        })
-    }
-
-    fn forward(&self, x: &Tensor) -> Result<Tensor, OcrError> {
-        self.norm.forward(&self.conv.forward(x)?)
-    }
+/// A convolution and its normalization, at the offset this artifact numbers
+/// them with.
+fn conv_bn(
+    loader: &Loader,
+    index: usize,
+    dims: [usize; 4],
+    stride: usize,
+    padding: usize,
+    groups: usize,
+) -> Result<ConvBn, OcrError> {
+    ConvBn::load(loader, index, BN_OFFSET, dims, stride, padding, groups)
 }
 
 fn relu(x: &Tensor) -> Result<Tensor, OcrError> { Ok(x.relu()?) }
 
 fn silu(x: &Tensor) -> Result<Tensor, OcrError> { Ok(x.silu()?) }
-
-// ------------------------------------------------------------------------
-// Backbone
-// ------------------------------------------------------------------------
-
-/// The stem: two strided convolutions with a two-way split in between.
-///
-/// The split is the only part that needs care. Two kernels of size two run over
-/// the first convolution's output padded by one on the right and the bottom,
-/// while the same padded tensor goes through a max pool of the same shape; the
-/// two results are concatenated. Padding one side only is what Paddle spells
-/// `SAME` for an even kernel, and candle pads symmetrically, so the padding is
-/// done by hand here.
-#[derive(Debug)]
-struct Stem {
-    first: ConvBn,
-    left: ConvBn,
-    left2: ConvBn,
-    third: ConvBn,
-    fourth: ConvBn,
-}
-
-impl Stem {
-    fn load(loader: &Loader, next: &mut usize) -> Result<Self, OcrError> {
-        let mut conv = |dims: [usize; 4], stride, padding, groups| {
-            let at = *next;
-            *next += 1;
-            ConvBn::load(loader, at, dims, stride, padding, groups)
-        };
-        Ok(Self {
-            first: conv([32, 3, 3, 3], 2, 1, 1)?,
-            left: conv([16, 32, 2, 2], 1, 0, 1)?,
-            left2: conv([32, 16, 2, 2], 1, 0, 1)?,
-            third: conv([32, 64, 3, 3], 2, 1, 1)?,
-            fourth: conv([48, 32, 1, 1], 1, 0, 1)?,
-        })
-    }
-
-    fn forward(&self, x: &Tensor) -> Result<Tensor, OcrError> {
-        let y = relu(&self.first.forward(x)?)?;
-        let padded = pad_end(&y, 1)?;
-        let left = relu(&self.left.forward(&padded)?)?;
-        let left = relu(&self.left2.forward(&pad_end(&left, 1)?)?)?;
-        let right = padded.max_pool2d_with_stride(2, 1)?;
-        let y = Tensor::cat(&[&right, &left], 1)?;
-        let y = relu(&self.third.forward(&y)?)?;
-        relu(&self.fourth.forward(&y)?)
-    }
-}
-
-/// Pads the right and bottom edges with zeros. The activations feeding it are
-/// non-negative, so zero is also the identity for the max pool that reads it.
-fn pad_end(x: &Tensor, by: usize) -> Result<Tensor, OcrError> {
-    Ok(x.pad_with_zeros(2, 0, by)?.pad_with_zeros(3, 0, by)?)
-}
-
-/// One block of a stage: six convolutions whose outputs are all kept, then
-/// concatenated with the input and squeezed back down.
-#[derive(Debug)]
-struct HgBlock {
-    layers: Vec<HgLayer>,
-    squeeze: ConvBn,
-    excite: ConvBn,
-    residual: bool,
-}
-
-/// A layer inside a block: one convolution, or — in the deeper stages — a
-/// pointwise convolution followed by a depthwise one.
-#[derive(Debug)]
-enum HgLayer {
-    Plain(ConvBn),
-    Light { point: ConvBn, depth: ConvBn },
-}
-
-impl HgLayer {
-    fn forward(&self, x: &Tensor) -> Result<Tensor, OcrError> {
-        match self {
-            Self::Plain(conv) => relu(&conv.forward(x)?),
-            // The pointwise half carries no activation; only the depthwise one
-            // does.
-            Self::Light { point, depth } => {
-                relu(&depth.forward(&point.forward(x)?)?)
-            },
-        }
-    }
-}
-
-impl HgBlock {
-    #[allow(clippy::too_many_arguments)]
-    fn load(
-        loader: &Loader,
-        next: &mut usize,
-        in_channels: usize,
-        mid: usize,
-        out: usize,
-        kernel: usize,
-        light: bool,
-        residual: bool,
-    ) -> Result<Self, OcrError> {
-        const LAYERS: usize = 6;
-        let pad = (kernel - 1) / 2;
-        let mut layers = Vec::with_capacity(LAYERS);
-        for at in 0..LAYERS {
-            let from = if at == 0 { in_channels } else { mid };
-            let mut conv = |dims: [usize; 4], stride, padding, groups| {
-                let index = *next;
-                *next += 1;
-                ConvBn::load(loader, index, dims, stride, padding, groups)
-            };
-            layers.push(if light {
-                HgLayer::Light {
-                    point: conv([mid, from, 1, 1], 1, 0, 1)?,
-                    depth: conv([mid, 1, kernel, kernel], 1, pad, mid)?,
-                }
-            } else {
-                HgLayer::Plain(conv([mid, from, kernel, kernel], 1, pad, 1)?)
-            });
-        }
-        let total = in_channels + LAYERS * mid;
-        let squeeze = {
-            let index = *next;
-            *next += 1;
-            ConvBn::load(loader, index, [out / 2, total, 1, 1], 1, 0, 1)?
-        };
-        let excite = {
-            let index = *next;
-            *next += 1;
-            ConvBn::load(loader, index, [out, out / 2, 1, 1], 1, 0, 1)?
-        };
-        Ok(Self {
-            layers,
-            squeeze,
-            excite,
-            residual,
-        })
-    }
-
-    fn forward(&self, x: &Tensor) -> Result<Tensor, OcrError> {
-        let mut kept = Vec::with_capacity(self.layers.len() + 1);
-        kept.push(x.clone());
-        let mut state = x.clone();
-        for layer in &self.layers {
-            state = layer.forward(&state)?;
-            kept.push(state.clone());
-        }
-        let joined = Tensor::cat(&kept, 1)?;
-        let y = relu(&self.squeeze.forward(&joined)?)?;
-        let y = relu(&self.excite.forward(&y)?)?;
-        if self.residual { Ok((y + x)?) } else { Ok(y) }
-    }
-}
-
-/// One stage: an optional depthwise halving of the resolution, then its blocks.
-#[derive(Debug)]
-struct HgStage {
-    downsample: Option<ConvBn>,
-    blocks: Vec<HgBlock>,
-}
-
-/// The four stages of `PPHGNetV2-L`, as its published configuration spells
-/// them.
-struct StageSpec {
-    in_channels: usize,
-    mid: usize,
-    out: usize,
-    blocks: usize,
-    kernel: usize,
-    light: bool,
-    downsample: bool,
-}
-
-const STAGES: [StageSpec; 4] = [
-    StageSpec {
-        in_channels: 48,
-        mid: 48,
-        out: 128,
-        blocks: 1,
-        kernel: 3,
-        light: false,
-        downsample: false,
-    },
-    StageSpec {
-        in_channels: 128,
-        mid: 96,
-        out: 512,
-        blocks: 1,
-        kernel: 3,
-        light: false,
-        downsample: true,
-    },
-    StageSpec {
-        in_channels: 512,
-        mid: 192,
-        out: 1024,
-        blocks: 3,
-        kernel: 5,
-        light: true,
-        downsample: true,
-    },
-    StageSpec {
-        in_channels: 1024,
-        mid: 384,
-        out: 2048,
-        blocks: 1,
-        kernel: 5,
-        light: true,
-        downsample: true,
-    },
-];
-
-#[derive(Debug)]
-struct Backbone {
-    stem: Stem,
-    stages: Vec<HgStage>,
-}
-
-impl Backbone {
-    fn load(loader: &Loader, next: &mut usize) -> Result<Self, OcrError> {
-        let stem = Stem::load(loader, next)?;
-        let mut stages = Vec::with_capacity(STAGES.len());
-        for spec in &STAGES {
-            let downsample = if spec.downsample {
-                let index = *next;
-                *next += 1;
-                // Depthwise, and with no activation of its own.
-                Some(ConvBn::load(
-                    loader,
-                    index,
-                    [spec.in_channels, 1, 3, 3],
-                    2,
-                    1,
-                    spec.in_channels,
-                )?)
-            } else {
-                None
-            };
-            let mut blocks = Vec::with_capacity(spec.blocks);
-            for at in 0..spec.blocks {
-                blocks.push(HgBlock::load(
-                    loader,
-                    next,
-                    if at == 0 { spec.in_channels } else { spec.out },
-                    spec.mid,
-                    spec.out,
-                    spec.kernel,
-                    spec.light,
-                    at != 0,
-                )?);
-            }
-            stages.push(HgStage { downsample, blocks });
-        }
-        Ok(Self { stem, stages })
-    }
-
-    /// The last three stages' outputs, coarsest last.
-    fn forward(&self, x: &Tensor) -> Result<Vec<Tensor>, OcrError> {
-        let mut state = self.stem.forward(x)?;
-        let mut out = Vec::with_capacity(LEVELS);
-        for (at, stage) in self.stages.iter().enumerate() {
-            if let Some(down) = &stage.downsample {
-                state = down.forward(&state)?;
-            }
-            for block in &stage.blocks {
-                state = block.forward(&state)?;
-            }
-            if at > 0 {
-                out.push(state.clone());
-            }
-        }
-        Ok(out)
-    }
-}
 
 // ------------------------------------------------------------------------
 // Hybrid encoder
@@ -554,27 +261,13 @@ impl CspRep {
         right: usize,
     ) -> Result<Self, OcrError> {
         Ok(Self {
-            left: ConvBn::load(
-                loader,
-                left,
-                [MODEL, 2 * MODEL, 1, 1],
-                1,
-                0,
-                1,
-            )?,
+            left: conv_bn(loader, left, [MODEL, 2 * MODEL, 1, 1], 1, 0, 1)?,
             blocks: [
                 RepBlock::load(loader, blocks)?,
                 RepBlock::load(loader, blocks + 1)?,
                 RepBlock::load(loader, blocks + 2)?,
             ],
-            right: ConvBn::load(
-                loader,
-                right,
-                [MODEL, 2 * MODEL, 1, 1],
-                1,
-                0,
-                1,
-            )?,
+            right: conv_bn(loader, right, [MODEL, 2 * MODEL, 1, 1], 1, 0, 1)?,
         })
     }
 
@@ -601,13 +294,13 @@ struct Encoder {
 impl Encoder {
     fn load(loader: &Loader, coarsest_tokens: usize) -> Result<Self, OcrError> {
         let project = |index: usize, from: usize| {
-            ConvBn::load(loader, index, [MODEL, from, 1, 1], 1, 0, 1)
+            conv_bn(loader, index, [MODEL, from, 1, 1], 1, 0, 1)
         };
         let lateral = |index: usize| {
-            ConvBn::load(loader, index, [MODEL, MODEL, 1, 1], 1, 0, 1)
+            conv_bn(loader, index, [MODEL, MODEL, 1, 1], 1, 0, 1)
         };
         let down = |index: usize| {
-            ConvBn::load(loader, index, [MODEL, MODEL, 3, 3], 2, 1, 1)
+            conv_bn(loader, index, [MODEL, MODEL, 3, 3], 2, 1, 1)
         };
         Ok(Self {
             project: [
@@ -811,7 +504,7 @@ impl Decoder {
         classes: usize,
     ) -> Result<Self, OcrError> {
         let project = |index: usize| {
-            ConvBn::load(loader, index, [MODEL, MODEL, 1, 1], 1, 0, 1)
+            conv_bn(loader, index, [MODEL, MODEL, 1, 1], 1, 0, 1)
         };
         let mut layers = Vec::with_capacity(DEPTH);
         for at in 0..DEPTH {
@@ -1064,7 +757,7 @@ fn sample_bilinear(
 /// The whole detector.
 #[derive(Debug)]
 pub struct Net {
-    backbone: Backbone,
+    backbone: hgnet::Backbone,
     encoder: Encoder,
     decoder: Decoder,
     device: Device,
@@ -1088,7 +781,7 @@ impl Net {
         let positions =
             (side / 8).pow(2) + (side / 16).pow(2) + coarsest.pow(2);
         let mut next = 0usize;
-        let backbone = Backbone::load(loader, &mut next)?;
+        let backbone = hgnet::Backbone::load(loader, &mut next, BN_OFFSET)?;
         Ok(Self {
             backbone,
             encoder: Encoder::load(loader, coarsest * coarsest)?,
@@ -1099,8 +792,10 @@ impl Net {
 
     /// Runs one page. `input` is `1 × 3 × side × side`.
     pub fn forward(&self, input: &Tensor) -> Result<Prediction, OcrError> {
+        // The encoder reads the last three stages; the finest one, a quarter of
+        // the input, is not a feature level here.
         let features = self.backbone.forward(input)?;
-        let maps = self.encoder.forward(&features)?;
+        let maps = self.encoder.forward(&features[1..])?;
         self.decoder.forward(&maps)
     }
 }

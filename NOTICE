@@ -209,12 +209,15 @@ XLM-RoBERTa (FacebookAI/xlm-roberta-base) — MIT License
 PaddleOCR — Apache-2.0 License
   Copyright (c) 2016 PaddlePaddle Authors
   https://github.com/PaddlePaddle/PaddleOCR
-  The `ocr paddle` engine ports the PP-OCRv5 pipeline: the differentiable-
-  binarization text detector (PP-LCNetV3 backbone, RSE feature-pyramid neck,
-  DB head), its post-processing, the perspective crop, the CTC text
+  The `ocr paddle` engine ports the PP-OCRv5 pipeline: two differentiable-
+  binarization text detectors (PP-LCNetV3 backbone, RSE feature-pyramid neck,
+  DB head; and PP-HGNetV2 backbone, LKPAN neck with intra-class blocks,
+  PFHeadLocal head), their post-processing, the perspective crop, the CTC text
   recognizer (PP-LCNetV3 backbone, SVTR neck) and the text-line orientation
   classifier, together with the reader for PaddleOCR's published inference
-  artifacts. Model weights are downloaded from Hugging Face
+  artifacts. The LKPAN neck's intra-class block is itself adapted by PaddleOCR
+  from I3CL (github.com/ViTAE-Transformer/I3CL), which PaddleOCR's own source
+  names. Model weights are downloaded from Hugging Face
   (huggingface.co/PaddlePaddle) at runtime and are not redistributed in this
   repository.
 

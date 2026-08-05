@@ -238,7 +238,7 @@ pub(crate) fn run_vl(
         detection: args
             .det_model
             .clone()
-            .unwrap_or_else(|| model::DEFAULT_DETECTION.to_string()),
+            .unwrap_or_else(|| vl::pipeline::DEFAULT_DETECTION.to_string()),
         limit_side_len: args.limit_side_len,
         params: Params {
             thresh: args.thresh,

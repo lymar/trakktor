@@ -37,11 +37,13 @@ Each command is documented in full on its own page under
   (detection, then recognition) reading PaddleOCR's published models directly:
   twelve recognizers covering Cyrillic, Latin, Arabic, Devanagari, Korean,
   Thai, Greek, Tamil, Telugu and Chinese/Japanese, about 13 MB per language and
-  a second or two per page. [`vl`](docs/features/ocr/vl.md) is a port of the
+  a second or two per page — with a larger text detector on `--det-model` for
+  pages whose short lines and footnote markers the small one drops.
+  [`vl`](docs/features/ocr/vl.md) is a port of the
   PaddleOCR-VL document model, which **writes out** what it sees instead of
   picking characters from a dictionary: it works out the writing system by
   itself, reads scripts the classic pipeline has no model for at all, and
-  returns a table as markup or a formula as LaTeX — for about 1.9 GB of weights
+  returns a table as markup or a formula as LaTeX — for about 2 GB of weights
   and tens of seconds a page. Output either way is JSON with every line's box
   and confidence, plain text, or Markdown with paragraphs and a reading order
   worked out from the geometry. A third model

@@ -17,6 +17,7 @@ pub mod crop;
 pub mod db;
 pub mod det;
 pub mod download;
+pub mod hgnet;
 pub mod image;
 pub mod model;
 pub mod net;

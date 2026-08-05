@@ -49,10 +49,12 @@ impl RawTensor {
 }
 
 /// One network read from a model directory: its weights by name, plus the
-/// input/output geometry the graph declares (`-1` marks a dynamic dimension).
+/// input/output geometry the graph declares (`-1` marks a dynamic dimension),
+/// plus the modules it says it is made of.
 #[derive(Debug)]
 pub struct Artifact {
     tensors: HashMap<String, RawTensor>,
+    modules: Vec<String>,
     pub input_dims: Vec<i64>,
     pub output_dims: Vec<i64>,
 }
@@ -67,6 +69,7 @@ impl Artifact {
         let graph = read_json(&dir.join(GRAPH_FILE))?;
         let params = parameters(&graph)?;
         let (input_dims, output_dims) = graph_io(&graph)?;
+        let modules = modules(&graph)?;
 
         let bytes = read_file(&dir.join(WEIGHTS_FILE))?;
         let records = records(&bytes)?;
@@ -118,6 +121,7 @@ impl Artifact {
 
         Ok(Self {
             tensors,
+            modules,
             input_dims,
             output_dims,
         })
@@ -153,6 +157,21 @@ impl Artifact {
     /// Every weight name the file carries, in no particular order.
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.tensors.keys().map(String::as_str)
+    }
+
+    /// The top-level modules the graph says it is built from, in the order the
+    /// ops first mention them — `PPHGNetV2`, `LKPAN`, `PFHeadLocal` for the
+    /// server detector.
+    ///
+    /// This is the artifact describing its own architecture, which is what a
+    /// caller handed a directory rather than a catalogued name has to go on:
+    /// two detectors are the same three files with the same weight names and
+    /// different networks behind them.
+    pub fn modules(&self) -> &[String] { &self.modules }
+
+    /// Whether the graph names this module anywhere.
+    pub fn has_module(&self, name: &str) -> bool {
+        self.modules.iter().any(|module| module == name)
     }
 
     /// Number of weights read.
@@ -302,6 +321,41 @@ fn result_dims(
                 .ok_or_else(|| artifact("a dim is not an integer".into()))
         })
         .collect()
+}
+
+/// The top-level module of every op that names one, deduplicated and kept in
+/// the order the graph mentions them.
+///
+/// Each computed op carries a `struct_name` attribute holding the path of the
+/// module it came from — `/PPHGNetV2/StemBlock/ConvBNAct/Conv2D/` — so the
+/// first path component is the network's own name for its backbone, neck and
+/// head. Nothing else in the artifact records which architecture the weights
+/// belong to.
+fn modules(graph: &serde_json::Value) -> Result<Vec<String>, OcrError> {
+    let mut modules: Vec<String> = Vec::new();
+    for op in ops(graph)? {
+        let Some(path) = op
+            .get("A")
+            .and_then(|a| a.as_array())
+            .and_then(|attrs| {
+                attrs.iter().find(|attr| {
+                    attr.get("N").and_then(|n| n.as_str()) ==
+                        Some("struct_name")
+                })
+            })
+            .and_then(|attr| attr.pointer("/AT/D"))
+            .and_then(|d| d.as_str())
+        else {
+            continue;
+        };
+        let Some(top) = path.split('/').find(|part| !part.is_empty()) else {
+            continue;
+        };
+        if !modules.iter().any(|seen| seen == top) {
+            modules.push(top.to_string());
+        }
+    }
+    Ok(modules)
 }
 
 /// The declared input and output geometry: the `data` op's `shape` attribute

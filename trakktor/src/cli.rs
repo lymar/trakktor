@@ -180,7 +180,7 @@ enum Command {
     /// 13 MB and a second or two per page, and the right default. `vl` for a
     /// page whose script it does not cover, for one that mixes scripts, or
     /// when a table or a formula is wanted as structure rather than as lines —
-    /// about 1.9 GB downloaded once, and tens of seconds per page.
+    /// about 2 GB downloaded once, and tens of seconds per page.
     ///
     /// Both engines also run a layout model, which labels the blocks of the
     /// page — document title, section heading, paragraph, abstract, footnote,
@@ -238,12 +238,14 @@ pub(crate) enum OcrCommand {
     /// characters from a dictionary. It works out the writing system by
     /// itself — so there is no `--lang` here — reads scripts the classic
     /// pipeline has no model for at all, and can return a table as markup or a
-    /// formula as LaTeX. It finds the lines with the same detector `ocr paddle`
-    /// uses, groups them into blocks, and reads a block at a time: handed a
-    /// whole page it tends to get stuck repeating itself, and handed a single
-    /// line it has too little context to settle on a script.
+    /// formula as LaTeX. It finds the lines with the same kind of detector
+    /// `ocr paddle` uses — the large one by default, because a line missed
+    /// here costs a whole block — groups them into blocks, and reads a block
+    /// at a time: handed a whole page it tends to get stuck repeating itself,
+    /// and handed a single line it has too little context to settle on a
+    /// script.
     ///
-    /// The price is the model: about 1.9 GB downloaded once, and tens of
+    /// The price is the models: about 2 GB downloaded once, and tens of
     /// seconds a page. Prefer `ocr paddle` unless you need what this buys.
     Vl(Box<OcrVlArgs>),
 
@@ -309,8 +311,11 @@ pub(crate) struct OcrPaddleArgs {
     #[arg(long, default_value_t = 960, value_name = "px")]
     pub(crate) limit_side_len: usize,
 
-    /// Text detection model. Defaults to the small one, which is what makes a
-    /// page take seconds rather than a minute.
+    /// Text detection model. Defaults to `PP-OCRv5_mobile_det`, the small one,
+    /// which is what makes a page take seconds rather than a minute.
+    /// `PP-OCRv5_server_det` is the alternative: 88 MB against 4.7, tens of
+    /// seconds against about one, and it finds short lines and superscript
+    /// footnote markers this one drops.
     #[arg(long, value_name = "name|dir")]
     pub(crate) det_model: Option<String>,
 
@@ -324,7 +329,10 @@ pub(crate) struct OcrPaddleArgs {
     pub(crate) thresh: f32,
 
     /// Mean probability a detected box must reach to be kept. Lower it to
-    /// recover faint lines, at the price of boxes over background.
+    /// recover faint lines, at the price of boxes over background. Worth
+    /// trying at 0.4 with `--det-model PP-OCRv5_server_det`: that model's map
+    /// is sharper, so an ordinary line can score just under the default with
+    /// it and go missing.
     #[arg(long, default_value_t = 0.6, value_name = "p")]
     pub(crate) box_thresh: f32,
 
@@ -455,7 +463,11 @@ pub(crate) struct OcrVlArgs {
     #[arg(long, value_name = "name|dir")]
     pub(crate) model: Option<String>,
 
-    /// Text detection model, as in `ocr paddle`.
+    /// Text detection model, as in `ocr paddle` — but the default here is the
+    /// large one, `PP-OCRv5_server_det` (88 MB). A line it finds and the small
+    /// one misses is a whole block, so it is worth its time on a page that
+    /// already takes tens of seconds. Pass `PP-OCRv5_mobile_det` for the fast
+    /// one.
     #[arg(long, value_name = "name|dir")]
     pub(crate) det_model: Option<String>,
 
@@ -464,7 +476,11 @@ pub(crate) struct OcrVlArgs {
     #[arg(long, default_value_t = 0.3, value_name = "p")]
     pub(crate) thresh: f32,
 
-    /// Mean probability a detected box must reach to be kept.
+    /// Mean probability a detected box must reach to be kept. Worth trying at
+    /// 0.4 here, because the detector this engine defaults to has a sharper
+    /// map: an ordinary line can score just under the default with it, and a
+    /// line missing at this stage also changes how the rest are grouped into
+    /// blocks.
     #[arg(long, default_value_t = 0.6, value_name = "p")]
     pub(crate) box_thresh: f32,
 

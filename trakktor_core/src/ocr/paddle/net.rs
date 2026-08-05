@@ -339,6 +339,63 @@ impl BatchNorm {
     }
 }
 
+/// A convolution and the inference-time normalization behind it, addressed by
+/// the number the export gave them rather than by name.
+///
+/// The graphs of the PP-HGNetV2 family number every convolution `conv2d_{n}` in
+/// declaration order — which is also execution order — and its normalization
+/// `batch_norm2d_{n + offset}`, with an offset that is a constant of the
+/// artifact: zero in the server detector, eighty in the layout model. A port
+/// therefore walks the structure with a counter instead of spelling out eighty
+/// names.
+#[derive(Debug)]
+pub struct ConvBn {
+    conv: Conv,
+    norm: BatchNorm,
+}
+
+impl ConvBn {
+    pub fn load(
+        loader: &Loader,
+        index: usize,
+        bn_offset: usize,
+        dims: [usize; 4],
+        stride: usize,
+        padding: usize,
+        groups: usize,
+    ) -> Result<Self, OcrError> {
+        Ok(Self {
+            conv: Conv::load(
+                loader,
+                &format!("conv2d_{index}"),
+                dims,
+                stride,
+                padding,
+                groups,
+            )?,
+            norm: BatchNorm::load(
+                loader,
+                &format!("batch_norm2d_{}", index + bn_offset),
+                dims[0],
+            )?,
+        })
+    }
+
+    pub fn forward(&self, x: &Tensor) -> Result<Tensor, OcrError> {
+        self.norm.forward(&self.conv.forward(x)?)
+    }
+}
+
+/// Pads the right and bottom edges with zeros.
+///
+/// This is what Paddle's `SAME` comes to for an even kernel at unit stride, and
+/// candle pads symmetrically, so a layer that needs it does it by hand. The
+/// activations feeding such a layer are non-negative, so zero is also the
+/// identity for a max pool reading the same padded tensor.
+pub fn pad_end(x: &Tensor, by: usize) -> Result<Tensor, OcrError> {
+    Ok(x.pad_with_zeros(2, 0, by)?.pad_with_zeros(3, 0, by)?)
+}
+
 /// A fully connected layer.
 ///
 /// The published weight is `[in, out]` — the transpose of what most frameworks

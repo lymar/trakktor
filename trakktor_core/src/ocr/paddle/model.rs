@@ -6,7 +6,7 @@
 //! trakktor runs without changing a line of this repository. The sizes and
 //! BLAKE3 digests are what the shared downloader verifies against.
 //!
-//! The catalog holds one detector, one text-line orientation classifier and
+//! The catalog holds two detectors, one text-line orientation classifier and
 //! twelve recognizers. The recognizers all share an architecture and differ
 //! only in the alphabet they were trained on and, with it, the width of the
 //! final projection — so covering a new script costs a catalog entry, not a
@@ -54,10 +54,20 @@ impl Model {
     pub fn size(&self) -> u64 { self.files.iter().map(|f| f.size).sum() }
 }
 
-/// The default detector: small, fast, and script-independent — it looks for
-/// text as such, so it finds lines in scripts no recognizer in the catalog can
-/// read.
+/// The classic engine's default detector: small, fast, and script-independent
+/// — it looks for text as such, so it finds lines in scripts no recognizer in
+/// the catalog can read.
 pub const DEFAULT_DETECTION: &str = "PP-OCRv5_mobile_det";
+
+/// The other detector: the same job at nineteen times the size, and slower by
+/// about as much.
+///
+/// What it buys is the class of line the small one drops — short lines, and
+/// lines carrying a superscript. Upstream makes it the default for every
+/// language but Chinese and Japanese; here it is the default of the generative
+/// engine, where a missed line costs a whole block rather than one line, and an
+/// option in the classic one.
+pub const SERVER_DETECTION: &str = "PP-OCRv5_server_det";
 
 /// The default text-line orientation classifier.
 pub const DEFAULT_ORIENTATION: &str = "PP-LCNet_x1_0_textline_ori";
@@ -76,6 +86,17 @@ pub const MODELS: &[Model] = &[
             File { name: "config.json", size: 2871, blake3: "e2a3aa2ffc6ca10a5afd876acd571d96817a0a4bf34be0672a849f7bc6d08715" },
             File { name: "inference.json", size: 229777, blake3: "c037fd8c9a08b92e9d162ff6af81bd3fa822e1fc32e71cd4e636871073adfd82" },
             File { name: "inference.pdiparams", size: 4692937, blake3: "c88bebcdf86c201f116a3ce254197ceaf69c3e23ca4d9b6de32ae066eec760e6" },
+        ],
+    },
+    Model {
+        name: "PP-OCRv5_server_det",
+        kind: Kind::Detection,
+        revision: "ca867c897ecbca8873081573a802ad70d499cb94",
+        // 88.3 MB
+        files: &[
+            File { name: "config.json", size: 2871, blake3: "7d1b56cf253bef87222114f635f187a060c64e5461570b8907c6c1669ac510dd" },
+            File { name: "inference.json", size: 402480, blake3: "b02f6b74bddb2d22687af3e4fa3a6199adb4d88a289d36833cc64bdd9f3d4e55" },
+            File { name: "inference.pdiparams", size: 87932887, blake3: "2e0f1121cedc00d689cd48e9ec3839d1df637f284615dcfe22ed654f5fdd38f3" },
         ],
     },
     Model {
@@ -370,6 +391,7 @@ mod tests {
     #[test]
     fn the_defaults_are_in_the_catalog() {
         assert_eq!(model(DEFAULT_DETECTION).unwrap().kind, Kind::Detection);
+        assert_eq!(model(SERVER_DETECTION).unwrap().kind, Kind::Detection);
         assert_eq!(model(DEFAULT_ORIENTATION).unwrap().kind, Kind::Orientation);
         assert!(recognizer_for(DEFAULT_LANGUAGE).is_ok());
     }
