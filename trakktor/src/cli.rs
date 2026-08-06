@@ -477,10 +477,11 @@ pub(crate) struct OcrVlArgs {
     pub(crate) thresh: f32,
 
     /// Mean probability a detected box must reach to be kept. Worth trying at
-    /// 0.4 here, because the detector this engine defaults to has a sharper
-    /// map: an ordinary line can score just under the default with it, and a
-    /// line missing at this stage also changes how the rest are grouped into
-    /// blocks.
+    /// 0.4 when a line is missing: the detector this engine defaults to has a
+    /// sharper map, so an ordinary line can score just under the default —
+    /// and a line missing at this stage also changes how the rest are grouped
+    /// into blocks. The price of 0.4 is boxes over decorative ink, which can
+    /// pull hallucinated lines into the blocks around them.
     #[arg(long, default_value_t = 0.6, value_name = "p")]
     pub(crate) box_thresh: f32,
 

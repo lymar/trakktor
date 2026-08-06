@@ -51,7 +51,12 @@ That is worth about three seconds on a page that already takes thirty. Pass
 One caveat comes with it, and it applies here as much as in `paddle`: the large
 detector's probability map is sharper, so an ordinary line can score just under
 the default `--box-thresh 0.6` and be dropped before the blocks are cut. If a
-block comes back short of a line, try `--box-thresh 0.4`.
+block comes back short of a line, try `--box-thresh 0.4` — knowing its price:
+weak boxes over decorative ink also make it in, shift the blocks around them,
+and can pull hallucinated lines into the result. Measured across a page set,
+0.4 changed nothing on most pages, recovered a dropped line on one, and traded
+lines for hallucinations on the ornate ones — which is why it is a flag and not
+the default.
 
 Two consequences worth knowing:
 

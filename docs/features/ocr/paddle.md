@@ -29,10 +29,14 @@ in the alphabet they were trained on.
 
 There are two detectors, and the default is the small one:
 
-| `--det-model` | download | a page | what it changes |
+| `--det-model` | download | detection* | what it changes |
 |---|---:|---:|---|
 | `PP-OCRv5_mobile_det` | 4.7 MB | ~1 s | the default |
-| `PP-OCRv5_server_det` | 88 MB | ~12 s | finds short lines and superscript footnote markers the small one drops, and keeps a line whole where the small one splits it |
+| `PP-OCRv5_server_det` | 88 MB | 12–15 s | finds short lines and superscript footnote markers the small one drops, and keeps a line whole where the small one splits it |
+
+\* the detection stage alone, on an A4 scan at `--limit-side-len 1920`;
+recognition comes on top of it either way, so the whole page went from ~14 s to
+~24 s in the same measurement.
 
 The large one is worth its time on a densely set page — footnotes, marginal
 numbers, a line of two words — and not otherwise. It is also, on one measured
