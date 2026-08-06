@@ -16,6 +16,7 @@ use trakktor_core::ocr::{
         post,
     },
     markdown,
+    overlay::{self, Shape, Weight},
     paddle::{
         crop::{self, Crop},
         db::Params,
@@ -140,9 +141,22 @@ pub(crate) fn run_paddle(
                 .map(figure_of)
                 .collect()
         };
-        if !found.is_empty() {
+        // One decode serves both pictures, and neither is asked for on an
+        // ordinary run.
+        if !found.is_empty() || args.boxes.is_some() {
             let raster = RawPage::load(path)?;
-            write_figures(args.out.as_deref(), index + 1, &raster, &found)?;
+            if !found.is_empty() {
+                write_figures(args.out.as_deref(), index + 1, &raster, &found)?;
+            }
+            if let Some(target) = &args.boxes {
+                write_boxes(
+                    target,
+                    index + 1,
+                    args.pages.len(),
+                    &raster,
+                    &line_shapes(&read.page),
+                )?;
+            }
         }
         figures.push(found.iter().map(Figure::quad).collect());
         regions.push(marked);
@@ -324,9 +338,20 @@ pub(crate) fn run_vl(
                 .map(figure_of)
                 .collect()
         };
-        if !found.is_empty() {
+        if !found.is_empty() || args.boxes.is_some() {
             let raster = RawPage::load(path)?;
-            write_figures(args.out.as_deref(), number, &raster, &found)?;
+            if !found.is_empty() {
+                write_figures(args.out.as_deref(), number, &raster, &found)?;
+            }
+            if let Some(target) = &args.boxes {
+                write_boxes(
+                    target,
+                    number,
+                    args.pages.len(),
+                    &raster,
+                    &block_shapes(&read),
+                )?;
+            }
         }
         figures.push(found.iter().map(Figure::quad).collect());
         regions.push(marked);
@@ -402,6 +427,15 @@ pub(crate) fn run_layout(
         let regions = marker.detect(&raster)?;
         if let Some(dir) = &args.crops {
             write_regions(dir, index + 1, &raster, &regions)?;
+        }
+        if let Some(target) = &args.boxes {
+            write_boxes(
+                target,
+                index + 1,
+                args.pages.len(),
+                &raster,
+                &region_shapes(&regions),
+            )?;
         }
         let name = path
             .file_name()
@@ -576,6 +610,98 @@ fn write_figures(
             source,
         })?;
     }
+    Ok(())
+}
+
+/// What the classic engine's overlay shows: one outline per reported line,
+/// numbered as the result numbers it, so the picture, the JSON and the line
+/// crops all count the same lines.
+fn line_shapes(page: &Page) -> Vec<Shape> {
+    page.lines
+        .iter()
+        .enumerate()
+        .map(|(index, line)| Shape {
+            quad: line.quad,
+            color: overlay::score_color(line.score),
+            weight: Weight::Thick,
+            caption: Some(index.to_string()),
+        })
+        .collect()
+}
+
+/// What the generative engine's overlay shows: the blocks it read, over the
+/// line boxes they were assembled from. Two layers because there are two
+/// questions — what the detector found, and how it was grouped — and a wrong
+/// reading here is nearly always the second one.
+fn block_shapes(read: &vl::Read) -> Vec<Shape> {
+    let detected = read.detected.iter().map(|quad| Shape {
+        quad: *quad,
+        color: overlay::CONTEXT,
+        weight: Weight::Thin,
+        caption: None,
+    });
+    let blocks = read.blocks.iter().map(|block| Shape {
+        quad: block.quad,
+        color: match block.crop {
+            Some(_) => overlay::CONFIDENT,
+            None => overlay::DOUBTFUL,
+        },
+        weight: Weight::Thick,
+        // A dropped block is the one thing the result cannot show: its text is
+        // simply not there, and without the picture neither is the reason.
+        caption: Some(match block.crop {
+            Some(at) => at.to_string(),
+            None => "DROPPED".to_string(),
+        }),
+    });
+    detected.chain(blocks).collect()
+}
+
+/// What the layout overlay shows: every region with its number and its label.
+fn region_shapes(regions: &[Region]) -> Vec<Shape> {
+    regions
+        .iter()
+        .enumerate()
+        .map(|(index, region)| Shape {
+            quad: region.quad,
+            color: overlay::score_color(region.score),
+            weight: Weight::Thick,
+            caption: Some(format!("{index} {}", region.label.name())),
+        })
+        .collect()
+}
+
+/// Writes one page with the shapes drawn over it.
+///
+/// The target is the file itself for a single-page run and a directory of
+/// `pNNN.png` for a longer one: one page is the debugging case, and being able
+/// to name that file is the point of it.
+fn write_boxes(
+    target: &Path,
+    page: usize,
+    pages: usize,
+    raster: &RawPage,
+    shapes: &[Shape],
+) -> Result<(), CliError> {
+    let png = overlay::draw_png(
+        &raster.bgr,
+        raster.width as usize,
+        raster.height as usize,
+        shapes,
+    )?;
+    let path = if pages > 1 || target.is_dir() {
+        std::fs::create_dir_all(target).map_err(|source| OcrError::Write {
+            path: target.display().to_string(),
+            source,
+        })?;
+        target.join(format!("p{page:03}.png"))
+    } else {
+        target.to_path_buf()
+    };
+    std::fs::write(&path, png).map_err(|source| OcrError::Write {
+        path: path.display().to_string(),
+        source,
+    })?;
     Ok(())
 }
 

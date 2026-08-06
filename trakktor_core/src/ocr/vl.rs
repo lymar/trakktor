@@ -47,4 +47,4 @@ pub mod runtime_burn;
 pub mod tables;
 
 pub use generate::{Answer, Limits, Task};
-pub use pipeline::{Engine, Options, Read};
+pub use pipeline::{Engine, Options, Read, ReadBlock};

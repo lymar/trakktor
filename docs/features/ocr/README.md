@@ -118,18 +118,30 @@ one page. That is what it is for.
 ## Checking a result
 
 ```sh
-trakktor ocr paddle page.png --crops ./crops
+trakktor ocr paddle page.png --crops ./crops     # what was read
+trakktor ocr paddle page.png --boxes boxes.png   # where it was, and in what order
 ```
 
-writes one image per recognized line — the straightened crop the recognizer
-actually read. If a line is missing from the output, the crops say whether the
-detector never found it or the recognizer could not read it.
+`--crops` writes one image per recognized line — the straightened crop the
+recognizer actually read. `--boxes` writes the page itself with every reported
+line outlined and numbered the way the result numbers it, in a second colour
+where the reading was less than half sure. Between them they say which stage
+went wrong: no outline means the detector never found the line, an outline whose
+crop is blank means the recognizer could not read it.
+
+Both flags work on all three subcommands, each with its own unit. For `vl`,
+`--crops` writes out **blocks** rather than lines — the regions the model was
+asked to make sense of (see [its page](vl.md#it-reads-blocks-not-lines)) — and
+`--boxes` draws two layers: those blocks, numbered as their crops are, over the
+thin outlines of the lines they were assembled from. For `ocr layout`, `--boxes`
+labels every region as well as numbering it, which is the quickest way to see
+what the model thinks is a table.
+
+`--boxes` takes the file to write for a single page, and a directory to fill
+with one `pNNN.png` per page for a longer run.
 
 The other lever is `--limit-side-len`. It decides how far the page is scaled
 down before detection, and it is the setting that decides whether small type is
 found at all: see [the engine page](paddle.md#finding-small-type). Both engines
 have it, and it matters to `vl` twice over — a line the detector misses there is
 not merely unreported, it is a block the model never sees.
-
-For `vl`, `--crops` writes out **blocks** rather than lines: the regions the
-model was asked to make sense of. See [its page](vl.md#it-reads-blocks-not-lines).

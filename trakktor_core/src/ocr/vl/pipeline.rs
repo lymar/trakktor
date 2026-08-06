@@ -275,15 +275,22 @@ impl Engine {
 
         let mut lines = Vec::new();
         let mut crops = Vec::new();
+        let mut placed = Vec::with_capacity(regions.len());
         for (index, region) in regions.iter().enumerate() {
             report(index, regions.len());
             let cut = blocks::cut(&page.bgr, size, region);
             let answer = self.read_block_as(&cut, region.task)?;
+            let quad = region.rect.quad();
             if answer.score < self.options.drop_score || answer.text.is_empty()
             {
+                placed.push(ReadBlock { quad, crop: None });
                 continue;
             }
             lines.extend(place(&answer, region, &quads));
+            placed.push(ReadBlock {
+                quad,
+                crop: Some(crops.len()),
+            });
             crops.push(cut);
         }
 
@@ -310,6 +317,8 @@ impl Engine {
                 reflowed: true,
             },
             crops,
+            blocks: placed,
+            detected: quads,
         })
     }
 
@@ -464,6 +473,25 @@ pub struct Read {
     /// exactly what the model was asked to make sense of.
     crops: Vec<RgbImage>,
     pub figures: Vec<Figure>,
+    /// Where those blocks sat on the page, every one of them — including the
+    /// ones whose reading was dropped, which is where a page quietly loses
+    /// text and the one thing the result cannot show.
+    pub blocks: Vec<ReadBlock>,
+    /// Every line box the detector found, in reading order: the stage the
+    /// blocks were assembled from, and the other half of the answer when a
+    /// reading comes out wrong.
+    pub detected: Vec<Quad>,
+}
+
+/// One block of a page, as the engine put it to the model.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ReadBlock {
+    /// Where it sits on the page.
+    pub quad: Quad,
+    /// Which crop holds its picture, or `None` when its reading was dropped.
+    /// The crops are the blocks that were *kept*, so their numbering only
+    /// follows the blocks as long as nothing falls out between them.
+    pub crop: Option<usize>,
 }
 
 impl Read {

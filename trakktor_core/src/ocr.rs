@@ -10,6 +10,7 @@ pub mod error;
 pub mod figures;
 pub mod layout;
 pub mod markdown;
+pub mod overlay;
 pub mod paddle;
 pub mod page;
 pub mod vl;

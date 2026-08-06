@@ -302,6 +302,17 @@ pub(crate) struct OcrPaddleArgs {
     #[arg(long, value_name = "dir")]
     pub(crate) crops: Option<PathBuf>,
 
+    /// Write the page itself with the result drawn on it: every reported line
+    /// outlined and numbered the way the result numbers it, in a second colour
+    /// where the reading was less than half sure. It answers "what was found,
+    /// and in what order" at a glance, and next to `--crops` it says which
+    /// stage went wrong — no outline means the line was never detected.
+    ///
+    /// The path is the file to write when the run is a single page, and a
+    /// directory to fill with one `pNNN.png` per page when it is more.
+    #[arg(long, value_name = "file|dir")]
+    pub(crate) boxes: Option<PathBuf>,
+
     /// Longest side, in pixels, the page is scaled to before detection. This
     /// is the setting that decides whether small type is found at all: an A4
     /// page scanned at 300 dpi is 3508 pixels tall, so the default shrinks it
@@ -433,6 +444,18 @@ pub(crate) struct OcrVlArgs {
     /// given something coherent to read.
     #[arg(long, value_name = "dir")]
     pub(crate) crops: Option<PathBuf>,
+
+    /// Write the page itself with the result drawn on it, in two layers: each
+    /// block outlined thick and numbered as `--crops` numbers it, and under it
+    /// each line the detector found outlined thin. Together they say what was
+    /// detected and how it was grouped into the pictures the model was asked
+    /// to read — the two things that decide this engine's result. A block
+    /// whose reading was dropped is marked `DROPPED`.
+    ///
+    /// The path is the file to write when the run is a single page, and a
+    /// directory to fill with one `pNNN.png` per page when it is more.
+    #[arg(long, value_name = "file|dir")]
+    pub(crate) boxes: Option<PathBuf>,
 
     /// Longest the answer for one block may get. It has to be generous, and
     /// how generous depends on the script: Tibetan costs about five times more
@@ -593,6 +616,16 @@ pub(crate) struct OcrLayoutArgs {
     /// label describes.
     #[arg(long, value_name = "dir")]
     pub(crate) crops: Option<PathBuf>,
+
+    /// Write the page itself with the blocks drawn on it: every region
+    /// outlined, numbered and labelled, in a second colour where the model was
+    /// less than half sure. This is the picture that answers "what does it
+    /// think is a table" without reading a line of the result.
+    ///
+    /// The path is the file to write when the run is a single page, and a
+    /// directory to fill with one `pNNN.png` per page when it is more.
+    #[arg(long, value_name = "file|dir")]
+    pub(crate) boxes: Option<PathBuf>,
 
     /// Inference runtime executing the model. Both mark the pages up the same,
     /// in f32 on either device; `burn` needs a build with the `burn` feature.

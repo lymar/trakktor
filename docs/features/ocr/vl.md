@@ -109,6 +109,13 @@ model was handed something incoherent rather than that it misread something
 clear. The other tell is `score`: a block the model invented sits far below the
 rest of the page.
 
+`--boxes <file|dir>` draws the same thing on the page rather than beside it:
+each block outlined and numbered as its crop is, over the thin outlines of the
+lines the detector found. Those two layers are the two things that decide a
+reading here — what was detected, and how it was grouped — and a block whose
+reading was dropped is marked `DROPPED` on the page instead of quietly leaving a
+hole in the text.
+
 ## Tasks
 
 ```

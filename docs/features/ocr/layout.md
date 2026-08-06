@@ -17,6 +17,7 @@ trakktor ocr layout page.png              # JSON: blocks, labels, scores, boxes
 trakktor ocr layout page.png --text       # one block per line
 trakktor ocr layout p1.png p2.png         # several pages in one run
 trakktor ocr layout page.png --crops ./blocks   # each block as its own image
+trakktor ocr layout page.png --boxes boxes.png  # the page, with the blocks drawn on it
 ```
 
 About 129 MB downloaded once, and about a second per page.
@@ -130,9 +131,14 @@ Two guarantees hold whatever the model says:
 --model <name|dir>      the layout model to run
 --threshold <p>         one score floor for every label, replacing the defaults
 --crops <dir>           write each block as its own image
+--boxes <file|dir>      write the page with every block outlined and labelled
 --runtime <candle|burn> the inference runtime; `burn` needs a build with it
 --device <cpu|metal>
 ```
+
+`--boxes` is the fastest way to see what the model made of a page: every block
+is drawn where it sits, numbered as the result numbers it and captioned with its
+label, in a second colour where the score is below half.
 
 Inside `ocr paddle` and `ocr vl` the stage takes `--no-layout` to skip it and
 `--layout-model` to choose the model.
