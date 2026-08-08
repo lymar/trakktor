@@ -119,6 +119,21 @@ of itself — the blocks are still in the right places, but closer to the score
 floor that keeps them. A page it says nothing about is read exactly as
 `--no-layout` would read it, and a line that fell in no block is never dropped.
 
+The stage is steered from here by three flags:
+
+```
+--no-layout                # skip it: geometry alone, and 129 MB not downloaded
+--layout-model <name|dir>  # which layout model to run
+--layout-threshold <p>     # one score floor for every label, over the defaults
+```
+
+`--layout-threshold` is the one to reach for on a page in an unfamiliar script,
+where the labels come back thin or not at all. Lowering it is not free in one
+direction: a picture box covering the whole sheet passes a low floor too, and a
+picture swallows the blocks inside it, so the page can end up with fewer labels
+than the defaults gave it. [`ocr layout --boxes`](layout.md) shows what a value
+does to a page in one picture, for a second rather than a page of reading.
+
 ## Speed
 
 The recognizer, not the detector, is where the time goes: on a CPU the detector

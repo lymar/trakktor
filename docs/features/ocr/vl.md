@@ -82,6 +82,22 @@ columns, and the page read in 21 seconds instead of 89.
 what shape it then. They still apply to the lines the layout model did not
 claim.
 
+The stage itself takes two more:
+
+```
+--layout-model <name|dir>  # which layout model to run
+--layout-threshold <p>     # one score floor for every label, over the defaults
+```
+
+The floor matters more here than in the classic engine, because a labelled
+block *is* the unit this engine reads. On a page in an unfamiliar script the
+model is much less sure of itself — a paragraph can score below the default —
+and the page falls back to the geometry above. Lowering the floor gives the
+labels back, but not for free: a picture box covering the whole sheet passes a
+low floor too, and a picture swallows the blocks inside it — and a picture is
+not read at all. [`ocr layout --boxes`](layout.md) shows what a value does to a
+page for the price of a second.
+
 The grouping is adjustable:
 
 ```
