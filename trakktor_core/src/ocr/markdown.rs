@@ -185,7 +185,15 @@ impl<'a> Document<'a> {
             // structure, and it is the one thing on the page that Markdown can
             // represent better than the text it came from.
             if table::is_markup(&text) {
-                if let Some(rendered) = table::to_markdown(&text) {
+                // Whether the reading this markup came from ran into the
+                // length ceiling. The table converter cannot see that — the
+                // markup of a table cut off mid-row looks like the markup of a
+                // short row — and a table that stops in the middle of a number
+                // has to say so.
+                let cut_short = block.lines.iter().any(|at| {
+                    page.lines.get(*at).is_some_and(|line| line.truncated)
+                });
+                if let Some(rendered) = table::to_markdown(&text, cut_short) {
                     self.push(&mut separator, rendered);
                     self.open = None;
                     opening = false;

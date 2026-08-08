@@ -158,6 +158,50 @@ three are asked of the **page as a whole**, because a table or a formula is
 itself one region and cutting it up destroys the structure that made the
 question worth asking.
 
+### What a table comes back as
+
+A table is answered with cell markup rather than with text — one tag per cell,
+one per row, and separate tags for a cell merged with the one to its left, the
+one above, or both. A firing log with two entries, each standing against three
+stages, comes back like this — the head, then the first of its two entries:
+
+```
+<fcel>Firing<fcel>Stage<fcel>Hours<nl><fcel>First<fcel>Warming<fcel>6<nl><ucel><fcel>Soaking<fcel>2<nl><ucel><fcel>Cooling<fcel>9<nl>…
+```
+
+`--format lines` prints that as it stands. `--format md` turns it into a table
+of one of two shapes:
+
+- a **pipe table**, while nothing in the table is merged. That is most tables,
+  and ordinary Markdown reads best.
+- an **HTML `<table>`** with `rowspan`/`colspan`, as soon as one cell covers two
+  rows or two columns. A pipe table has neither, so a merged cell could only
+  come out as a blank next to the cell that carries the text — and a blank is
+  what the markup already means by its own empty-cell tag. Markdown accepts
+  inline HTML, so the structure survives:
+
+```html
+<table>
+<tr><td>Firing</td><td>Stage</td><td>Hours</td></tr>
+<tr><td rowspan="3">First</td><td>Warming</td><td>6</td></tr>
+<tr><td>Soaking</td><td>2</td></tr>
+<tr><td>Cooling</td><td>9</td></tr>
+</table>
+```
+
+No header row is invented in the HTML shape: every cell is a `<td>`. The pipe
+table has to name one — the format rules a line under the first row — and on a
+table whose column heads take two rows that guess is simply wrong.
+
+Two things are worth knowing about the markup itself. The model does not always
+report a merge: the same table can come back with the row head against the first
+of its rows and a merge tag under it, or with the head against the row it is
+*printed* against and blanks around it, which is a merge already lost before the
+Markdown is assembled. And a table cut off by `--max-tokens` ends wherever the
+ceiling fell — possibly inside a number — so the Markdown marks it with a
+`<!-- table cut short -->` comment, which is invisible in a rendered document
+and plain in the source.
+
 ## Stopping
 
 A generative reader does not fail by producing a wrong letter; it fails by not

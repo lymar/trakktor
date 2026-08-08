@@ -94,7 +94,10 @@ document could not be taken apart again.
 
 `--format md` assembles Markdown instead: paragraphs rather than lines, a
 reading order that follows columns, hyphenated line breaks joined back into
-words, and page-to-page paragraph continuation. What it does **not** do yet is
+words, and page-to-page paragraph continuation. A table `vl` returned as cell
+markup becomes a table there as well — a pipe table, or an HTML one when a cell
+spans rows or columns and a pipe table could not say so ([the engine
+page](vl.md#what-a-table-comes-back-as)). What it does **not** do yet is
 tell a heading from body text by anything other than geometry, or find
 illustrations — see [the engine page](paddle.md#what-markdown-does-and-does-not-do).
 
