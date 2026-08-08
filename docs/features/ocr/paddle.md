@@ -107,11 +107,18 @@ abstract, footnote, running head, page number, table, formula, picture, caption.
 That second half is what geometry cannot reach — a title set in capitals makes
 *shorter* boxes than the text below it, so it is not found by size at all.
 
+The labels also reach one stage earlier, into the lines themselves: where two
+columns are set close together the detector joins a line of one column to the
+line facing it in the other, and the boundary between two blocks is what takes
+that line apart again and has each half read on its own. This is the one thing
+the layout model changes about `--format lines` as well as about Markdown.
+
 `--no-layout` drops back to geometry alone. Then headings are guessed from
 centring and isolation rather than known; running heads, page numbers and
-footnotes are separated by position and type size; tables come out as text; and
+footnotes are separated by position and type size; tables come out as text;
 illustrations are found by looking for ink that no text box covers, which finds
-pictures but also finds large tables and display formulas.
+pictures but also finds large tables and display formulas; and a line glued
+across a gutter stays glued.
 
 The layout model is imperfect in its own way: it is trained on Chinese and
 English documents, and on a page in an unfamiliar script it is much less sure

@@ -36,6 +36,7 @@ use crate::{
     ocr::{
         error::OcrError,
         figures::{self, Figure},
+        layout::region::{self, Region},
         page::{Line, Page, Quad},
     },
 };
@@ -224,6 +225,25 @@ impl Engine {
         number: usize,
         source: &str,
     ) -> Result<Read, OcrError> {
+        self.read_page_marked(page, number, source, &[])
+    }
+
+    /// Reads one page image, with a layout model's regions.
+    ///
+    /// The regions do one thing here that the geometry cannot do afterwards:
+    /// they take apart a line the detector glued across a boundary between
+    /// them — the two columns of a page set close together, most often — and
+    /// have each piece read on its own ([`region::split`]). Everything else
+    /// the labels are good for happens later, on the result.
+    ///
+    /// An empty `marked` is the same run as [`read_page`](Self::read_page).
+    pub fn read_page_marked(
+        &self,
+        page: &RawPage,
+        number: usize,
+        source: &str,
+        marked: &[Region],
+    ) -> Result<Read, OcrError> {
         let input = image::detector_input(
             page,
             self.options.limit_side_len,
@@ -247,6 +267,7 @@ impl Engine {
             &self.options.params,
         );
         sort_boxes(&mut boxes);
+        let cuts = straddling(&mut boxes, marked);
 
         let mut crops: Vec<Crop> = boxes
             .iter()
@@ -272,22 +293,47 @@ impl Engine {
 
         let readings = self.recognizer.read(&crops, &self.labels)?;
 
-        let mut lines = Vec::with_capacity(readings.len());
-        let mut kept_crops = Vec::new();
+        // A cut line was read whole *and* in pieces, and only one of the two
+        // survives. The pieces win when every one of them came back — a
+        // straddling line normally reads better in pieces than glued, since
+        // neither half is two columns of text any more — and the whole line
+        // stands when any piece did not, because a page must not lose text to
+        // a guess about its structure.
+        let mut dropped = vec![false; boxes.len()];
+        for cut in &cuts {
+            let read = cut.pieces.clone().all(|at| {
+                readings[at].score >= self.options.drop_score &&
+                    !readings[at].text.trim().is_empty()
+            });
+            if read {
+                dropped[cut.whole] = true;
+            } else {
+                cut.pieces.clone().for_each(|at| dropped[at] = true);
+            }
+        }
+
+        let mut kept: Vec<(Line, Crop)> = Vec::with_capacity(readings.len());
         for (index, reading) in readings.into_iter().enumerate() {
-            if reading.score < self.options.drop_score {
+            if dropped[index] || reading.score < self.options.drop_score {
                 continue;
             }
-            lines.push(Line {
-                text: reading.text,
-                score: reading.score,
-                quad: boxes[index].0,
-                rotated: rotated[index],
-                truncated: false,
-            });
-            kept_crops
-                .push(std::mem::replace(&mut crops[index], Crop::empty()));
+            kept.push((
+                Line {
+                    text: reading.text,
+                    score: reading.score,
+                    quad: boxes[index].0,
+                    rotated: rotated[index],
+                    truncated: false,
+                },
+                std::mem::replace(&mut crops[index], Crop::empty()),
+            ));
         }
+        // The pieces were appended after every box the detector found, so they
+        // have to take their places in the reading order. Sorting a list that
+        // is already in it changes nothing.
+        sort_in_reading_order(&mut kept, |(line, _)| line.quad);
+        let (lines, kept_crops): (Vec<Line>, Vec<Crop>) =
+            kept.into_iter().unzip();
 
         let illustrations = if self.options.figures {
             let quads: Vec<Quad> = lines.iter().map(|line| line.quad).collect();
@@ -322,13 +368,67 @@ impl Engine {
         path: &Path,
         number: usize,
     ) -> Result<Read, OcrError> {
+        self.read_file_marked(path, number, &[])
+    }
+
+    /// Reads a page image from a file, with a layout model's regions.
+    pub fn read_file_marked(
+        &self,
+        path: &Path,
+        number: usize,
+        marked: &[Region],
+    ) -> Result<Read, OcrError> {
         let page = RawPage::load(path)?;
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.display().to_string());
-        self.read_page(&page, number, &name)
+        self.read_page_marked(&page, number, &name, marked)
     }
+}
+
+/// A line the layout took apart: where the glued line sits among the detected
+/// boxes, and where its pieces do.
+struct Cut {
+    /// The line as the detector drew it, spanning the boundary.
+    whole: usize,
+    /// Its pieces, appended after every box the detector found.
+    pieces: std::ops::Range<usize>,
+}
+
+/// Cuts every box that straddles a boundary between two regions, appending the
+/// pieces to `boxes` and reporting which came from what.
+///
+/// The glued line is left in place rather than replaced: both it and its pieces
+/// go to the recognizer in the same batch, and which of them is kept is decided
+/// on what came back. Reading one extra crop for each straddling line is a
+/// page's worth of nothing — there are one or two of them where there are any
+/// at all — and it saves the second pass a fallback would otherwise need.
+fn straddling(boxes: &mut Vec<(Quad, f32)>, regions: &[Region]) -> Vec<Cut> {
+    let mut cuts = Vec::new();
+    if regions.is_empty() {
+        return cuts;
+    }
+    // The range is fixed before the loop, so what the loop appends is not
+    // itself looked at again.
+    for index in 0..boxes.len() {
+        let (quad, score) = boxes[index];
+        let pieces = region::split(quad.bounds(), regions);
+        if pieces.len() < 2 {
+            continue;
+        }
+        let start = boxes.len();
+        boxes.extend(
+            pieces
+                .iter()
+                .map(|(from, to)| (quad.slice(*from, *to), score)),
+        );
+        cuts.push(Cut {
+            whole: index,
+            pieces: start..boxes.len(),
+        });
+    }
+    cuts
 }
 
 /// One page's result, plus the straightened crops the recognizer read — the
@@ -350,19 +450,24 @@ pub struct Read {
 /// does, and the reading order that matters for a multi-column page is built
 /// later, out of this one.
 pub fn sort_boxes(boxes: &mut [(Quad, f32)]) {
-    boxes.sort_by(|a, b| {
-        let (ay, ax) = (a.0.points[0].1, a.0.points[0].0);
-        let (by, bx) = (b.0.points[0].1, b.0.points[0].0);
+    sort_in_reading_order(boxes, |(quad, _)| *quad);
+}
+
+/// [`sort_boxes`], for anything a box can be carried in.
+fn sort_in_reading_order<T>(items: &mut [T], quad: impl Fn(&T) -> Quad) {
+    let corner = |item: &T| quad(item).points[0];
+    items.sort_by(|a, b| {
+        let (ax, ay) = corner(a);
+        let (bx, by) = corner(b);
         ay.total_cmp(&by).then(ax.total_cmp(&bx))
     });
-    for i in 1..boxes.len() {
+    for i in 1..items.len() {
         let mut j = i;
         while j > 0 {
-            let (previous, current) = (boxes[j - 1].0, boxes[j].0);
-            if (previous.points[0].1 - current.points[0].1).abs() < 10.0 &&
-                current.points[0].0 < previous.points[0].0
-            {
-                boxes.swap(j - 1, j);
+            let (previous, current) =
+                (corner(&items[j - 1]), corner(&items[j]));
+            if (previous.1 - current.1).abs() < 10.0 && current.0 < previous.0 {
+                items.swap(j - 1, j);
                 j -= 1;
             } else {
                 break;

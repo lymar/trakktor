@@ -373,6 +373,12 @@ pub(crate) struct OcrPaddleArgs {
     /// capitals makes *shorter* boxes than the text below it, so it is not
     /// found by size at all.
     ///
+    /// The blocks also decide where a *line* ends. On a page whose columns are
+    /// set close together the detector joins a line of one column to the line
+    /// facing it in the other, and the boundary between two blocks is what
+    /// takes that line apart again and has each half read on its own. Without
+    /// it the two run together in the result.
+    ///
     /// Use this when only the lines are wanted and their structure is not, or
     /// to avoid the 129 MB model. It saves about a second a page.
     #[arg(long)]

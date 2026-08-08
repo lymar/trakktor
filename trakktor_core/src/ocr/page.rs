@@ -6,6 +6,9 @@
 //! caller should not have to special-case the count. Page indices are
 //! one-based, matching how people number the pages of a document.
 
+#[cfg(test)]
+mod tests;
+
 /// A quadrangle in page pixels, corners clockwise from the top-left.
 ///
 /// Text lines are not axis-aligned in general (a scan is never quite
@@ -48,6 +51,30 @@ impl Quad {
     pub fn width(&self) -> f32 {
         let [tl, tr, _, _] = self.points;
         ((tl.0 - tr.0).powi(2) + (tl.1 - tr.1).powi(2)).sqrt()
+    }
+
+    /// The part of the box between two positions across the page.
+    ///
+    /// The cut follows the box's own slant rather than the page's vertical: the
+    /// new corners are found along the top and bottom edges. On a scan sitting
+    /// a degree or two off level, dropping the cut straight down would take a
+    /// bite out of one piece and leave a wedge of its neighbour in the other.
+    pub fn slice(&self, from: f32, to: f32) -> Self {
+        let [top_left, top_right, bottom_right, bottom_left] = self.points;
+        let along = |a: (f32, f32), b: (f32, f32), x: f32| {
+            let run = b.0 - a.0;
+            if run.abs() < f32::EPSILON {
+                return a;
+            }
+            let at = ((x - a.0) / run).clamp(0.0, 1.0);
+            (a.0 + run * at, a.1 + (b.1 - a.1) * at)
+        };
+        Self::new([
+            along(top_left, top_right, from),
+            along(top_left, top_right, to),
+            along(bottom_left, bottom_right, to),
+            along(bottom_left, bottom_right, from),
+        ])
     }
 }
 

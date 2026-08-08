@@ -122,14 +122,23 @@ pub(crate) fn run_paddle(
     let mut figures: Vec<Vec<Quad>> = Vec::with_capacity(args.pages.len());
     let mut regions: Vec<Vec<Region>> = Vec::with_capacity(args.pages.len());
     for (index, path) in args.pages.iter().enumerate() {
-        let read = engine.read_file(path, index + 1)?;
+        // One decode of the page serves every stage: the markup runs first,
+        // because a line the detector glued across a boundary between two
+        // regions is taken apart before it is read.
+        let raster = RawPage::load(path)?;
+        let marked = match &marker {
+            None => Vec::new(),
+            Some(marker) => marker.detect(&raster)?,
+        };
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string());
+        let read =
+            engine.read_page_marked(&raster, index + 1, &name, &marked)?;
         if let Some(dir) = &args.crops {
             write_crops(dir, index + 1, &read.crops)?;
         }
-        let marked = match &marker {
-            None => Vec::new(),
-            Some(marker) => marker.detect_file(path)?,
-        };
         // With a layout model the pictures are its own: it says what a picture
         // is, where the raster path only says where ink stands that no text
         // box covers.
@@ -142,22 +151,17 @@ pub(crate) fn run_paddle(
                 .map(figure_of)
                 .collect()
         };
-        // One decode serves both pictures, and neither is asked for on an
-        // ordinary run.
-        if !found.is_empty() || args.boxes.is_some() {
-            let raster = RawPage::load(path)?;
-            if !found.is_empty() {
-                write_figures(args.out.as_deref(), index + 1, &raster, &found)?;
-            }
-            if let Some(target) = &args.boxes {
-                write_boxes(
-                    target,
-                    index + 1,
-                    args.pages.len(),
-                    &raster,
-                    &line_shapes(&read.page),
-                )?;
-            }
+        if !found.is_empty() {
+            write_figures(args.out.as_deref(), index + 1, &raster, &found)?;
+        }
+        if let Some(target) = &args.boxes {
+            write_boxes(
+                target,
+                index + 1,
+                args.pages.len(),
+                &raster,
+                &line_shapes(&read.page),
+            )?;
         }
         figures.push(found.iter().map(Figure::quad).collect());
         regions.push(marked);

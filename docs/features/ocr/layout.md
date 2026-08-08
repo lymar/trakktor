@@ -37,10 +37,15 @@ it fails is the place it hurts most:
 - **A table looks like a paragraph** — lines of similar height, close together.
 - **An illustration has to be guessed from ink** that no text box covers, which
   also finds large tables, display formulas, coloured banners and calligraphy.
+- **A line can cross from one block into the next.** Where two columns are set
+  close together, the line detector — which works from ink, not from structure —
+  joins the end of a line in one column to the line facing it in the other. One
+  box covers both, and it is read as two sentences run together.
 
 With labels these stop being guesses. Headings become `#` levels by what they
 are; running heads, page numbers and footnotes are dropped or set apart by
-label; pictures are pictures.
+label; pictures are pictures. And a line that crossed a boundary between two
+blocks is cut at it, each half read on its own.
 
 ## What it changes, measured
 
@@ -53,7 +58,13 @@ On the same pages, with the stage and with `--no-layout`:
   paragraphs become one paragraph, and the caption under the picture is set as a
   caption;
 - the abstract is one paragraph instead of two;
-- the page number is dropped by label rather than by position.
+- the page number is dropped by label rather than by position;
+- a two-column page set with a narrow gutter: the lines the detector had glued
+  across it are cut at the boundary and each half is read on its own, so neither
+  column's sentence lands in the middle of the other's paragraph. The line is
+  read both ways and the cut is taken only if every piece came back, so the page
+  cannot lose a character to it — on the page this was measured on, not one
+  non-blank character changed.
 
 For [`ocr vl`](vl.md) it does something else as well: the blocks handed to the
 generative model are cut **along** the structure rather than across it, so a
