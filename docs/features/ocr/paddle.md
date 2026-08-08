@@ -10,15 +10,17 @@ decides whether a crop is upside down before it is read.
 
 trakktor runs PaddleOCR's own published artifacts directly — the graph and the
 weights exactly as they are published — so there is no conversion step, no
-Python and no ONNX runtime in the picture. The full working set for a language
-is about 13 MB, downloaded on first use into `~/.trakktor/ocr/paddle/`.
+Python and no ONNX runtime in the picture. The models are downloaded on first
+use into `~/.trakktor/ocr/paddle/`, and the run says what it is fetching, and
+how much, before the first byte moves.
 
 ## Models
 
 ```
---lang <code>              # default: ru — picks the recognizer
---det-model <name|dir>     # default: PP-OCRv5_mobile_det
---rec-model <name|dir>     # overrides what --lang chose
+--lang <code>              # default: en — picks the recognizer
+--quality <best|fast>      # default: best — which end of the catalog to read with
+--det-model <name|dir>     # overrides what --quality chose
+--rec-model <name|dir>     # overrides what --lang and --quality chose
 ```
 
 A detector serves every language: it looks for text as such and does not care
@@ -27,26 +29,43 @@ Slavic, wider Cyrillic, Latin, English, Arabic, Devanagari, Korean, Thai, Greek,
 Telugu, Tamil, and Chinese/Japanese. They share an architecture and differ only
 in the alphabet they were trained on.
 
-There are two detectors, and the default is the small one:
+**`--quality` is not a pair of model names but a rule**: for the language asked
+for, take the model that reads its alphabet best, or the one that reads it
+cheapest. It has to be a rule because the two ends are not the same models for
+every language — the newest and largest generation PaddleOCR publishes carries
+no Cyrillic at all, so "newest and largest" and "best for this page" are
+different answers. Which models actually ran is in the result, under `models`.
 
-| `--det-model` | download | detection* | what it changes |
-|---|---:|---:|---|
-| `PP-OCRv5_mobile_det` | 4.7 MB | ~1 s | the default |
-| `PP-OCRv5_server_det` | 88 MB | 12–15 s | finds short lines and superscript footnote markers the small one drops, and keeps a line whole where the small one splits it |
+The default is `best`: an OCR run is wanted for its accuracy, and a page that
+reads badly is worth less than a page that reads slowly. Today the rule moves
+the detector, of which there are two:
 
-\* the detection stage alone, on an A4 scan at `--limit-side-len 1920`;
-recognition comes on top of it either way, so the whole page went from ~14 s to
-~24 s in the same measurement.
+| detector | download | what it changes |
+|---|---:|---|
+| `PP-OCRv5_server_det` | 88 MB | `--quality best` — finds the short line that closes a paragraph and the superscript marker of a footnote, and keeps a line whole where the small one splits it into pieces |
+| `PP-OCRv5_mobile_det` | 4.7 MB | `--quality fast` — a quarter to a third off the time a page takes |
 
-The large one is worth its time on a densely set page — footnotes, marginal
-numbers, a line of two words — and not otherwise. It is also, on one measured
-page, slightly more likely to lose an ordinary line of body text to
-`--box-thresh`: its probability map is sharper, so a box score can land just
-under the default 0.6. If a line goes missing with it, try `--box-thresh 0.4`.
+The recognizers are published in one size each, so `--quality` leaves them
+alone for now; `--lang list` prints the model each code resolves to under the
+quality given.
 
-Either flag also takes a **path** to a directory holding a model's
-`inference.json`, `inference.pdiparams` and `config.json`, which is how to run a
-model that is not in the catalog.
+Measured on an A4 page at 300 dpi, on a GPU, whole run including the layout
+stage — a page of ordinary prose reads the same text either way, and the
+difference is on dense pages, small print and scans:
+
+| | `--quality fast` | `--quality best` |
+|---|---:|---:|
+| page of 47 lines, footnotes | 12 s, 44 lines found | 17 s, 47 lines found |
+| dense page of 108 lines | 16 s, 101 found | 22 s, 107 found |
+
+The large detector is also, on one measured page, slightly more likely to lose
+an ordinary line of body text to `--box-thresh`: its probability map is sharper,
+so a box score can land just under the default 0.6. If a line goes missing, try
+`--box-thresh 0.4`.
+
+`--det-model` and `--rec-model` also take a **path** to a directory holding a
+model's `inference.json`, `inference.pdiparams` and `config.json`, which is how
+to run a model that is not in the catalog.
 
 ### The dictionary is the ceiling
 
@@ -64,13 +83,17 @@ failure and is not one.
 ```
 
 The page is scaled so that its longest side is at most this many pixels before
-detection. **This is the single most consequential setting.** An A4 page scanned
-at 300 dpi is 3508 pixels tall, so the default shrinks it nearly fourfold — and
-at that size footnote-sized text stops being detected at all, silently: the
-lines are absent from the result rather than wrong in it.
+detection. An A4 page scanned at 300 dpi is 3508 pixels tall, so the default
+shrinks it nearly fourfold — and small type can stop being detected at all,
+silently: the lines are absent from the result rather than wrong in it.
 
-On a dense page, 1536 or 2048 finds those lines. The cost rises roughly with the
-area, so four times the side length is four times the detection time.
+**How much this matters depends on the detector.** With `--quality fast` it is
+the single most consequential setting: on a dense page the small detector found
+101 lines at 960 and 108 at 1920. The large one is far less sensitive — 107 at
+960 and 108 at 1920 on the same page — so under the default quality this is a
+flag to reach for when a line is missing, not one to raise routinely. Raising it
+is also more expensive there: the cost rises roughly with the area, and the
+large detector is the slower network to begin with.
 
 ## Tuning the detector
 
@@ -129,7 +152,7 @@ floor that keeps them. A page it says nothing about is read exactly as
 The stage is steered from here by three flags:
 
 ```
---no-layout                # skip it: geometry alone, and 129 MB not downloaded
+--no-layout                # skip it: geometry alone, and 130 MB not downloaded
 --layout-model <name|dir>  # which layout model to run
 --layout-threshold <p>     # one score floor for every label, over the defaults
 ```
@@ -143,7 +166,14 @@ does to a page in one picture, for a second rather than a page of reading.
 
 ## Speed
 
-The recognizer, not the detector, is where the time goes: on a CPU the detector
-takes about a second and a half for an A4 page at `--limit-side-len 1920`, and
-the recognizer about a third of a second per line — so a 45-line page is around
-seventeen seconds. `--device metal` moves both onto the GPU.
+With `--quality fast` the recognizer, not the detector, is where the time goes:
+the small detector takes about a second for an A4 page at the default side
+length, and the recognizer a fraction of a second per line, so most of a page is
+its lines. `--quality best` adds a heavier detector on top of that — a few
+seconds at the default side length, and around ten at `--limit-side-len 1920`,
+where it becomes the larger half of the page.
+
+`--device metal` moves everything onto the GPU. It is worth roughly a quarter of
+the large detector's time, which is to say it does not turn tens of seconds into
+one: the choice between the two qualities is not a choice a faster device makes
+for you.

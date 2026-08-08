@@ -8,8 +8,9 @@ Text recognition over page images: scans, photographs of pages, screenshots.
 Two engines, both fully offline once their models are downloaded.
 
 - [**`paddle`**](paddle.md) — a port of the PP-OCRv5 pipeline: a detector finds
-  the lines, a recognizer reads each one. About 13 MB per language, a second or
-  two per page. **The default choice.**
+  the lines, a recognizer reads each one. It reads with the best models it has
+  for the language: about 96 MB and some ten seconds a page, or 13 MB and a
+  quarter to a third less time under `--quality fast`. **The default choice.**
 - [**`vl`**](vl.md) — a port of the PaddleOCR-VL document model, which writes
   out what it sees rather than picking characters from a dictionary. It works
   out the writing system itself, reads scripts `paddle` has no model for, and
@@ -19,7 +20,7 @@ Two engines, both fully offline once their models are downloaded.
 There is also a [**layout stage**](layout.md), shared by both engines and
 available on its own: a model that labels the blocks of a page — document title,
 section heading, paragraph, abstract, footnote, running head, page number,
-table, formula, picture, caption — without reading any text. About 129 MB
+table, formula, picture, caption — without reading any text. About 130 MB
 downloaded once, and about a second per page. Both engines run it by default;
 `--no-layout` skips it, and `ocr layout` runs it alone.
 

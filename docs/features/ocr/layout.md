@@ -20,7 +20,7 @@ trakktor ocr layout page.png --crops ./blocks   # each block as its own image
 trakktor ocr layout page.png --boxes boxes.png  # the page, with the blocks drawn on it
 ```
 
-About 129 MB downloaded once, and about a second per page.
+About 130 MB downloaded once, and about a second per page.
 
 ## Why it exists
 

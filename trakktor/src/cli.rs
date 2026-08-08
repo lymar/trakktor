@@ -177,15 +177,16 @@ enum Command {
     /// a reading order worked out from the geometry.
     ///
     /// Which engine: `paddle` for a page in one writing system it covers —
-    /// 13 MB and a second or two per page, and the right default. `vl` for a
-    /// page whose script it does not cover, for one that mixes scripts, or
-    /// when a table or a formula is wanted as structure rather than as lines —
-    /// about 2 GB downloaded once, and tens of seconds per page.
+    /// about 96 MB and some ten seconds a page, less of both with
+    /// `--quality fast`, and the right default. `vl` for a page whose script
+    /// it does not cover, for one that mixes scripts, or when a table or a
+    /// formula is wanted as structure rather than as lines — about 2 GB
+    /// downloaded once, and tens of seconds per page.
     ///
     /// Both engines also run a layout model, which labels the blocks of the
     /// page — document title, section heading, paragraph, abstract, footnote,
     /// running head, page number, table, formula, picture, caption — so that
-    /// the structure is read rather than guessed. It costs 129 MB, downloaded
+    /// the structure is read rather than guessed. It costs 130 MB, downloaded
     /// once, and about a second a page; `--no-layout` skips it when only the
     /// lines are wanted. `ocr layout` runs the same model on its own and
     /// answers "what is on this page" without reading a word of it.
@@ -229,7 +230,13 @@ pub(crate) enum OcrCommand {
     /// out of it, and a recognizer reads the line. Twelve recognizers cover
     /// the scripts between them and `--lang` picks one; the models download on
     /// first use into the model directory (~/.trakktor by default) and later
-    /// runs reuse them. The full working set for a language is about 13 MB.
+    /// runs reuse them.
+    ///
+    /// The models are the best ones available for the language rather than the
+    /// cheapest, which is about 96 MB for the reading and, unless `--no-layout`
+    /// turns it off, 130 MB more for the markup. `--quality fast` reads with
+    /// small models instead: 13 MB, and a quarter to a third off the time a
+    /// page takes. Either way the run says what it downloads before it starts.
     Paddle(Box<OcrPaddleArgs>),
 
     /// Read pages with the PaddleOCR-VL document model.
@@ -238,12 +245,12 @@ pub(crate) enum OcrCommand {
     /// characters from a dictionary. It works out the writing system by
     /// itself — so there is no `--lang` here — reads scripts the classic
     /// pipeline has no model for at all, and can return a table as markup or a
-    /// formula as LaTeX. It finds the lines with the same kind of detector
-    /// `ocr paddle` uses — the large one by default, because a line missed
-    /// here costs a whole block — groups them into blocks, and reads a block
-    /// at a time: handed a whole page it tends to get stuck repeating itself,
-    /// and handed a single line it has too little context to settle on a
-    /// script.
+    /// formula as LaTeX. It finds the lines with the same detector `ocr paddle`
+    /// uses — the large one, and here there is no cheaper preset for it,
+    /// because a missed line costs a whole block — groups them into blocks,
+    /// and reads a block at a time: handed a whole page it tends to get stuck
+    /// repeating itself, and handed a single line it has too little context to
+    /// settle on a script.
     ///
     /// The price is the models: about 2 GB downloaded once, and tens of
     /// seconds a page. Prefer `ocr paddle` unless you need what this buys.
@@ -260,7 +267,7 @@ pub(crate) enum OcrCommand {
     /// The same model runs inside `ocr paddle` and `ocr vl` unless
     /// `--no-layout` turns it off, where the labels drive the Markdown and,
     /// for `ocr vl`, the blocks the model is asked to read. It downloads once,
-    /// about 129 MB, and takes about a second a page.
+    /// about 130 MB, and takes about a second a page.
     Layout(Box<OcrLayoutArgs>),
 }
 
@@ -272,12 +279,38 @@ pub(crate) struct OcrPaddleArgs {
     pub(crate) pages: Vec<PathBuf>,
 
     /// Language of the page, which chooses the recognizer. Pass `list` to
-    /// print every code. A recognizer is trained on one script and can only
-    /// emit characters from its own alphabet, so a page in a script other than
-    /// the one selected comes back empty or as nonsense even though its lines
-    /// were found.
-    #[arg(long, default_value = "ru", value_name = "code")]
+    /// print every code with the model it picks. A recognizer is trained on
+    /// one script and can only emit characters from its own alphabet, so a
+    /// page in a script other than the one selected comes back empty or as
+    /// nonsense even though its lines were found.
+    #[arg(long, default_value = "en", value_name = "code")]
     pub(crate) lang: String,
+
+    /// Which end of the model catalog to read with.
+    ///
+    /// `best` takes the strongest models trakktor has for the language, and is
+    /// the default: an OCR run is wanted for its accuracy, and a page that
+    /// reads badly is worth less than a page that reads slowly. Today that
+    /// means the large text detector — 88 MB against 4.7 — which finds the
+    /// short line that closes a paragraph and the superscript marker of a
+    /// footnote, and takes a line whole where the small one breaks it into
+    /// pieces.
+    ///
+    /// `fast` takes the small models and cuts a quarter to a third off the
+    /// time a page takes, more at a raised `--limit-side-len`. On a page of
+    /// clean, ordinary type the two read the same text; the difference
+    /// shows on scans, on dense pages and in small print.
+    ///
+    /// The recognizers are published in one size each, so this currently
+    /// moves the detector only — which of them ran is in the result either
+    /// way. `--det-model` and `--rec-model` override it one model at a time.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = OcrQualityArg::Best,
+        value_name = "level"
+    )]
+    pub(crate) quality: OcrQualityArg,
 
     /// Form of the text result: `lines` prints the recognized lines as they
     /// were found, `md` assembles Markdown — paragraphs, reading order,
@@ -313,24 +346,29 @@ pub(crate) struct OcrPaddleArgs {
     #[arg(long, value_name = "file|dir")]
     pub(crate) boxes: Option<PathBuf>,
 
-    /// Longest side, in pixels, the page is scaled to before detection. This
-    /// is the setting that decides whether small type is found at all: an A4
+    /// Longest side, in pixels, the page is scaled to before detection. An A4
     /// page scanned at 300 dpi is 3508 pixels tall, so the default shrinks it
-    /// nearly fourfold and footnote-sized text stops being detected. Raising
-    /// it to 1536 or 2048 finds those lines, and costs time in proportion to
+    /// nearly fourfold; raising it to 1536 or 2048 costs time in proportion to
     /// the area.
+    ///
+    /// It matters most with `--quality fast`, where it decides whether small
+    /// type is found at all: the small detector finds several lines more of a
+    /// dense page at 1920 than at 960. The large one is far less sensitive —
+    /// at 960 it already finds about what the small one finds at 1920 — so
+    /// under the default quality this is a flag to reach for when a line is
+    /// missing, not one to raise routinely.
     #[arg(long, default_value_t = 960, value_name = "px")]
     pub(crate) limit_side_len: usize,
 
-    /// Text detection model. Defaults to `PP-OCRv5_mobile_det`, the small one,
-    /// which is what makes a page take seconds rather than a minute.
-    /// `PP-OCRv5_server_det` is the alternative: 88 MB against 4.7, tens of
-    /// seconds against about one, and it finds short lines and superscript
-    /// footnote markers this one drops.
+    /// Text detection model, overriding the one `--quality` would choose.
+    /// `PP-OCRv5_server_det` is the large one (88 MB) and
+    /// `PP-OCRv5_mobile_det` the small one (4.7 MB); a path to a directory
+    /// of artifacts also works.
     #[arg(long, value_name = "name|dir")]
     pub(crate) det_model: Option<String>,
 
-    /// Text recognition model, overriding the one `--lang` would choose.
+    /// Text recognition model, overriding the one `--lang` and `--quality`
+    /// would choose.
     #[arg(long, value_name = "name|dir")]
     pub(crate) rec_model: Option<String>,
 
@@ -380,7 +418,7 @@ pub(crate) struct OcrPaddleArgs {
     /// it the two run together in the result.
     ///
     /// Use this when only the lines are wanted and their structure is not, or
-    /// to avoid the 129 MB model. It saves about a second a page.
+    /// to avoid the 130 MB model. It saves about a second a page.
     #[arg(long)]
     pub(crate) no_layout: bool,
 
@@ -577,7 +615,7 @@ pub(crate) struct OcrVlArgs {
     /// the model whole, as a table, and a formula goes as a formula; without
     /// them a table comes back as strips with its columns doubled.
     ///
-    /// It saves a 129 MB model and about a second a page — next to nothing
+    /// It saves a 130 MB model and about a second a page — next to nothing
     /// beside this engine's own price.
     #[arg(long)]
     pub(crate) no_layout: bool,
@@ -709,6 +747,15 @@ pub(crate) enum OcrFormatArg {
     Lines,
     /// Markdown, with paragraphs and a reading order.
     Md,
+}
+
+/// Which end of the model catalog an OCR run takes its models from.
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
+pub(crate) enum OcrQualityArg {
+    /// The best models available for the language.
+    Best,
+    /// The smallest ones.
+    Fast,
 }
 
 #[derive(Subcommand)]

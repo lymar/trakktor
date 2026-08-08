@@ -13,15 +13,16 @@ use trakktor_core::ocr::{
     layout::{
         Region,
         detect::{self, Detector},
-        post,
+        download as layout_download, post,
     },
     markdown,
     overlay::{self, Shape, Weight},
     paddle::{
         crop::{self, Crop},
         db::Params,
+        download as paddle_download,
         image::Page as RawPage,
-        model,
+        model::{self, Quality},
         pipeline::{Device, Engine, Options},
     },
     vl,
@@ -45,10 +46,7 @@ pub(crate) fn run_paddle(
 ) -> Result<(), CliError> {
     if args.lang.eq_ignore_ascii_case("list") {
         crate::output::print_ocr_languages(
-            &model::LANGUAGES
-                .iter()
-                .map(|(code, name)| (*code, *name))
-                .collect::<Vec<_>>(),
+            &model::catalogue(quality(args.quality)),
             json,
             pretty,
         );
@@ -81,10 +79,8 @@ pub(crate) fn run_paddle(
 
     let options = Options {
         language: args.lang.clone(),
-        detection: args
-            .det_model
-            .clone()
-            .unwrap_or_else(|| model::DEFAULT_DETECTION.to_string()),
+        quality: quality(args.quality),
+        detection: args.det_model.clone(),
         recognition: args.rec_model.clone(),
         orientation: args.textline_orientation,
         limit_side_len: args.limit_side_len,
@@ -100,17 +96,31 @@ pub(crate) fn run_paddle(
         figures: matches!(args.format, OcrFormatArg::Md) && args.out.is_some(),
     };
 
+    let layout_model = (!args.no_layout).then(|| {
+        args.layout_model.clone().unwrap_or_else(|| {
+            trakktor_core::ocr::layout::model::DEFAULT_MODEL.to_string()
+        })
+    });
+    announce_downloads(
+        &paddle_download::pending(model_dir, &options),
+        layout_model
+            .as_deref()
+            .map(|name| layout_download::pending(model_dir, name))
+            .unwrap_or_default(),
+    );
+
     let engine = Engine::load(
         model_dir,
         device(args.device),
         options,
         &mut crate::asr::progress::download_progress(),
     )?;
-    let marker = (!args.no_layout)
-        .then(|| {
+    let marker = layout_model
+        .as_deref()
+        .map(|name| {
             load_layout(
                 model_dir,
-                args.layout_model.as_deref(),
+                Some(name),
                 args.layout_threshold,
                 device(args.device),
                 RuntimeArg::Candle,
@@ -303,6 +313,24 @@ pub(crate) fn run_vl(
         announce_burn_gpu();
     }
 
+    let layout_model = (!args.no_layout).then(|| {
+        args.layout_model.clone().unwrap_or_else(|| {
+            trakktor_core::ocr::layout::model::DEFAULT_MODEL.to_string()
+        })
+    });
+    let mut reading = vl::download::pending(model_dir, &options.model);
+    reading.extend(paddle_download::pending_named(
+        model_dir,
+        &options.detection,
+    ));
+    announce_downloads(
+        &reading,
+        layout_model
+            .as_deref()
+            .map(|name| layout_download::pending(model_dir, name))
+            .unwrap_or_default(),
+    );
+
     let mut engine = vl::Engine::load(
         model_dir,
         device(args.device),
@@ -311,11 +339,12 @@ pub(crate) fn run_vl(
         &mut crate::asr::progress::download_progress(),
     )?;
 
-    let marker = (!args.no_layout)
-        .then(|| {
+    let marker = layout_model
+        .as_deref()
+        .map(|name| {
             load_layout(
                 model_dir,
-                args.layout_model.as_deref(),
+                Some(name),
                 args.layout_threshold,
                 device(args.device),
                 args.runtime,
@@ -412,9 +441,14 @@ pub(crate) fn run_layout(
         announce_burn_gpu();
     }
 
+    let model = args.model.clone().unwrap_or_else(|| {
+        trakktor_core::ocr::layout::model::DEFAULT_MODEL.to_string()
+    });
+    announce_downloads(&[], layout_download::pending(model_dir, &model));
+
     let marker = load_layout(
         model_dir,
-        args.model.as_deref(),
+        Some(&model),
         args.threshold,
         device(args.device),
         args.runtime,
@@ -484,6 +518,53 @@ fn device(chosen: crate::cli::DeviceArg) -> Device {
     match chosen {
         crate::cli::DeviceArg::Cpu => Device::Cpu,
         crate::cli::DeviceArg::Metal => Device::Metal,
+    }
+}
+
+/// Which end of the model catalog the run draws its defaults from.
+fn quality(chosen: crate::cli::OcrQualityArg) -> Quality {
+    match chosen {
+        crate::cli::OcrQualityArg::Best => Quality::Best,
+        crate::cli::OcrQualityArg::Fast => Quality::Fast,
+    }
+}
+
+/// Names what a run is about to download, and how much of it, before the first
+/// byte moves.
+///
+/// The engine reads with the strongest models the catalog has rather than the
+/// cheapest, so a first run fetches around a hundred megabytes for the reading
+/// and another hundred and twenty-nine for the markup. Whoever typed one short
+/// command should learn that from the command, not from watching a progress
+/// line for a minute and guessing what it is doing.
+fn announce_downloads(
+    reading: &[(&str, u64)],
+    markup: Vec<(&'static str, u64)>,
+) {
+    let all: Vec<(&str, u64)> = reading.iter().copied().chain(markup).collect();
+    if all.is_empty() {
+        return;
+    }
+    let total: u64 = all.iter().map(|(_, bytes)| bytes).sum();
+    let names: Vec<String> = all
+        .iter()
+        .map(|(name, bytes)| format!("{name} {}", megabytes(*bytes)))
+        .collect();
+    eprintln!(
+        "fetching {} of models on first use: {}",
+        megabytes(total),
+        names.join(", ")
+    );
+}
+
+/// A byte count as whole or tenths of a megabyte, the unit model sizes are
+/// published in.
+fn megabytes(bytes: u64) -> String {
+    let mb = bytes as f64 / 1_000_000.0;
+    if mb < 10.0 {
+        format!("{mb:.1} MB")
+    } else {
+        format!("{:.0} MB", mb.round())
     }
 }
 

@@ -27,7 +27,7 @@ use super::{
     det::Detector,
     download::{self, Resolved},
     image::{self, LimitType, Page as RawPage},
-    model,
+    model::{self, Quality},
     net::Loader,
     rec::{Labels, Recognizer},
 };
@@ -73,9 +73,13 @@ impl Device {
 pub struct Options {
     /// Language code, used to pick the recognizer.
     pub language: String,
-    /// Detector model name, or a path to a directory of artifacts.
-    pub detection: String,
-    /// Recognizer model name; `None` picks it from the language.
+    /// Which end of the catalog the models come from when they are not named
+    /// outright.
+    pub quality: Quality,
+    /// Detector model name, or a path to a directory of artifacts; `None`
+    /// takes the one `quality` asks for.
+    pub detection: Option<String>,
+    /// Recognizer model name; `None` picks it from the language and `quality`.
     pub recognition: Option<String>,
     /// Whether to run the text-line orientation classifier.
     pub orientation: bool,
@@ -95,7 +99,8 @@ impl Default for Options {
     fn default() -> Self {
         Self {
             language: model::DEFAULT_LANGUAGE.to_string(),
-            detection: model::DEFAULT_DETECTION.to_string(),
+            quality: Quality::default(),
+            detection: None,
             recognition: None,
             orientation: false,
             limit_side_len: DEFAULT_LIMIT_SIDE_LEN,
@@ -106,12 +111,39 @@ impl Default for Options {
     }
 }
 
+impl Options {
+    /// The detector this run will load: the one it names, or the one its
+    /// quality asks for.
+    pub fn detector(&self) -> &str {
+        match &self.detection {
+            Some(named) => named,
+            None => model::detector(self.quality),
+        }
+    }
+
+    /// The recognizer this run will load: the one it names, or the strongest
+    /// the catalog has for its language.
+    pub fn recognizer(&self) -> Result<&str, OcrError> {
+        match &self.recognition {
+            Some(named) => Ok(named),
+            None => {
+                Ok(model::recognizer_for(&self.language, self.quality)?.name)
+            },
+        }
+    }
+}
+
 /// The published default for the longest side of the detector's input.
 ///
 /// It is a low bar for a scan: an A4 page rendered at 300 dpi is 3508 pixels
-/// tall, so this shrinks it by a factor of nearly four and the small type
-/// sizes — footnotes above all — stop being found at all. Raising it costs
-/// time roughly in proportion to the area.
+/// tall, so this shrinks it by a factor of nearly four, and small type can stop
+/// being found at all. Raising it costs time roughly in proportion to the area.
+///
+/// How much it costs to leave it here depends on which detector is running.
+/// The small one finds several lines more of a dense page at 1920 than at 960;
+/// the large one — what [`Quality::Best`] picks — finds at 960 about what the
+/// small one finds at 1920, so raising it there is paying twice for the same
+/// lines.
 pub const DEFAULT_LIMIT_SIDE_LEN: usize = 960;
 
 /// The published confidence floor for keeping a line.
@@ -138,13 +170,11 @@ impl Engine {
         progress: Progress<'_>,
     ) -> Result<Self, OcrError> {
         let device = &device.resolve()?;
-        let recognition = match &options.recognition {
-            Some(name) => name.clone(),
-            None => model::recognizer_for(&options.language)?.name.to_string(),
-        };
+        let detection = options.detector().to_string();
+        let recognition = options.recognizer()?.to_string();
 
         let detection_dir =
-            download::resolve(models_dir, &options.detection, &mut *progress)?;
+            download::resolve(models_dir, &detection, &mut *progress)?;
         let recognition_dir =
             download::resolve(models_dir, &recognition, &mut *progress)?;
         let orientation_dir = if options.orientation {
@@ -201,7 +231,7 @@ impl Engine {
             detection_name: detection_dir
                 .name
                 .map(str::to_string)
-                .unwrap_or_else(|| options.detection.clone()),
+                .unwrap_or(detection),
             recognition_name: recognition,
             options,
         })

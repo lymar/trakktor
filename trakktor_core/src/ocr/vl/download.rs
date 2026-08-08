@@ -98,3 +98,15 @@ pub fn pending_bytes(models_dir: &Path, spec: &Model) -> u64 {
         .map(|file| file.size)
         .sum()
 }
+
+/// What this engine has yet to fetch for `model`, in the shape the caller
+/// announces its downloads in. Empty when it is on disk, or named by a path.
+pub fn pending(models_dir: &Path, model: &str) -> Vec<(&'static str, u64)> {
+    let Ok(spec) = model::model(model) else {
+        return Vec::new();
+    };
+    match pending_bytes(models_dir, spec) {
+        0 => Vec::new(),
+        bytes => vec![(spec.name, bytes)],
+    }
+}

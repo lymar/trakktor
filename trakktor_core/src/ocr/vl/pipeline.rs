@@ -8,11 +8,12 @@
 //! works.
 //!
 //! Cheap, but not the cheapest available: this engine runs the *large*
-//! detector by default. A line the small one misses is not merely absent from
-//! the result — it is absent from the block the reader is shown, and the lines
-//! around it assemble into a different block than they would have. That is
-//! worth 88 MB and a slower page here, where the page is slow anyway, and is
-//! not worth it in the classic engine.
+//! detector, as the classic engine does. A line the small one misses is not
+//! merely absent from the result — it is absent from the block the reader is
+//! shown, and the lines around it assemble into a different block than they
+//! would have. Where the classic engine gives the small detector back under
+//! `--quality fast`, this one has no such preset: three seconds of a page that
+//! costs tens of them is not a speed anybody came here for.
 //!
 //! What the run then does with the result is the domain's business, not this
 //! module's: the pages it produces go through the same reading order, layout
@@ -98,10 +99,10 @@ impl Default for Options {
 
 /// The detector this engine runs unless told otherwise.
 ///
-/// Not the classic engine's default, and for the same reason the side limit
-/// below is not either: here the detector decides what the reader is shown at
-/// all, so its mistakes are worth paying for. The page already costs tens of
-/// seconds, and this adds to that rather than multiplying it.
+/// The same one the classic engine defaults to, and there is nothing to choose
+/// against it here: the detector decides what the reader is shown at all, so
+/// its mistakes are worth paying for, and the page already costs tens of
+/// seconds — this adds to that rather than multiplying it.
 pub const DEFAULT_DETECTION: &str = paddle_model::SERVER_DETECTION;
 
 /// The default longest side of the detector's input.

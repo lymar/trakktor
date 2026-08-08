@@ -36,9 +36,11 @@ Each command is documented in full on its own page under
   [`paddle`](docs/features/ocr/paddle.md) is a port of the PP-OCRv5 pipeline
   (detection, then recognition) reading PaddleOCR's published models directly:
   twelve recognizers covering Cyrillic, Latin, Arabic, Devanagari, Korean,
-  Thai, Greek, Tamil, Telugu and Chinese/Japanese, about 13 MB per language and
-  a second or two per page — with a larger text detector on `--det-model` for
-  pages whose short lines and footnote markers the small one drops.
+  Thai, Greek, Tamil, Telugu and Chinese/Japanese. It reads with the best
+  models it has for the language — about 96 MB and some ten seconds a page,
+  which is what finds the short lines and superscript footnote markers a small
+  detector drops; `--quality fast` trades that back for 13 MB and a quarter to a
+  third off the time.
   [`vl`](docs/features/ocr/vl.md) is a port of the
   PaddleOCR-VL document model, which **writes out** what it sees instead of
   picking characters from a dictionary: it works out the writing system by
@@ -47,7 +49,7 @@ Each command is documented in full on its own page under
   and tens of seconds a page. Output either way is JSON with every line's box
   and confidence, plain text, or Markdown with paragraphs and a reading order
   worked out from the geometry. A third model
-  ([`layout`](docs/features/ocr/layout.md), 129 MB, about a second a page)
+  ([`layout`](docs/features/ocr/layout.md), 130 MB, about a second a page)
   labels the blocks of the page — title, heading, paragraph, footnote, running
   head, page number, table, formula, picture — so the structure is read rather
   than guessed; it runs by default, `--no-layout` skips it, and `ocr layout`

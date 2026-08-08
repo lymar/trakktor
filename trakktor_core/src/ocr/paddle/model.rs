@@ -18,8 +18,34 @@
 //! Slavic one has the dash. A character outside the dictionary comes out
 //! missing rather than wrong, which reads like a recognition failure but is
 //! not one.
+//!
+//! What a run gets when it names no model is decided here too, and by a rule
+//! rather than by a constant — see [`Quality`].
 
 use crate::ocr::error::OcrError;
+
+/// Which end of the catalog a run's defaults come from.
+///
+/// The rule is the same in both directions: for the language asked for, take
+/// the model in the catalog that reads its alphabet **best**, or the one that
+/// reads it **cheapest**. It has to be a rule and not a pair of names because
+/// the two ends are not the same models for every language: the newest and
+/// largest generation upstream publishes carries no Cyrillic at all, so
+/// "newest and largest" and "best for this page" are different answers, and
+/// only the second one is worth having as a default.
+///
+/// [`Best`](Self::Best) is the default. Accuracy is what an OCR run is for,
+/// and a page that reads badly is worth less than a page that reads slowly;
+/// the cheap end stays reachable by asking for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Quality {
+    /// The strongest models the catalog has for the language.
+    #[default]
+    Best,
+    /// The smallest ones: a page in seconds rather than tens of them, at the
+    /// price of the lines only the large detector finds.
+    Fast,
+}
 
 /// What a model does in the pipeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,26 +80,32 @@ impl Model {
     pub fn size(&self) -> u64 { self.files.iter().map(|f| f.size).sum() }
 }
 
-/// The classic engine's default detector: small, fast, and script-independent
-/// — it looks for text as such, so it finds lines in scripts no recognizer in
-/// the catalog can read.
-pub const DEFAULT_DETECTION: &str = "PP-OCRv5_mobile_det";
+/// The small detector: four megabytes, a page in about a second, and
+/// script-independent — it looks for text as such, so it finds lines in
+/// scripts no recognizer in the catalog can read.
+pub const MOBILE_DETECTION: &str = "PP-OCRv5_mobile_det";
 
-/// The other detector: the same job at nineteen times the size, and slower by
+/// The large detector: the same job at nineteen times the size, and slower by
 /// about as much.
 ///
-/// What it buys is the class of line the small one drops — short lines, and
-/// lines carrying a superscript. Upstream makes it the default for every
-/// language but Chinese and Japanese; here it is the default of the generative
-/// engine, where a missed line costs a whole block rather than one line, and an
-/// option in the classic one.
+/// What it buys is the class of line the small one drops — short lines closing
+/// a paragraph, and lines carrying a superscript — and whole lines where the
+/// small one breaks one line into pieces. Upstream makes it the default for
+/// every language it still serves from this generation, and so does trakktor.
 pub const SERVER_DETECTION: &str = "PP-OCRv5_server_det";
+
+/// The detectors, **strongest first**.
+///
+/// Both are indifferent to the writing system, so which one a run gets is a
+/// question of quality and time only, never of language — unlike the
+/// recognizers, where the two questions are the same one.
+pub const DETECTORS: &[&str] = &[SERVER_DETECTION, MOBILE_DETECTION];
 
 /// The default text-line orientation classifier.
 pub const DEFAULT_ORIENTATION: &str = "PP-LCNet_x1_0_textline_ori";
 
-/// The default language when none is given.
-pub const DEFAULT_LANGUAGE: &str = "ru";
+/// The language a run reads when it names none.
+pub const DEFAULT_LANGUAGE: &str = "en";
 
 /// Every model trakktor can run.
 pub const MODELS: &[Model] = &[
@@ -244,107 +276,180 @@ pub const MODELS: &[Model] = &[
     },
 ];
 
-/// Language code to recognizer. The order matters where a language belongs to
-/// two scripts: Eastern Slavic wins over the broader Cyrillic model for
-/// Russian, Belarusian and Ukrainian (it is trained on exactly those three and
-/// reads them better), and Kurdish is treated as Latin rather than Arabic —
-/// both are upstream's own resolution order.
+/// One alphabet the catalog can read, and every recognizer that reads it.
+pub struct Alphabet {
+    /// Upstream's name for it, which is also the prefix of its model names —
+    /// except for the multilingual one, whose models carry no prefix at all.
+    pub name: &'static str,
+    /// The recognizers of this alphabet, **strongest first**.
+    ///
+    /// Every row names one model today, and that is a fact about what upstream
+    /// publishes rather than about this form: the alphabet-bound recognizers
+    /// come in a single size, and the newer generation that does publish a
+    /// larger one covers no Cyrillic — so there is nothing to put in front of
+    /// them. The row is a list so that a stronger model reaches every language
+    /// written in the alphabet by being added at the front of one line, and
+    /// leaves the ninety-odd language codes alone.
+    pub recognizers: &'static [&'static str],
+}
+
+/// Every alphabet, with its recognizers strongest first.
+pub const ALPHABETS: &[Alphabet] = &[
+    Alphabet {
+        name: "eslav",
+        recognizers: &["eslav_PP-OCRv5_mobile_rec"],
+    },
+    Alphabet {
+        name: "cyrillic",
+        recognizers: &["cyrillic_PP-OCRv5_mobile_rec"],
+    },
+    Alphabet {
+        name: "en",
+        recognizers: &["en_PP-OCRv5_mobile_rec"],
+    },
+    Alphabet {
+        name: "latin",
+        recognizers: &["latin_PP-OCRv5_mobile_rec"],
+    },
+    Alphabet {
+        name: "arabic",
+        recognizers: &["arabic_PP-OCRv5_mobile_rec"],
+    },
+    Alphabet {
+        name: "devanagari",
+        recognizers: &["devanagari_PP-OCRv5_mobile_rec"],
+    },
+    Alphabet {
+        name: "korean",
+        recognizers: &["korean_PP-OCRv5_mobile_rec"],
+    },
+    Alphabet {
+        name: "el",
+        recognizers: &["el_PP-OCRv5_mobile_rec"],
+    },
+    Alphabet {
+        name: "ta",
+        recognizers: &["ta_PP-OCRv5_mobile_rec"],
+    },
+    Alphabet {
+        name: "te",
+        recognizers: &["te_PP-OCRv5_mobile_rec"],
+    },
+    Alphabet {
+        name: "th",
+        recognizers: &["th_PP-OCRv5_mobile_rec"],
+    },
+    // Carries the Latin alphabet and digits alongside the Han characters.
+    Alphabet {
+        name: "multilingual",
+        recognizers: &["PP-OCRv5_mobile_rec"],
+    },
+];
+
+/// Language code to the alphabet it is read as.
+///
+/// Where a language could be claimed by two alphabets the choice here is
+/// upstream's own: Eastern Slavic wins over the broader Cyrillic model for
+/// Russian, Belarusian and Ukrainian, because it is trained on exactly those
+/// three and reads them better; Kurdish is read as Latin rather than Arabic.
 ///
 /// Codes are ISO 639-1 where one exists; the handful that upstream names
 /// differently (`chinese_cht`) are accepted under both spellings.
 pub const LANGUAGES: &[(&str, &str)] = &[
     // Eastern Slavic.
-    ("ru", "eslav_PP-OCRv5_mobile_rec"),
-    ("be", "eslav_PP-OCRv5_mobile_rec"),
-    ("uk", "eslav_PP-OCRv5_mobile_rec"),
-    // English has its own model; the Latin one covers the rest.
-    ("en", "en_PP-OCRv5_mobile_rec"),
-    ("af", "latin_PP-OCRv5_mobile_rec"),
-    ("az", "latin_PP-OCRv5_mobile_rec"),
-    ("bs", "latin_PP-OCRv5_mobile_rec"),
-    ("ca", "latin_PP-OCRv5_mobile_rec"),
-    ("cs", "latin_PP-OCRv5_mobile_rec"),
-    ("cy", "latin_PP-OCRv5_mobile_rec"),
-    ("da", "latin_PP-OCRv5_mobile_rec"),
-    ("de", "latin_PP-OCRv5_mobile_rec"),
-    ("es", "latin_PP-OCRv5_mobile_rec"),
-    ("et", "latin_PP-OCRv5_mobile_rec"),
-    ("eu", "latin_PP-OCRv5_mobile_rec"),
-    ("fi", "latin_PP-OCRv5_mobile_rec"),
-    ("fr", "latin_PP-OCRv5_mobile_rec"),
-    ("ga", "latin_PP-OCRv5_mobile_rec"),
-    ("gl", "latin_PP-OCRv5_mobile_rec"),
-    ("hr", "latin_PP-OCRv5_mobile_rec"),
-    ("hu", "latin_PP-OCRv5_mobile_rec"),
-    ("id", "latin_PP-OCRv5_mobile_rec"),
-    ("is", "latin_PP-OCRv5_mobile_rec"),
-    ("it", "latin_PP-OCRv5_mobile_rec"),
-    ("ku", "latin_PP-OCRv5_mobile_rec"),
-    ("la", "latin_PP-OCRv5_mobile_rec"),
-    ("lb", "latin_PP-OCRv5_mobile_rec"),
-    ("lt", "latin_PP-OCRv5_mobile_rec"),
-    ("lv", "latin_PP-OCRv5_mobile_rec"),
-    ("mi", "latin_PP-OCRv5_mobile_rec"),
-    ("ms", "latin_PP-OCRv5_mobile_rec"),
-    ("mt", "latin_PP-OCRv5_mobile_rec"),
-    ("nl", "latin_PP-OCRv5_mobile_rec"),
-    ("no", "latin_PP-OCRv5_mobile_rec"),
-    ("oc", "latin_PP-OCRv5_mobile_rec"),
-    ("pl", "latin_PP-OCRv5_mobile_rec"),
-    ("pt", "latin_PP-OCRv5_mobile_rec"),
-    ("qu", "latin_PP-OCRv5_mobile_rec"),
-    ("rm", "latin_PP-OCRv5_mobile_rec"),
-    ("ro", "latin_PP-OCRv5_mobile_rec"),
-    ("sk", "latin_PP-OCRv5_mobile_rec"),
-    ("sl", "latin_PP-OCRv5_mobile_rec"),
-    ("sq", "latin_PP-OCRv5_mobile_rec"),
-    ("sv", "latin_PP-OCRv5_mobile_rec"),
-    ("sw", "latin_PP-OCRv5_mobile_rec"),
-    ("tl", "latin_PP-OCRv5_mobile_rec"),
-    ("tr", "latin_PP-OCRv5_mobile_rec"),
-    ("uz", "latin_PP-OCRv5_mobile_rec"),
-    ("vi", "latin_PP-OCRv5_mobile_rec"),
+    ("ru", "eslav"),
+    ("be", "eslav"),
+    ("uk", "eslav"),
+    // English has its own alphabet in the catalog's sense — its own
+    // dictionary, and a model trained on nothing else. The Latin one covers
+    // the rest.
+    ("en", "en"),
+    ("af", "latin"),
+    ("az", "latin"),
+    ("bs", "latin"),
+    ("ca", "latin"),
+    ("cs", "latin"),
+    ("cy", "latin"),
+    ("da", "latin"),
+    ("de", "latin"),
+    ("es", "latin"),
+    ("et", "latin"),
+    ("eu", "latin"),
+    ("fi", "latin"),
+    ("fr", "latin"),
+    ("ga", "latin"),
+    ("gl", "latin"),
+    ("hr", "latin"),
+    ("hu", "latin"),
+    ("id", "latin"),
+    ("is", "latin"),
+    ("it", "latin"),
+    ("ku", "latin"),
+    ("la", "latin"),
+    ("lb", "latin"),
+    ("lt", "latin"),
+    ("lv", "latin"),
+    ("mi", "latin"),
+    ("ms", "latin"),
+    ("mt", "latin"),
+    ("nl", "latin"),
+    ("no", "latin"),
+    ("oc", "latin"),
+    ("pl", "latin"),
+    ("pt", "latin"),
+    ("qu", "latin"),
+    ("rm", "latin"),
+    ("ro", "latin"),
+    ("sk", "latin"),
+    ("sl", "latin"),
+    ("sq", "latin"),
+    ("sv", "latin"),
+    ("sw", "latin"),
+    ("tl", "latin"),
+    ("tr", "latin"),
+    ("uz", "latin"),
+    ("vi", "latin"),
     // Cyrillic beyond the Eastern Slavic three.
-    ("ba", "cyrillic_PP-OCRv5_mobile_rec"),
-    ("bg", "cyrillic_PP-OCRv5_mobile_rec"),
-    ("ce", "cyrillic_PP-OCRv5_mobile_rec"),
-    ("cv", "cyrillic_PP-OCRv5_mobile_rec"),
-    ("kk", "cyrillic_PP-OCRv5_mobile_rec"),
-    ("ky", "cyrillic_PP-OCRv5_mobile_rec"),
-    ("mk", "cyrillic_PP-OCRv5_mobile_rec"),
-    ("mn", "cyrillic_PP-OCRv5_mobile_rec"),
-    ("os", "cyrillic_PP-OCRv5_mobile_rec"),
-    ("sah", "cyrillic_PP-OCRv5_mobile_rec"),
-    ("sr", "cyrillic_PP-OCRv5_mobile_rec"),
-    ("tg", "cyrillic_PP-OCRv5_mobile_rec"),
-    ("tt", "cyrillic_PP-OCRv5_mobile_rec"),
-    ("tyv", "cyrillic_PP-OCRv5_mobile_rec"),
-    ("udm", "cyrillic_PP-OCRv5_mobile_rec"),
-    ("xal", "cyrillic_PP-OCRv5_mobile_rec"),
+    ("ba", "cyrillic"),
+    ("bg", "cyrillic"),
+    ("ce", "cyrillic"),
+    ("cv", "cyrillic"),
+    ("kk", "cyrillic"),
+    ("ky", "cyrillic"),
+    ("mk", "cyrillic"),
+    ("mn", "cyrillic"),
+    ("os", "cyrillic"),
+    ("sah", "cyrillic"),
+    ("sr", "cyrillic"),
+    ("tg", "cyrillic"),
+    ("tt", "cyrillic"),
+    ("tyv", "cyrillic"),
+    ("udm", "cyrillic"),
+    ("xal", "cyrillic"),
     // Arabic script.
-    ("ar", "arabic_PP-OCRv5_mobile_rec"),
-    ("fa", "arabic_PP-OCRv5_mobile_rec"),
-    ("ps", "arabic_PP-OCRv5_mobile_rec"),
-    ("sd", "arabic_PP-OCRv5_mobile_rec"),
-    ("ug", "arabic_PP-OCRv5_mobile_rec"),
-    ("ur", "arabic_PP-OCRv5_mobile_rec"),
+    ("ar", "arabic"),
+    ("fa", "arabic"),
+    ("ps", "arabic"),
+    ("sd", "arabic"),
+    ("ug", "arabic"),
+    ("ur", "arabic"),
     // Devanagari.
-    ("bho", "devanagari_PP-OCRv5_mobile_rec"),
-    ("hi", "devanagari_PP-OCRv5_mobile_rec"),
-    ("mai", "devanagari_PP-OCRv5_mobile_rec"),
-    ("mr", "devanagari_PP-OCRv5_mobile_rec"),
-    ("ne", "devanagari_PP-OCRv5_mobile_rec"),
-    ("sa", "devanagari_PP-OCRv5_mobile_rec"),
+    ("bho", "devanagari"),
+    ("hi", "devanagari"),
+    ("mai", "devanagari"),
+    ("mr", "devanagari"),
+    ("ne", "devanagari"),
+    ("sa", "devanagari"),
     // Scripts with a model of their own.
-    ("el", "el_PP-OCRv5_mobile_rec"),
-    ("ko", "korean_PP-OCRv5_mobile_rec"),
-    ("ta", "ta_PP-OCRv5_mobile_rec"),
-    ("te", "te_PP-OCRv5_mobile_rec"),
-    ("th", "th_PP-OCRv5_mobile_rec"),
-    // The Chinese/Japanese model also carries the Latin alphabet and digits.
-    ("ja", "PP-OCRv5_mobile_rec"),
-    ("zh", "PP-OCRv5_mobile_rec"),
-    ("chinese_cht", "PP-OCRv5_mobile_rec"),
+    ("el", "el"),
+    ("ko", "korean"),
+    ("ta", "ta"),
+    ("te", "te"),
+    ("th", "th"),
+    // Han, read by the multilingual model.
+    ("ja", "multilingual"),
+    ("zh", "multilingual"),
+    ("chinese_cht", "multilingual"),
 ];
 
 /// Looks a model up by name.
@@ -357,17 +462,41 @@ pub fn model(name: &str) -> Result<&'static Model, OcrError> {
     })
 }
 
-/// Picks the recognizer for a language code.
-pub fn recognizer_for(lang: &str) -> Result<&'static Model, OcrError> {
+/// Which end of a strongest-first list `quality` asks for.
+fn rung(models: &'static [&'static str], quality: Quality) -> &'static str {
+    match quality {
+        Quality::Best => models[0],
+        Quality::Fast => models[models.len() - 1],
+    }
+}
+
+/// The detector a run gets when it names none.
+pub fn detector(quality: Quality) -> &'static str { rung(DETECTORS, quality) }
+
+/// The recognizer a run gets for a language when it names none: the strongest
+/// model in the catalog that reads that language's alphabet, or the cheapest.
+pub fn recognizer_for(
+    lang: &str,
+    quality: Quality,
+) -> Result<&'static Model, OcrError> {
+    model(rung(alphabet_of(lang)?.recognizers, quality))
+}
+
+/// The alphabet a language code is read as.
+fn alphabet_of(lang: &str) -> Result<&'static Alphabet, OcrError> {
+    let unsupported = || OcrError::UnsupportedLanguage {
+        lang: lang.to_string(),
+        known: languages().join(", "),
+    };
     let name = LANGUAGES
         .iter()
         .find(|(code, _)| *code == lang)
-        .map(|(_, model)| *model)
-        .ok_or_else(|| OcrError::UnsupportedLanguage {
-            lang: lang.to_string(),
-            known: languages().join(", "),
-        })?;
-    model(name)
+        .map(|(_, alphabet)| *alphabet)
+        .ok_or_else(unsupported)?;
+    ALPHABETS
+        .iter()
+        .find(|a| a.name == name)
+        .ok_or_else(unsupported)
 }
 
 /// Every language code the catalog covers, in the order it is declared.
@@ -375,25 +504,85 @@ pub fn languages() -> Vec<&'static str> {
     LANGUAGES.iter().map(|(code, _)| *code).collect()
 }
 
+/// Every language code with the recognizer `quality` picks for it — what
+/// `--lang list` prints.
+pub fn catalogue(quality: Quality) -> Vec<(&'static str, &'static str)> {
+    LANGUAGES
+        .iter()
+        .filter_map(|(code, _)| {
+            Some((*code, recognizer_for(code, quality).ok()?.name))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn every_language_names_a_catalogued_recognizer() {
-        for (code, name) in LANGUAGES {
-            let model = model(name)
-                .unwrap_or_else(|_| panic!("`{code}` names unknown `{name}`"));
-            assert_eq!(model.kind, Kind::Recognition, "{name}");
+    fn every_language_names_a_catalogued_alphabet() {
+        for (code, alphabet) in LANGUAGES {
+            let found = alphabet_of(code).unwrap_or_else(|_| {
+                panic!("`{code}` names unknown alphabet `{alphabet}`")
+            });
+            assert_eq!(found.name, *alphabet);
+        }
+    }
+
+    #[test]
+    fn every_alphabet_names_catalogued_recognizers() {
+        for alphabet in ALPHABETS {
+            assert!(!alphabet.recognizers.is_empty(), "{}", alphabet.name);
+            for name in alphabet.recognizers {
+                let model = model(name).unwrap_or_else(|_| {
+                    panic!("`{}` names unknown `{name}`", alphabet.name)
+                });
+                assert_eq!(model.kind, Kind::Recognition, "{name}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_alphabet_is_reachable_from_some_language() {
+        for alphabet in ALPHABETS {
+            assert!(
+                LANGUAGES.iter().any(|(_, name)| *name == alphabet.name),
+                "no language reads `{}`",
+                alphabet.name
+            );
         }
     }
 
     #[test]
     fn the_defaults_are_in_the_catalog() {
-        assert_eq!(model(DEFAULT_DETECTION).unwrap().kind, Kind::Detection);
-        assert_eq!(model(SERVER_DETECTION).unwrap().kind, Kind::Detection);
+        for quality in [Quality::Best, Quality::Fast] {
+            assert_eq!(
+                model(detector(quality)).unwrap().kind,
+                Kind::Detection,
+                "{quality:?}"
+            );
+            assert!(recognizer_for(DEFAULT_LANGUAGE, quality).is_ok());
+        }
         assert_eq!(model(DEFAULT_ORIENTATION).unwrap().kind, Kind::Orientation);
-        assert!(recognizer_for(DEFAULT_LANGUAGE).is_ok());
+    }
+
+    #[test]
+    fn the_best_detector_is_the_large_one_and_fast_the_small_one() {
+        assert_eq!(detector(Quality::Best), SERVER_DETECTION);
+        assert_eq!(detector(Quality::Fast), MOBILE_DETECTION);
+    }
+
+    /// The rule the two ends of a strongest-first list are read by, on a list
+    /// with two rungs — which no alphabet has yet, so nothing else exercises
+    /// it. A one-rung list must answer the same model either way.
+    #[test]
+    fn quality_reads_both_ends_of_a_strongest_first_list() {
+        let ladder: &'static [&'static str] = &["strong", "weak"];
+        assert_eq!(rung(ladder, Quality::Best), "strong");
+        assert_eq!(rung(ladder, Quality::Fast), "weak");
+        let alone: &'static [&'static str] = &["only"];
+        assert_eq!(rung(alone, Quality::Best), "only");
+        assert_eq!(rung(alone, Quality::Fast), "only");
     }
 
     #[test]
@@ -407,10 +596,19 @@ mod tests {
 
     #[test]
     fn an_unknown_language_lists_the_known_ones() {
-        let error = recognizer_for("tlh").unwrap_err();
+        let error = recognizer_for("tlh", Quality::Best).unwrap_err();
         let message = error.to_string();
         assert!(message.contains("tlh"));
         assert!(message.contains("ru"));
+    }
+
+    #[test]
+    fn the_catalogue_listing_names_a_model_for_every_code() {
+        let listed = catalogue(Quality::Best);
+        assert_eq!(listed.len(), LANGUAGES.len());
+        for (code, name) in listed {
+            assert_eq!(model(name).unwrap().kind, Kind::Recognition, "{code}");
+        }
     }
 
     #[test]
