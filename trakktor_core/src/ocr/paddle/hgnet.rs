@@ -1,11 +1,12 @@
-//! The PP-HGNetV2 backbone, shared by the layout model and the server text
-//! detector.
+//! The PP-HGNetV2 backbone, shared by the layout model, the server text
+//! detector and the server text recognizer.
 //!
-//! Both networks carry the *same* backbone — upstream spells it `PPHGNetV2-L`
-//! in one configuration and `PPHGNetV2_B4(det=True)` in the other, and the two
-//! work out to the same stem, the same four stages and the same channel counts.
-//! Only what is read off it differs: the layout model takes the last three
-//! stages, the detector all four.
+//! All three carry the *same* backbone — upstream spells it `PPHGNetV2-L` in
+//! one configuration and `PPHGNetV2_B4` in the others, and they work out to the
+//! same stem, the same four stages and the same channel counts. What differs is
+//! [where the resolution is spent](Shape) and what is read off the result: the
+//! layout model takes the last three stages, the detector all four, the
+//! recognizer only the last.
 //!
 //! The structure is ordinary — convolutions, batch normalization and ReLU —
 //! with two habits worth naming, because both are silent when got wrong:
@@ -23,10 +24,55 @@ use candle_core::Tensor;
 use super::net::{ConvBn, Loader, pad_end};
 use crate::ocr::error::OcrError;
 
-/// The size the backbone's four stages divide the page by. The coarsest
-/// output is a thirty-second of the input, so a side that is not a multiple of
-/// it would leave the pyramid's levels disagreeing by a row.
+/// The size the backbone's four stages divide the page by, in the
+/// [`Shape::Page`] shape. The coarsest output is a thirty-second of the input,
+/// so a side that is not a multiple of it would leave the pyramid's levels
+/// disagreeing by a row.
 pub const SIZE_MULTIPLE: usize = 32;
+
+/// The two shapes the backbone is published in.
+///
+/// The weights are laid out identically and the two are numbered alike; what
+/// differs is where the resolution goes. Reading a **page** halves both axes
+/// together, five times over, so a line of text ends up a few pixels of a
+/// feature map. Reading a **line** spends the height and keeps the length: the
+/// height falls 48 → 3 while the width is halved twice, because the width *is*
+/// the sequence the recognizer reads and shortening it would throw characters
+/// away.
+///
+/// The difference amounts to one stride per stage plus the stem's second
+/// strided convolution, which the line shape does not stride at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shape {
+    /// Detection and layout: a thirty-second of the page at the coarsest stage.
+    Page,
+    /// Recognition: a sixteenth of the height and a quarter of the length.
+    Line,
+}
+
+impl Shape {
+    /// The stride of the stem's second strided convolution — the one after the
+    /// two-way split.
+    fn stem_stride(self) -> usize {
+        match self {
+            Self::Page => 2,
+            Self::Line => 1,
+        }
+    }
+
+    /// What a stage opens with, or `None` when it opens straight into its
+    /// blocks.
+    fn downsample(self, stage: usize) -> Option<(usize, usize)> {
+        match self {
+            // The first stage inherits the stem's quarter resolution and is
+            // left alone; the rest halve both axes.
+            Self::Page => (stage > 0).then_some((2, 2)),
+            // Every stage strides, and exactly one of them — the second —
+            // spends the width instead of the height.
+            Self::Line => Some(if stage == 1 { (1, 2) } else { (2, 1) }),
+        }
+    }
+}
 
 fn relu(x: &Tensor) -> Result<Tensor, OcrError> { Ok(x.relu()?) }
 
@@ -50,6 +96,7 @@ impl Stem {
         loader: &Loader,
         next: &mut usize,
         bn_offset: usize,
+        shape: Shape,
     ) -> Result<Self, OcrError> {
         let mut conv = |dims: [usize; 4], stride, padding, groups| {
             let at = *next;
@@ -60,7 +107,7 @@ impl Stem {
             first: conv([32, 3, 3, 3], 2, 1, 1)?,
             left: conv([16, 32, 2, 2], 1, 0, 1)?,
             left2: conv([32, 16, 2, 2], 1, 0, 1)?,
-            third: conv([32, 64, 3, 3], 2, 1, 1)?,
+            third: conv([32, 64, 3, 3], shape.stem_stride(), 1, 1)?,
             fourth: conv([48, 32, 1, 1], 1, 0, 1)?,
         })
     }
@@ -199,7 +246,8 @@ struct HgStage {
     blocks: Vec<HgBlock>,
 }
 
-/// The four stages, as the published configuration spells them.
+/// The four stages, as the published configuration spells them. Both shapes
+/// agree on every number here; they differ only in [`Shape::downsample`].
 struct StageSpec {
     in_channels: usize,
     mid: usize,
@@ -207,7 +255,6 @@ struct StageSpec {
     blocks: usize,
     kernel: usize,
     light: bool,
-    downsample: bool,
 }
 
 const STAGES: [StageSpec; 4] = [
@@ -218,7 +265,6 @@ const STAGES: [StageSpec; 4] = [
         blocks: 1,
         kernel: 3,
         light: false,
-        downsample: false,
     },
     StageSpec {
         in_channels: 128,
@@ -227,7 +273,6 @@ const STAGES: [StageSpec; 4] = [
         blocks: 1,
         kernel: 3,
         light: false,
-        downsample: true,
     },
     StageSpec {
         in_channels: 512,
@@ -236,7 +281,6 @@ const STAGES: [StageSpec; 4] = [
         blocks: 3,
         kernel: 5,
         light: true,
-        downsample: true,
     },
     StageSpec {
         in_channels: 1024,
@@ -245,7 +289,6 @@ const STAGES: [StageSpec; 4] = [
         blocks: 1,
         kernel: 5,
         light: true,
-        downsample: true,
     },
 ];
 
@@ -259,31 +302,34 @@ pub struct Backbone {
 }
 
 impl Backbone {
-    /// Loads the backbone, advancing `next` past the convolutions it claims so
-    /// that whatever the artifact numbers after it can carry on counting.
+    /// Loads the backbone in one of its two [shapes](Shape), advancing `next`
+    /// past the convolutions it claims so that whatever the artifact numbers
+    /// after it can carry on counting.
     pub fn load(
         loader: &Loader,
         next: &mut usize,
         bn_offset: usize,
+        shape: Shape,
     ) -> Result<Self, OcrError> {
-        let stem = Stem::load(loader, next, bn_offset)?;
+        let stem = Stem::load(loader, next, bn_offset, shape)?;
         let mut stages = Vec::with_capacity(STAGES.len());
-        for spec in &STAGES {
-            let downsample = if spec.downsample {
-                let index = *next;
-                *next += 1;
-                // Depthwise, and with no activation of its own.
-                Some(ConvBn::load(
-                    loader,
-                    index,
-                    bn_offset,
-                    [spec.in_channels, 1, 3, 3],
-                    2,
-                    1,
-                    spec.in_channels,
-                )?)
-            } else {
-                None
+        for (at, spec) in STAGES.iter().enumerate() {
+            let downsample = match shape.downsample(at) {
+                None => None,
+                Some(stride) => {
+                    let index = *next;
+                    *next += 1;
+                    // Depthwise, and with no activation of its own.
+                    Some(ConvBn::load_axes(
+                        loader,
+                        index,
+                        bn_offset,
+                        [spec.in_channels, 1, 3, 3],
+                        stride,
+                        1,
+                        spec.in_channels,
+                    )?)
+                },
             };
             let mut blocks = Vec::with_capacity(spec.blocks);
             for at in 0..spec.blocks {
@@ -304,8 +350,12 @@ impl Backbone {
         Ok(Self { stem, stages })
     }
 
-    /// The four stages' outputs, finest first — a quarter, an eighth, a
-    /// sixteenth and a thirty-second of the input.
+    /// The four stages' outputs, finest first.
+    ///
+    /// In the [page](Shape::Page) shape they are a quarter, an eighth, a
+    /// sixteenth and a thirty-second of the input; in the
+    /// [line](Shape::Line) one the height falls the same way from a quarter
+    /// while the width stops at a quarter of its own.
     pub fn forward(&self, x: &Tensor) -> Result<Vec<Tensor>, OcrError> {
         let mut state = self.stem.forward(x)?;
         let mut out = Vec::with_capacity(self.stages.len());

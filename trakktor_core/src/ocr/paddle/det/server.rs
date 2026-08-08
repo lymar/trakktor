@@ -404,7 +404,8 @@ impl Net {
         let mut next = 0usize;
         // The backbone's own numbering ends where the neck's begins; the gap is
         // the classification convolution a detector never runs.
-        let backbone = hgnet::Backbone::load(loader, &mut next, 0)?;
+        let backbone =
+            hgnet::Backbone::load(loader, &mut next, 0, hgnet::Shape::Page)?;
 
         let mut rungs = Vec::with_capacity(RUNGS.len());
         for (spec, from) in RUNGS.iter().zip(hgnet::STAGE_CHANNELS) {

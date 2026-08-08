@@ -227,16 +227,18 @@ pub(crate) enum OcrCommand {
     /// Read pages with the PaddleOCR PP-OCRv5 pipeline.
     ///
     /// A detector finds the text lines on the page, each line is straightened
-    /// out of it, and a recognizer reads the line. Twelve recognizers cover
+    /// out of it, and a recognizer reads the line. Thirteen recognizers cover
     /// the scripts between them and `--lang` picks one; the models download on
     /// first use into the model directory (~/.trakktor by default) and later
     /// runs reuse them.
     ///
     /// The models are the best ones available for the language rather than the
-    /// cheapest, which is about 96 MB for the reading and, unless `--no-layout`
-    /// turns it off, 130 MB more for the markup. `--quality fast` reads with
-    /// small models instead: 13 MB, and a quarter to a third off the time a
-    /// page takes. Either way the run says what it downloads before it starts.
+    /// cheapest, which is about 96 MB for the reading — 173 MB for Chinese and
+    /// Japanese, the two languages with a large recognizer as well — and,
+    /// unless `--no-layout` turns it off, 130 MB more for the markup.
+    /// `--quality fast` reads with small models instead: 13 MB, and a quarter
+    /// to a third off the time a page takes. Either way the run says what it
+    /// downloads before it starts.
     Paddle(Box<OcrPaddleArgs>),
 
     /// Read pages with the PaddleOCR-VL document model.
@@ -290,7 +292,7 @@ pub(crate) struct OcrPaddleArgs {
     ///
     /// `best` takes the strongest models trakktor has for the language, and is
     /// the default: an OCR run is wanted for its accuracy, and a page that
-    /// reads badly is worth less than a page that reads slowly. Today that
+    /// reads badly is worth less than a page that reads slowly. It always
     /// means the large text detector — 88 MB against 4.7 — which finds the
     /// short line that closes a paragraph and the superscript marker of a
     /// footnote, and takes a line whole where the small one breaks it into
@@ -301,9 +303,11 @@ pub(crate) struct OcrPaddleArgs {
     /// clean, ordinary type the two read the same text; the difference
     /// shows on scans, on dense pages and in small print.
     ///
-    /// The recognizers are published in one size each, so this currently
-    /// moves the detector only — which of them ran is in the result either
-    /// way. `--det-model` and `--rec-model` override it one model at a time.
+    /// For most languages this moves the detector only, because their
+    /// recognizer is published in one size; Chinese and Japanese also get a
+    /// large recognizer (84 MB against 17). Which models ran is in the result
+    /// either way, and `--det-model` and `--rec-model` override the choice one
+    /// model at a time.
     #[arg(
         long,
         value_enum,
@@ -368,7 +372,8 @@ pub(crate) struct OcrPaddleArgs {
     pub(crate) det_model: Option<String>,
 
     /// Text recognition model, overriding the one `--lang` and `--quality`
-    /// would choose.
+    /// would choose. `--lang list` prints the catalogued names; a path to a
+    /// directory of artifacts also works.
     #[arg(long, value_name = "name|dir")]
     pub(crate) rec_model: Option<String>,
 

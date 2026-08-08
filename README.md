@@ -35,7 +35,7 @@ Each command is documented in full on its own page under
   document is read by passing its pages in order. Two engines.
   [`paddle`](docs/features/ocr/paddle.md) is a port of the PP-OCRv5 pipeline
   (detection, then recognition) reading PaddleOCR's published models directly:
-  twelve recognizers covering Cyrillic, Latin, Arabic, Devanagari, Korean,
+  thirteen recognizers covering Cyrillic, Latin, Arabic, Devanagari, Korean,
   Thai, Greek, Tamil, Telugu and Chinese/Japanese. It reads with the best
   models it has for the language — about 96 MB and some ten seconds a page,
   which is what finds the short lines and superscript footnote markers a small

@@ -288,6 +288,145 @@ fn a_batch_reads_each_crop_as_it_would_alone() {
     assert!((both[0] - 0.884_510_3).abs() < 1e-5, "{}", both[0]);
 }
 
+/// The class count of the large recognizer, and its dictionary's length.
+const SERVER_CLASSES: usize = 18_385;
+
+/// The tolerance the large recognizer's goldens are pinned to, an order of
+/// magnitude looser than the small one's.
+///
+/// It is arithmetic, not a shortcut. This backbone is eighty-one convolutions
+/// deep and reduces up to 3328 channels at a time, and candle and PaddlePaddle
+/// sum those in different orders; the two disagree by at most 3.4e-4 over the
+/// whole 40x18385 output, with a mean of 1e-8, and the difference lands on
+/// whichever class won rather than on any step, class or region in particular.
+/// The likeliest class is the same at every step. The small recognizer, with a
+/// backbone a third as deep and a fifth as wide, stays inside 6e-6.
+const SERVER_TOLERANCE: f32 = 5e-4;
+
+/// The same three checks against the large recognizer, whose backbone is a
+/// different network entirely — the one the large detector carries, asked to
+/// read a line instead of a page. The numbers come from the same reference
+/// stand as the small one's, on the same synthetic input, so the two rows are
+/// comparable and neither was fitted to this code.
+#[test]
+#[ignore = "needs ~/.trakktor/ocr/paddle/PP-OCRv5_server_rec"]
+fn the_published_server_recognizer_reproduces_its_reference_output() {
+    let dir = model_dir("PP-OCRv5_server_rec");
+    let artifact = Artifact::load(&dir).unwrap();
+    let device = Device::Cpu;
+    let recognizer =
+        Recognizer::load(&Loader::new(&artifact, &device)).unwrap();
+    assert_eq!(recognizer.classes(), SERVER_CLASSES);
+
+    let data = synthetic(CHANNELS, HEIGHT, WIDTH);
+    let input =
+        Tensor::from_vec(data, (1, CHANNELS, HEIGHT, WIDTH), &device).unwrap();
+    let out = recognizer.forward(&input).unwrap();
+    // The height is spent the same way as in the small one, and so is the
+    // width: every eight columns of the crop are one step.
+    assert_eq!(out.dims(), &[1, 40, SERVER_CLASSES]);
+
+    let values = out.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+    // Every row is a distribution, so the whole tensor sums to the step count.
+    let total: f64 = values.iter().map(|v| f64::from(*v)).sum();
+    assert!((total - 40.0).abs() < 1e-2, "{total}");
+    assert!(
+        (values[0] - 0.929_732_56).abs() < SERVER_TOLERANCE,
+        "{}",
+        values[0]
+    );
+    assert!((values[1] - 2.650_504_3e-6).abs() < 1e-7, "{}", values[1]);
+    let late = values[19 * SERVER_CLASSES];
+    assert!((late - 0.843_882_86).abs() < SERVER_TOLERANCE, "{late}");
+
+    // The pattern is not text, and this model says so too.
+    let characters = vec![String::new(); SERVER_CLASSES - 2];
+    let labels = Labels::new(&characters, recognizer.classes()).unwrap();
+    assert_eq!(decode(&values, SERVER_CLASSES, &labels), Reading::default());
+}
+
+#[test]
+#[ignore = "needs ~/.trakktor/ocr/paddle/PP-OCRv5_server_rec"]
+fn the_server_sequence_grows_with_the_width() {
+    let dir = model_dir("PP-OCRv5_server_rec");
+    let artifact = Artifact::load(&dir).unwrap();
+    let device = Device::Cpu;
+    let recognizer =
+        Recognizer::load(&Loader::new(&artifact, &device)).unwrap();
+
+    let data = synthetic(CHANNELS, HEIGHT, 160);
+    let input =
+        Tensor::from_vec(data, (1, CHANNELS, HEIGHT, 160), &device).unwrap();
+    let out = recognizer.forward(&input).unwrap();
+    assert_eq!(out.dims(), &[1, 20, SERVER_CLASSES]);
+    let values = out.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+    assert!(
+        (values[0] - 0.858_798_15).abs() < SERVER_TOLERANCE,
+        "{}",
+        values[0]
+    );
+}
+
+#[test]
+#[ignore = "needs ~/.trakktor/ocr/paddle/PP-OCRv5_server_rec"]
+fn a_server_batch_reads_each_crop_as_it_would_alone() {
+    let dir = model_dir("PP-OCRv5_server_rec");
+    let artifact = Artifact::load(&dir).unwrap();
+    let device = Device::Cpu;
+    let recognizer =
+        Recognizer::load(&Loader::new(&artifact, &device)).unwrap();
+
+    let one = Tensor::from_vec(
+        synthetic(CHANNELS, HEIGHT, WIDTH),
+        (1, CHANNELS, HEIGHT, WIDTH),
+        &device,
+    )
+    .unwrap();
+    let zeros =
+        Tensor::zeros((1, CHANNELS, HEIGHT, WIDTH), DType::F32, &device)
+            .unwrap();
+    let both = recognizer
+        .forward(&Tensor::cat(&[&zeros, &one], 0).unwrap())
+        .unwrap()
+        .flatten_all()
+        .unwrap()
+        .to_vec1::<f32>()
+        .unwrap();
+    assert!(
+        (both[0] - 0.677_395_2).abs() < SERVER_TOLERANCE,
+        "{}",
+        both[0]
+    );
+    let offset = 40 * SERVER_CLASSES;
+    let mine = both[offset];
+    assert!((mine - 0.929_732_56).abs() < SERVER_TOLERANCE, "{mine}");
+}
+
+/// Both networks answer the same contract, so the pipeline can hold either
+/// without knowing which: the same crop shape gives the same sequence length,
+/// and the class count is the artifact's own.
+#[test]
+#[ignore = "needs both recognizers in ~/.trakktor/ocr/paddle"]
+fn the_two_recognizers_read_a_crop_into_the_same_number_of_steps() {
+    let device = Device::Cpu;
+    let mut steps = Vec::new();
+    for name in ["eslav_PP-OCRv5_mobile_rec", "PP-OCRv5_server_rec"] {
+        let dir = model_dir(name);
+        let artifact = Artifact::load(&dir).unwrap();
+        let recognizer =
+            Recognizer::load(&Loader::new(&artifact, &device)).unwrap();
+        let input = Tensor::from_vec(
+            synthetic(CHANNELS, HEIGHT, WIDTH),
+            (1, CHANNELS, HEIGHT, WIDTH),
+            &device,
+        )
+        .unwrap();
+        let out = recognizer.forward(&input).unwrap();
+        steps.push(out.dims()[1]);
+    }
+    assert_eq!(steps[0], steps[1], "{steps:?}");
+}
+
 #[test]
 #[ignore = "needs ~/.trakktor/ocr/paddle/eslav_PP-OCRv5_mobile_rec"]
 fn the_models_own_dictionary_fits_its_head() {

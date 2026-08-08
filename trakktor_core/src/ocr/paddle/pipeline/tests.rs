@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use super::{Device, Engine, Options, sort_boxes, straddling};
+use super::{Device, Engine, Options, Quality, sort_boxes, straddling};
 use crate::ocr::{
     layout::region::{Label, Region},
     page::Quad,
@@ -76,11 +76,17 @@ fn reads_the_reference_page() {
     let page = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../tmp/ocr/golden/page.png");
 
+    // The models the golden was taken with, named rather than defaulted to:
+    // the page is Russian and the trace came off the small detector, so a run
+    // on the engine's own defaults — English, and the large detector — would
+    // be comparing two different pipelines.
     let mut noop = |_: &str, _: u64, _: Option<u64>| {};
     let engine = Engine::load(
         &models,
         Device::Cpu,
         Options {
+            language: "ru".to_string(),
+            quality: Quality::Fast,
             drop_score: 0.0,
             ..Options::default()
         },

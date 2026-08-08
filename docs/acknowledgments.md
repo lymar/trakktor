@@ -58,7 +58,7 @@ Apache-licensed:
 - [**`ocr paddle`**](features/ocr/README.md) —
   [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) (Apache-2.0) by the
   PaddlePaddle authors: the PP-OCRv5 pipeline — two differentiable-binarization
-  text detectors, a CTC text recognizer and a text-line orientation
+  text detectors, two CTC text recognizers and a text-line orientation
   classifier — ported to the same candle runtime, reading PaddleOCR's own
   published inference artifacts directly. The detection algorithm comes from
   [DB](https://github.com/MhLiao/DB) (Apache-2.0; Liao et al.,

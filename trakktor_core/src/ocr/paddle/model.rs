@@ -7,10 +7,11 @@
 //! BLAKE3 digests are what the shared downloader verifies against.
 //!
 //! The catalog holds two detectors, one text-line orientation classifier and
-//! twelve recognizers. The recognizers all share an architecture and differ
-//! only in the alphabet they were trained on and, with it, the width of the
-//! final projection — so covering a new script costs a catalog entry, not a
-//! port.
+//! thirteen recognizers. Eleven of the recognizers share an architecture and
+//! differ only in the alphabet they were trained on and, with it, the width of
+//! the final projection — so covering a new script costs a catalog entry, not a
+//! port. The other two are the Han alphabet's pair, which is the one upstream
+//! publishes in two sizes.
 //!
 //! **A recognizer can only ever emit characters its own dictionary carries**,
 //! and the dictionaries are not supersets of one another: the English one has
@@ -274,6 +275,17 @@ pub const MODELS: &[Model] = &[
             File { name: "inference.pdiparams", size: 16458665, blake3: "f0953764c8da3d40f7716b8853b8e194be9f12f12eae3d26b122ee2ba76e2781" },
         ],
     },
+    Model {
+        name: "PP-OCRv5_server_rec",
+        kind: Kind::Recognition,
+        revision: "b26c3587fda8da3c8ec0ce357214b4d661ff1558",
+        // 84.4 MB
+        files: &[
+            File { name: "config.json", size: 352253, blake3: "2208ddd794fde1fdaa803e7d3a8143b6e5b899876468cd1aeb7b85788a26cf7e" },
+            File { name: "inference.json", size: 325204, blake3: "f5a17ceca58ac58fc163e8e65d65803ea88c8c393008d275de24d58e81fc338c" },
+            File { name: "inference.pdiparams", size: 84390117, blake3: "a72afe40582e318129c85ca68aab6b29ada58db3dc0fec411b5d4ffb06d4db77" },
+        ],
+    },
 ];
 
 /// One alphabet the catalog can read, and every recognizer that reads it.
@@ -283,13 +295,14 @@ pub struct Alphabet {
     pub name: &'static str,
     /// The recognizers of this alphabet, **strongest first**.
     ///
-    /// Every row names one model today, and that is a fact about what upstream
+    /// Only one row names two models, and that is a fact about what upstream
     /// publishes rather than about this form: the alphabet-bound recognizers
     /// come in a single size, and the newer generation that does publish a
-    /// larger one covers no Cyrillic — so there is nothing to put in front of
-    /// them. The row is a list so that a stronger model reaches every language
-    /// written in the alphabet by being added at the front of one line, and
-    /// leaves the ninety-odd language codes alone.
+    /// larger one covers no Cyrillic — so for most rows there is nothing to
+    /// put in front of them. The row is a list so that a stronger model
+    /// reaches every language written in the alphabet by being added at
+    /// the front of one line, and leaves the ninety-odd language codes
+    /// alone.
     pub recognizers: &'static [&'static str],
 }
 
@@ -339,10 +352,11 @@ pub const ALPHABETS: &[Alphabet] = &[
         name: "th",
         recognizers: &["th_PP-OCRv5_mobile_rec"],
     },
-    // Carries the Latin alphabet and digits alongside the Han characters.
+    // Carries the Latin alphabet and digits alongside the Han characters, and
+    // is the one alphabet upstream publishes in two sizes.
     Alphabet {
         name: "multilingual",
-        recognizers: &["PP-OCRv5_mobile_rec"],
+        recognizers: &["PP-OCRv5_server_rec", "PP-OCRv5_mobile_rec"],
     },
 ];
 

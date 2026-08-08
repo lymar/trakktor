@@ -24,10 +24,10 @@ how much, before the first byte moves.
 ```
 
 A detector serves every language: it looks for text as such and does not care
-what script it is. Twelve recognizers cover the scripts between them — Eastern
+what script it is. Thirteen recognizers cover the scripts between them — Eastern
 Slavic, wider Cyrillic, Latin, English, Arabic, Devanagari, Korean, Thai, Greek,
-Telugu, Tamil, and Chinese/Japanese. They share an architecture and differ only
-in the alphabet they were trained on.
+Telugu, Tamil, and Chinese/Japanese, which has two. Eleven of them share an
+architecture and differ only in the alphabet they were trained on.
 
 **`--quality` is not a pair of model names but a rule**: for the language asked
 for, take the model that reads its alphabet best, or the one that reads it
@@ -37,7 +37,7 @@ no Cyrillic at all, so "newest and largest" and "best for this page" are
 different answers. Which models actually ran is in the result, under `models`.
 
 The default is `best`: an OCR run is wanted for its accuracy, and a page that
-reads badly is worth less than a page that reads slowly. Today the rule moves
+reads badly is worth less than a page that reads slowly. The rule always moves
 the detector, of which there are two:
 
 | detector | download | what it changes |
@@ -45,9 +45,16 @@ the detector, of which there are two:
 | `PP-OCRv5_server_det` | 88 MB | `--quality best` — finds the short line that closes a paragraph and the superscript marker of a footnote, and keeps a line whole where the small one splits it into pieces |
 | `PP-OCRv5_mobile_det` | 4.7 MB | `--quality fast` — a quarter to a third off the time a page takes |
 
-The recognizers are published in one size each, so `--quality` leaves them
-alone for now; `--lang list` prints the model each code resolves to under the
-quality given.
+It moves the recognizer only for Chinese and Japanese, the one alphabet
+PaddleOCR publishes in two sizes:
+
+| recognizer | download | what it changes |
+|---|---:|---|
+| `PP-OCRv5_server_rec` | 84 MB | `--quality best` for `zh`, `ja` and `chinese_cht` |
+| `PP-OCRv5_mobile_rec` | 17 MB | `--quality fast` for the same three |
+
+Every other language has one recognizer, and `--quality` leaves it alone;
+`--lang list` prints the model each code resolves to under the quality given.
 
 Measured on an A4 page at 300 dpi, on a GPU, whole run including the layout
 stage — a page of ordinary prose reads the same text either way, and the

@@ -351,10 +351,14 @@ impl BatchNorm {
 #[derive(Debug)]
 pub struct ConvBn {
     conv: Conv,
+    /// Set when the layer strides its two axes by different amounts, which a
+    /// convolution cannot; see [`ConvBn::load_axes`].
+    keep: Option<(usize, usize)>,
     norm: BatchNorm,
 }
 
 impl ConvBn {
+    /// A layer that strides both axes alike.
     pub fn load(
         loader: &Loader,
         index: usize,
@@ -364,15 +368,46 @@ impl ConvBn {
         padding: usize,
         groups: usize,
     ) -> Result<Self, OcrError> {
+        Self::load_axes(
+            loader,
+            index,
+            bn_offset,
+            dims,
+            (stride, stride),
+            padding,
+            groups,
+        )
+    }
+
+    /// A layer whose two axes stride by different amounts — what the backbone
+    /// does when it reads a text line rather than a page, spending the height
+    /// and keeping the length.
+    ///
+    /// candle takes one stride for both axes, so an uneven pair convolves at
+    /// stride one and drops the rows and columns a strided convolution would
+    /// never have computed. The values that remain are the same ones, at the
+    /// price of computing those that go.
+    #[allow(clippy::too_many_arguments)]
+    pub fn load_axes(
+        loader: &Loader,
+        index: usize,
+        bn_offset: usize,
+        dims: [usize; 4],
+        stride: (usize, usize),
+        padding: usize,
+        groups: usize,
+    ) -> Result<Self, OcrError> {
+        let even = stride.0 == stride.1;
         Ok(Self {
             conv: Conv::load(
                 loader,
                 &format!("conv2d_{index}"),
                 dims,
-                stride,
+                if even { stride.0 } else { 1 },
                 padding,
                 groups,
             )?,
+            keep: (!even).then_some(stride),
             norm: BatchNorm::load(
                 loader,
                 &format!("batch_norm2d_{}", index + bn_offset),
@@ -382,7 +417,12 @@ impl ConvBn {
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor, OcrError> {
-        self.norm.forward(&self.conv.forward(x)?)
+        let y = self.conv.forward(x)?;
+        let y = match self.keep {
+            None => y,
+            Some(stride) => subsample(&y, stride)?,
+        };
+        self.norm.forward(&y)
     }
 }
 

@@ -781,7 +781,12 @@ impl Net {
         let positions =
             (side / 8).pow(2) + (side / 16).pow(2) + coarsest.pow(2);
         let mut next = 0usize;
-        let backbone = hgnet::Backbone::load(loader, &mut next, BN_OFFSET)?;
+        let backbone = hgnet::Backbone::load(
+            loader,
+            &mut next,
+            BN_OFFSET,
+            hgnet::Shape::Page,
+        )?;
         Ok(Self {
             backbone,
             encoder: Encoder::load(loader, coarsest * coarsest)?,

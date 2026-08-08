@@ -108,7 +108,7 @@ The two engines answer this question differently, and it is the main reason to
 pick one over the other.
 
 `paddle` takes `--lang <code>`, which picks the recognizer; `--lang list` prints
-every code with the model it selects, and Russian is the default. A recognizer
+every code with the model it selects, and English is the default. A recognizer
 is trained on one script and can only ever emit characters from its own
 dictionary. A page in a script the selected model does not cover comes back
 empty or as nonsense **even though its lines were found** — the detector is
