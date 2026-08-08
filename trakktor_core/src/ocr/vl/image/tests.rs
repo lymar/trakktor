@@ -55,6 +55,23 @@ fn an_impossible_aspect_ratio_is_refused() {
 }
 
 #[test]
+fn the_same_refusal_is_available_as_a_question() {
+    // The engine asks before it hands a block over, because there the refusal
+    // would cost a page of blocks rather than the one that is a hairline.
+    let cfg = ImageConfig {
+        min_pixels: MIN,
+        max_pixels: MAX,
+        patch_size: 14,
+        merge_size: 2,
+        rescale_factor: 1.0 / 255.0,
+        image_mean: [0.5, 0.5, 0.5],
+        image_std: [0.5, 0.5, 0.5],
+    };
+    assert!(!fits(&RgbImage::new(4000, 4), &cfg));
+    assert!(fits(&RgbImage::new(980, 700), &cfg));
+}
+
+#[test]
 fn patches_carry_the_pixels_channel_by_channel() {
     let cfg = ImageConfig {
         min_pixels: MIN,

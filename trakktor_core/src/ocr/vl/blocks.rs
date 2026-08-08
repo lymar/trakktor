@@ -276,7 +276,8 @@ impl Open {
 /// the same one the illustration finder uses; a scan's paper is never near it.
 const INK: u8 = 160;
 
-/// Ink per page row: how many pixels of the row are dark.
+/// The page's ink, and the one question the assembly asks of it: how much of a
+/// page row is dark **within a range of columns**.
 ///
 /// This is what makes the boundary between two lines findable. The detector
 /// marks a *shrunken core* of each line, and on a tight setting the real ink of
@@ -284,29 +285,63 @@ const INK: u8 = 160;
 /// tens of pixels past its box. Halfway between two boxes can therefore still
 /// be inside the neighbour's ink, and a block cut there shows the model a strip
 /// of the line above, which it dutifully reads.
-pub fn ink_profile(bgr: &[u8], page: (u32, u32)) -> Vec<u32> {
-    let stride = page.0 as usize * 3;
-    (0..page.1 as usize)
-        .map(|row| {
-            bgr[row * stride..(row + 1) * stride]
-                .chunks_exact(3)
-                .filter(|pixel| pixel.iter().all(|value| *value < INK))
-                .count() as u32
-        })
-        .collect()
+///
+/// **The columns are half of the question, not a refinement of it.** A block is
+/// a window on one column, and ink outside that window cannot appear in the
+/// picture the model is shown — so counting the whole page row answers "where
+/// do these two lines part" with the *other* column's line breaks. Measured on
+/// a two-column page: the whitest page row between two lines of the left column
+/// fell in the middle of a line of the left column, because the right column
+/// happened to break there, and the block came out a rectangle one pixel tall.
+pub struct Ink<'a> {
+    bgr: &'a [u8],
+    page: (u32, u32),
+}
+
+impl<'a> Ink<'a> {
+    /// Borrows a page raster, BGR, as the classic pipeline hands it over.
+    pub fn of(bgr: &'a [u8], page: (u32, u32)) -> Self { Self { bgr, page } }
+
+    /// Ink per page row, counting only the pixels between `x0` and `x1`.
+    fn profile(&self, x0: u32, x1: u32) -> Vec<u32> {
+        let stride = self.page.0 as usize * 3;
+        let from = x0.min(self.page.0) as usize * 3;
+        let to = x1.clamp(x0, self.page.0) as usize * 3;
+        (0..self.page.1 as usize)
+            .map(|row| {
+                self.bgr[row * stride + from..row * stride + to]
+                    .chunks_exact(3)
+                    .filter(|pixel| pixel.iter().all(|value| *value < INK))
+                    .count() as u32
+            })
+            .collect()
+    }
+}
+
+/// The ink profile of the columns one block covers — the only part of a page
+/// row that block's own frame can ever show.
+fn column_profile(
+    ink: Option<&Ink<'_>>,
+    bounds: Bounds,
+    margin: f32,
+    page: (u32, u32),
+) -> Option<Vec<u32>> {
+    let ink = ink?;
+    let x0 = (bounds.x0 - margin).floor().max(0.0) as u32;
+    let x1 = ((bounds.x1 + margin).ceil().max(0.0) as u32).min(page.0);
+    Some(ink.profile(x0, x1))
 }
 
 /// Groups quadrangles into blocks.
 ///
 /// `quads` must be in the detector's reading order; `page` is the page size in
-/// pixels, which the padded rectangles are clamped to. `ink` is the page's row
-/// profile from [`ink_profile`]; without it the boundary between two blocks is
-/// put halfway between their boxes, which is right only when the boxes are
-/// tight.
+/// pixels, which the padded rectangles are clamped to. `ink` is the page
+/// raster; without it the boundary between two blocks is put halfway between
+/// their boxes, which is right only when the boxes are tight.
 pub fn assemble(
     quads: &[Quad],
     page: (u32, u32),
-    ink: Option<&[u32]>,
+    ink: Option<&Ink<'_>>,
     settings: &Settings,
 ) -> Vec<Block> {
     let all = rows(quads, settings);
@@ -335,7 +370,7 @@ fn group(
     all: Vec<Row>,
     spans: &[(f32, f32)],
     page: (u32, u32),
-    ink: Option<&[u32]>,
+    ink: Option<&Ink<'_>>,
     settings: &Settings,
 ) -> Vec<Block> {
     let mut open: Vec<Open> = Vec::new();
@@ -403,10 +438,13 @@ fn group(
     done.into_iter()
         .map(|block| {
             let margin = settings.padding * block.height();
+            let profile = column_profile(ink, block.bounds, margin, page);
             let bands: Vec<(f32, f32)> = block
                 .rows
                 .iter()
-                .map(|row| grown(*row, margin, spans, &block.rows, ink))
+                .map(|row| {
+                    grown(*row, margin, spans, &block.rows, profile.as_deref())
+                })
                 .collect();
             let mut bounds = block.bounds;
             bounds.y0 = bands.iter().map(|b| b.0).fold(f32::MAX, f32::min);
@@ -441,7 +479,9 @@ fn group(
 ///
 /// Where to stop is the whole question. Halfway between the two boxes is the
 /// answer when the boxes are tight; when they are not, the whitest page row
-/// between the two lines is, and that is what the ink profile is for.
+/// between the two lines is, and that is what the ink profile is for — the
+/// profile of this block's own columns, which is the only ink its frame can
+/// show.
 fn grown(
     row: (f32, f32),
     margin: f32,
@@ -485,7 +525,14 @@ fn grown(
         },
         None => row.1 + margin,
     };
-    (top.min(row.1), bottom.max(row.0))
+    // Whatever the ink says, a band keeps the middle half of its row. The
+    // search is allowed to trim the head or the foot of a line to keep a
+    // neighbour's overhang out of the frame; it is not allowed to trim the line
+    // away, and where both ends land on the same page row the block stops
+    // being a picture at all — a rectangle a pixel tall, which the reader
+    // refuses outright.
+    let quarter = (row.1 - row.0).max(0.0) / 4.0;
+    (top.min(row.0 + quarter), bottom.max(row.1 - quarter))
 }
 
 /// The whitest page row in `first..second` — where two lines part.
@@ -555,7 +602,7 @@ pub fn assemble_in(
     quads: &[Quad],
     regions: &[Region],
     page: (u32, u32),
-    ink: Option<&[u32]>,
+    ink: Option<&Ink<'_>>,
     settings: &Settings,
 ) -> Vec<Block> {
     let all = rows(quads, settings);
@@ -654,7 +701,7 @@ fn block_of(
     task: Option<Task>,
     spans: &[(f32, f32)],
     page: (u32, u32),
-    ink: Option<&[u32]>,
+    ink: Option<&Ink<'_>>,
     settings: &Settings,
 ) -> Block {
     let mut heights: Vec<f32> =
@@ -666,14 +713,15 @@ fn block_of(
         .iter()
         .map(|row| (row.bounds.y0, row.bounds.y1))
         .collect();
-    let bands: Vec<(f32, f32)> = mine
-        .iter()
-        .map(|row| grown(*row, margin, spans, &mine, ink))
-        .collect();
     let mut bounds = rows[0].bounds;
     for row in &rows[1..] {
         bounds.join(&row.bounds);
     }
+    let profile = column_profile(ink, bounds, margin, page);
+    let bands: Vec<(f32, f32)> = mine
+        .iter()
+        .map(|row| grown(*row, margin, spans, &mine, profile.as_deref()))
+        .collect();
     bounds.y0 = bands.iter().map(|b| b.0).fold(f32::MAX, f32::min);
     bounds.y1 = bands.iter().map(|b| b.1).fold(f32::MIN, f32::max);
     Block {

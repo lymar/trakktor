@@ -102,6 +102,23 @@ pub fn smart_resize(
     Ok((bar_h as u32, bar_w as u32))
 }
 
+/// Whether the processor can size this picture at all.
+///
+/// The refusal above belongs where a caller hands over a sliver by mistake, and
+/// it stays an error there. Inside the engine the caller is the block assembly,
+/// where a page of blocks must not be lost to one of them coming out a
+/// hairline — so ask first, and skip what cannot be shown.
+pub fn fits(picture: &RgbImage, cfg: &ImageConfig) -> bool {
+    smart_resize(
+        picture.height(),
+        picture.width(),
+        cfg.factor(),
+        cfg.min_pixels,
+        cfg.max_pixels,
+    )
+    .is_ok()
+}
+
 /// Resizes, normalizes and patchifies one picture.
 pub fn prepare(
     picture: &RgbImage,

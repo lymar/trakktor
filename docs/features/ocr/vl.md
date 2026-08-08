@@ -132,6 +132,12 @@ reading here — what was detected, and how it was grouped — and a block whose
 reading was dropped is marked `DROPPED` on the page instead of quietly leaving a
 hole in the text.
 
+A block can also come out as a shape the model cannot be shown at all: the
+picture processor refuses one more than two hundred times wider than it is tall,
+because a hairline is not a picture of anything. Such a block is skipped and
+marked the same way. It costs its own text and never the page's — the rest of
+the sheet's blocks have nothing to do with it.
+
 ## Tasks
 
 ```

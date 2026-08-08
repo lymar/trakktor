@@ -259,7 +259,7 @@ impl Engine {
         {
             vec![blocks::whole(&quads, size)]
         } else {
-            let ink = blocks::ink_profile(&page.bgr, size);
+            let ink = blocks::Ink::of(&page.bgr, size);
             if marked.is_empty() {
                 blocks::assemble(&quads, size, Some(&ink), &self.options.blocks)
             } else {
@@ -279,8 +279,18 @@ impl Engine {
         for (index, region) in regions.iter().enumerate() {
             report(index, regions.len());
             let cut = blocks::cut(&page.bgr, size, region);
-            let answer = self.read_block_as(&cut, region.task)?;
             let quad = region.rect.quad();
+            // A block the processor cannot size is not a reason to lose the
+            // page. The refusal is upstream's and it is right — a sliver is not
+            // a picture of anything — but here the caller that handed it over
+            // is the assembly itself, and the other thirty-odd blocks of the
+            // page have nothing to do with its mistake. So the block is skipped
+            // and reported as one that yielded no text, which is what it is.
+            if !picture::fits(&cut, self.reader.image_config()) {
+                placed.push(ReadBlock { quad, crop: None });
+                continue;
+            }
+            let answer = self.read_block_as(&cut, region.task)?;
             if answer.score < self.options.drop_score || answer.text.is_empty()
             {
                 placed.push(ReadBlock { quad, crop: None });

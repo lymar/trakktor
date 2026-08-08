@@ -12,6 +12,27 @@ fn line(x: f32, y: f32, width: f32, height: f32) -> Quad {
 
 const PAGE: (u32, u32) = (1000, 1400);
 
+/// A white page with ink painted over each `(rows, columns)` patch.
+///
+/// The patches are the page's *ink*, not its boxes: a detector's box is the
+/// shrunken core of a line, so the two are deliberately not the same rectangle
+/// in the tests that care.
+fn inked(
+    page: (u32, u32),
+    patches: &[(std::ops::Range<u32>, std::ops::Range<u32>)],
+) -> Vec<u8> {
+    let mut bgr = vec![255u8; (page.0 * page.1 * 3) as usize];
+    for (rows, columns) in patches {
+        for y in rows.clone() {
+            for x in columns.clone() {
+                let at = ((y * page.0 + x) * 3) as usize;
+                bgr[at..at + 3].fill(0);
+            }
+        }
+    }
+    bgr
+}
+
 #[test]
 fn consecutive_lines_of_one_paragraph_make_one_block() {
     let quads: Vec<Quad> = (0..5)
@@ -209,9 +230,8 @@ fn the_boundary_follows_the_ink_when_a_box_is_short() {
     let page = (200u32, 200u32);
     let quads =
         vec![line(10.0, 20.0, 180.0, 20.0), line(10.0, 62.0, 60.0, 20.0)];
-    let mut ink = vec![0u32; page.1 as usize];
-    ink[20..58].fill(100);
-    ink[62..82].fill(40);
+    let bgr = inked(page, &[(20..58, 10..190), (62..82, 10..70)]);
+    let ink = Ink::of(&bgr, page);
     let blocks = assemble(&quads, page, Some(&ink), &Settings::default());
     assert_eq!(blocks.len(), 2);
     let bgr = vec![0u8; (page.0 * page.1 * 3) as usize];
@@ -223,4 +243,61 @@ fn the_boundary_follows_the_ink_when_a_box_is_short() {
         blocks[1].rect.y
     );
     assert!(cut.height() >= 20);
+}
+
+#[test]
+fn the_ink_of_the_next_column_does_not_decide_where_this_block_is_cut() {
+    // A short line in the left column, and a right column that happens to
+    // break between two of its lines *level with* it. Counted across the whole
+    // page row, the whitest row anywhere near this line is that break — which
+    // lies inside the line itself, and taking it from both ends leaves a frame
+    // with nothing in it. Counted over the left column alone, where the line
+    // ends is plain.
+    let page = (400u32, 300u32);
+    let quads = vec![
+        line(200.0, 60.0, 190.0, 36.0),
+        line(10.0, 100.0, 90.0, 34.0),
+        line(200.0, 120.0, 190.0, 40.0),
+        line(200.0, 166.0, 190.0, 36.0),
+    ];
+    // The right column's ink runs past its boxes and is unbroken above this
+    // line; the gap in it falls level with the line's middle.
+    let bgr = inked(
+        page,
+        &[
+            (60..104, 200..390),
+            (100..134, 10..100),
+            (120..164, 200..390),
+            (166..206, 200..390),
+        ],
+    );
+    let ink = Ink::of(&bgr, page);
+    let blocks = assemble(&quads, page, Some(&ink), &Settings::default());
+    let mine = blocks
+        .iter()
+        .find(|block| block.lines.contains(&1))
+        .expect("the left column's line is in a block");
+    assert_eq!(mine.lines, vec![1]);
+    // The whole line is in the frame, not a strip out of the middle of it.
+    assert!(mine.rect.y <= 100, "frame starts at {}", mine.rect.y);
+    assert!(
+        mine.rect.y + mine.rect.height >= 134,
+        "frame ends at {}",
+        mine.rect.y + mine.rect.height
+    );
+}
+
+#[test]
+fn a_band_never_eats_the_line_it_is_for() {
+    // The floor under the ink search, reached when the neighbours are much
+    // taller than this row: both searches then reach past its middle, and the
+    // whitest row they find is one and the same — the band closes on a single
+    // page row and the block stops being a picture at all.
+    let row = (100.0, 140.0);
+    let spans = [(0.0, 80.0), row, (200.0, 300.0)];
+    let mut ink = vec![100u32; 400];
+    ink[120] = 0;
+    let band = grown(row, 14.0, &spans, &[row], Some(&ink));
+    assert!(band.1 - band.0 >= 20.0, "band {band:?}");
+    assert!(band.0 <= 110.0 && band.1 >= 130.0, "band {band:?}");
 }
