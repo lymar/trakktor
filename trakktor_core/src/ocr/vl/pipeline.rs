@@ -296,7 +296,7 @@ impl Engine {
                 placed.push(ReadBlock { quad, crop: None });
                 continue;
             }
-            lines.extend(place(&answer, region, &quads));
+            lines.extend(place(&answer, region));
             placed.push(ReadBlock {
                 quad,
                 crop: Some(crops.len()),
@@ -450,7 +450,11 @@ fn burn_networks(
 /// this version reflows the text and joins words broken across lines — every
 /// line gets the block's own rectangle. Reporting a box that was not measured
 /// would be worse than reporting a coarse one.
-fn place(answer: &Answer, region: &blocks::Block, quads: &[Quad]) -> Vec<Line> {
+///
+/// The boxes come from the block rather than from the detector's list, because
+/// they need not be the same: a row cut apart at a region boundary leaves each
+/// block its own share of the box that straddled it.
+fn place(answer: &Answer, region: &blocks::Block) -> Vec<Line> {
     let texts: Vec<&str> = answer
         .text
         .lines()
@@ -465,7 +469,7 @@ fn place(answer: &Answer, region: &blocks::Block, quads: &[Quad]) -> Vec<Line> {
             text: (*text).to_string(),
             score: answer.score,
             quad: if aligned {
-                quads[region.lines[at]]
+                region.boxes[at]
             } else {
                 region.rect.quad()
             },

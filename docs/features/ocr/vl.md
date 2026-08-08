@@ -78,6 +78,15 @@ Measured on a calendar page mixing Tibetan, English and Devanagari: seven blocks
 instead of sixteen, the table returned as cell markup instead of doubled
 columns, and the page read in 21 seconds instead of 89.
 
+The regions also keep a block out of the next column. Where two columns are set
+close together the detector joins a line of one to the line facing it in the
+other, and that single box drags both columns into one block — which is exactly
+the input blocks exist to avoid. The boundary between two regions cuts that row
+apart again, and each column is read on its own. On a two-column page set with a
+narrow gutter this removed every line that ran the two columns together, and
+what the page lost was duplicated text rather than text: measured against the
+page's own words, the reading went from 29 missing and 101 surplus to 9 and 34.
+
 `--no-layout` goes back to grouping by geometry alone, and the knobs below are
 what shape it then. They still apply to the lines the layout model did not
 claim.

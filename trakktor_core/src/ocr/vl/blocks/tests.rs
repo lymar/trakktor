@@ -33,6 +33,15 @@ fn inked(
     bgr
 }
 
+/// A labelled region covering `(x, y)`–`(x + width, y + height)`.
+fn region(label: Label, x: f32, y: f32, width: f32, height: f32) -> Region {
+    Region {
+        label,
+        score: 0.9,
+        quad: line(x, y, width, height),
+    }
+}
+
 #[test]
 fn consecutive_lines_of_one_paragraph_make_one_block() {
     let quads: Vec<Quad> = (0..5)
@@ -285,6 +294,68 @@ fn the_ink_of_the_next_column_does_not_decide_where_this_block_is_cut() {
         "frame ends at {}",
         mine.rect.y + mine.rect.height
     );
+}
+
+#[test]
+fn a_box_glued_across_the_gutter_does_not_pull_two_columns_into_one_block() {
+    // What a narrow gutter does to the detector: one line of the left column
+    // and the line facing it in the right come back as a single box. Left
+    // alone it makes one block of both columns, and a crop of two columns at
+    // once is the input this engine's blocks exist to avoid.
+    let page = (1000u32, 400u32);
+    let columns = [
+        region(Label::Text, 90.0, 90.0, 380.0, 200.0),
+        region(Label::Text, 520.0, 90.0, 380.0, 200.0),
+    ];
+    let mut quads = vec![
+        line(100.0, 100.0, 360.0, 24.0),
+        line(530.0, 100.0, 360.0, 24.0),
+    ];
+    // The glued line, and two ordinary rows under it.
+    quads.push(line(100.0, 134.0, 790.0, 24.0));
+    quads.push(line(100.0, 168.0, 360.0, 24.0));
+    quads.push(line(530.0, 168.0, 360.0, 24.0));
+
+    let blocks =
+        assemble_in(&quads, &columns, page, None, &Settings::default());
+    assert_eq!(blocks.len(), 2, "{blocks:#?}");
+    for block in &blocks {
+        assert!(
+            block.rect.width < 500,
+            "a block spans the gutter: {:?}",
+            block.rect
+        );
+        // The glued line is in both blocks, and each holds only its own half.
+        assert!(block.lines.contains(&2));
+        assert_eq!(block.lines.len(), block.boxes.len());
+    }
+    let widths: Vec<f32> = blocks
+        .iter()
+        .map(|block| {
+            let at = block.lines.iter().position(|l| *l == 2).unwrap();
+            block.boxes[at].width()
+        })
+        .collect();
+    assert!(
+        widths.iter().all(|w| (350.0..450.0).contains(w)),
+        "the pieces of the glued box are {widths:?}"
+    );
+}
+
+#[test]
+fn a_row_inside_one_region_is_left_whole() {
+    // The same page without the second column: nothing to cut against, and
+    // the wide row stays one row.
+    let page = (1000u32, 400u32);
+    let one = [region(Label::Text, 90.0, 90.0, 810.0, 200.0)];
+    let quads = vec![
+        line(100.0, 100.0, 790.0, 24.0),
+        line(100.0, 134.0, 790.0, 24.0),
+    ];
+    let blocks = assemble_in(&quads, &one, page, None, &Settings::default());
+    assert_eq!(blocks.len(), 1);
+    assert_eq!(blocks[0].lines, vec![0, 1]);
+    assert_eq!(blocks[0].boxes, quads);
 }
 
 #[test]

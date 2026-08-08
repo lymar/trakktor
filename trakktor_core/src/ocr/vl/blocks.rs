@@ -39,6 +39,13 @@ use crate::ocr::{
 pub struct Block {
     /// Indices into the line list this block was built from, in reading order.
     pub lines: Vec<usize>,
+    /// Where each of those lines sits, in the same order.
+    ///
+    /// Not simply the detector's box for each index: a row cut apart at a
+    /// region boundary gives each block its own share of the box that
+    /// straddled it, and reporting the whole of it would put a box across the
+    /// gutter under a line that is in one column.
+    pub boxes: Vec<Quad>,
     /// What to ask the model for this block, when the layout model said
     /// something that changes the question. A table asked for as text comes
     /// back as text and its structure is gone.
@@ -218,6 +225,11 @@ impl Bounds {
 #[derive(Debug, Clone)]
 struct Row {
     lines: Vec<usize>,
+    /// Where each of those lines sits. The same box as the detector returned,
+    /// until a row is cut apart at a region boundary — then each piece keeps
+    /// its own share of it, which is what the reader is shown and what the
+    /// result reports.
+    boxes: Vec<Quad>,
     bounds: Bounds,
 }
 
@@ -240,10 +252,12 @@ fn rows(quads: &[Quad], settings: &Settings) -> Vec<Row> {
         match joined {
             Some(row) => {
                 row.lines.push(index);
+                row.boxes.push(*quad);
                 row.bounds.join(&bounds);
             },
             None => rows.push(Row {
                 lines: vec![index],
+                boxes: vec![*quad],
                 bounds,
             }),
         }
@@ -251,9 +265,76 @@ fn rows(quads: &[Quad], settings: &Settings) -> Vec<Row> {
     rows
 }
 
+/// The least share of a box that has to fall inside a piece of a cut row for
+/// the box to be part of that piece. Below it the box is not in that column at
+/// all — it merely pokes over the boundary by a character's width.
+const IN_PIECE: f32 = 0.1;
+
+/// Cuts apart the rows that straddle a boundary between two regions.
+///
+/// This is the same repair the classic engine makes one stage earlier, and it
+/// has to be made again here, for a reason that is a property of this engine
+/// rather than an oversight: blocks are assembled from **rows**, not from
+/// boxes ([`rows`]), and two pieces cut exactly at a boundary are re-joined by
+/// that pass — the gap between them is zero and they share their whole height.
+/// So the cut is made *after* it, on the rows themselves, where there is
+/// nothing left to undo it.
+///
+/// It matters more here than in the classic engine. There a glued line is a
+/// sentence from the next column landing in the middle of a paragraph; here the
+/// glued box drags both columns into **one block**, and a block is what the
+/// model is shown — a crop of two columns at once is the input blocks exist to
+/// avoid.
+fn straddling(all: Vec<Row>, regions: &[Region]) -> Vec<Row> {
+    if regions.is_empty() {
+        return all;
+    }
+    let mut out = Vec::with_capacity(all.len());
+    for row in all {
+        let bounds = row.bounds;
+        let pieces = crate::ocr::layout::region::split(
+            (bounds.x0, bounds.y0, bounds.x1, bounds.y1),
+            regions,
+        );
+        if pieces.len() < 2 {
+            out.push(row);
+            continue;
+        }
+        for (from, to) in pieces {
+            // Every box the piece holds enough of, cut down to it. A box that
+            // lies inside the piece comes back unchanged: the slice clamps to
+            // the box's own corners.
+            let kept: Vec<(usize, Quad)> = row
+                .lines
+                .iter()
+                .zip(&row.boxes)
+                .filter(|(_, quad)| {
+                    let (x0, _, x1, _) = quad.bounds();
+                    x1.min(to) - x0.max(from) >= (x1 - x0).max(1.0) * IN_PIECE
+                })
+                .map(|(line, quad)| (*line, quad.slice(from, to)))
+                .collect();
+            let Some((_, first)) = kept.first() else {
+                continue;
+            };
+            let mut bounds = Bounds::of(first);
+            for (_, quad) in &kept[1..] {
+                bounds.join(&Bounds::of(quad));
+            }
+            out.push(Row {
+                lines: kept.iter().map(|(line, _)| *line).collect(),
+                boxes: kept.iter().map(|(_, quad)| *quad).collect(),
+                bounds,
+            });
+        }
+    }
+    out
+}
+
 /// One block under construction.
 struct Open {
     lines: Vec<usize>,
+    boxes: Vec<Quad>,
     /// The vertical span of each row that joined, before padding.
     rows: Vec<(f32, f32)>,
     /// The first line's index, which is the block's place in reading order.
@@ -419,6 +500,7 @@ fn group(
             Some((at, _)) => {
                 let block = &mut open[at];
                 block.lines.extend(&row.lines);
+                block.boxes.extend(&row.boxes);
                 block.rows.push((bounds.y0, bounds.y1));
                 block.heights.push(height);
                 block.bounds.join(&bounds);
@@ -426,6 +508,7 @@ fn group(
             None => open.push(Open {
                 first: row.lines[0],
                 lines: row.lines,
+                boxes: row.boxes,
                 rows: vec![(bounds.y0, bounds.y1)],
                 bounds,
                 heights: vec![height],
@@ -465,6 +548,7 @@ fn group(
                     })
                     .collect(),
                 lines: block.lines,
+                boxes: block.boxes,
             }
         })
         .collect()
@@ -605,7 +689,9 @@ pub fn assemble_in(
     ink: Option<&Ink<'_>>,
     settings: &Settings,
 ) -> Vec<Block> {
-    let all = rows(quads, settings);
+    // The cut comes after the row pass and not before it: that pass would undo
+    // it. See [`straddling`].
+    let all = straddling(rows(quads, settings), regions);
     let mut spans: Vec<(f32, f32)> = all
         .iter()
         .map(|row| (row.bounds.y0, row.bounds.y1))
@@ -675,18 +761,21 @@ pub fn assemble_in(
     }
 
     // Whatever the model did not claim goes through the geometric assembly, on
-    // its own lines only.
-    let orphans: Vec<usize> = (0..quads.len())
-        .filter(|line| {
-            all.iter()
-                .position(|row| row.lines.contains(line))
-                .is_none_or(|row| owner[row].is_none())
+    // its own lines only. They are collected row by row rather than line by
+    // line: after a cut one detected box belongs to two rows, and asking which
+    // row a *line* is in no longer has one answer.
+    let orphans: Vec<(usize, Quad)> = all
+        .iter()
+        .enumerate()
+        .filter(|(at, _)| owner[*at].is_none())
+        .flat_map(|(_, row)| {
+            row.lines.iter().copied().zip(row.boxes.iter().copied())
         })
         .collect();
     if !orphans.is_empty() {
-        let subset: Vec<Quad> = orphans.iter().map(|at| quads[*at]).collect();
+        let subset: Vec<Quad> = orphans.iter().map(|(_, quad)| *quad).collect();
         for mut block in assemble(&subset, page, ink, settings) {
-            block.lines = block.lines.iter().map(|at| orphans[*at]).collect();
+            block.lines = block.lines.iter().map(|at| orphans[*at].0).collect();
             built.push((block.lines[0], block));
         }
     }
@@ -726,6 +815,7 @@ fn block_of(
     bounds.y1 = bands.iter().map(|b| b.1).fold(f32::MIN, f32::max);
     Block {
         lines: rows.iter().flat_map(|row| row.lines.clone()).collect(),
+        boxes: rows.iter().flat_map(|row| row.boxes.clone()).collect(),
         task,
         rect: clamp(bounds, margin, 0.0, page),
         bands: bands
@@ -744,6 +834,7 @@ fn block_of(
 pub fn whole(quads: &[Quad], page: (u32, u32)) -> Block {
     Block {
         lines: (0..quads.len()).collect(),
+        boxes: quads.to_vec(),
         task: None,
         rect: Rect {
             x: 0,

@@ -72,6 +72,13 @@ table goes to the model whole and is asked for as a table. On a calendar page
 that meant seven blocks instead of sixteen, cell markup instead of doubled
 columns, and 21 seconds instead of 89.
 
+The glued line matters more there, too. In the classic engine it puts one
+column's sentence in the middle of the other's paragraph; in the generative one
+it drags both columns into a single block, and the block is the picture the
+model is shown. The same boundary takes it apart, one stage later — after the
+detector's boxes have been joined into lines, which is where that engine would
+otherwise glue the pieces back together.
+
 ## What comes out
 
 ```json
