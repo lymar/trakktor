@@ -111,6 +111,7 @@ pub(crate) fn run_paddle(
             load_layout(
                 model_dir,
                 args.layout_model.as_deref(),
+                args.layout_threshold,
                 device(args.device),
                 RuntimeArg::Candle,
             )
@@ -187,6 +188,7 @@ pub(crate) fn run_paddle(
 fn load_layout(
     model_dir: &Path,
     model: Option<&str>,
+    threshold: Option<f32>,
     device: Device,
     runtime: RuntimeArg,
 ) -> Result<Detector, CliError> {
@@ -194,7 +196,10 @@ fn load_layout(
         model: model.map(str::to_string).unwrap_or_else(|| {
             trakktor_core::ocr::layout::model::DEFAULT_MODEL.to_string()
         }),
-        post: post::Settings::default(),
+        post: post::Settings {
+            threshold,
+            ..post::Settings::default()
+        },
     };
     let runtime = match runtime {
         RuntimeArg::Candle => detect::Runtime::Candle,
@@ -307,6 +312,7 @@ pub(crate) fn run_vl(
             load_layout(
                 model_dir,
                 args.layout_model.as_deref(),
+                args.layout_threshold,
                 device(args.device),
                 args.runtime,
             )
@@ -402,23 +408,12 @@ pub(crate) fn run_layout(
         announce_burn_gpu();
     }
 
-    let mut options = detect::Options {
-        model: args.model.clone().unwrap_or_else(|| {
-            trakktor_core::ocr::layout::model::DEFAULT_MODEL.to_string()
-        }),
-        post: post::Settings::default(),
-    };
-    options.post.threshold = args.threshold;
-    let runtime = match args.runtime {
-        RuntimeArg::Candle => detect::Runtime::Candle,
-        RuntimeArg::Burn => detect::Runtime::Burn,
-    };
-    let marker = Detector::load(
+    let marker = load_layout(
         model_dir,
+        args.model.as_deref(),
+        args.threshold,
         device(args.device),
-        runtime,
-        options,
-        &mut crate::asr::progress::download_progress(),
+        args.runtime,
     )?;
 
     let mut pages = Vec::with_capacity(args.pages.len());

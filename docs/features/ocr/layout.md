@@ -115,8 +115,14 @@ score floor that keeps them.
 
 That makes `--threshold` unusually meaningful on pages in unfamiliar scripts.
 Lower it to see what the model nearly said; raise it to keep only what it is
-sure of. Inside an engine the per-label defaults are used and are chosen to keep
-those pages working.
+sure of. The engines start from the same per-label defaults, chosen to keep
+those pages working, and take `--layout-threshold` to override them.
+
+Lowering the floor is not free in one direction: a picture box covering the
+whole sheet passes a low floor too, and a picture swallows the blocks inside it
+— so a page can come back with fewer labels than the defaults gave it, or with
+none. `--boxes` shows that in one picture, which is why a value is worth trying
+here before it is carried into a page of reading.
 
 Two guarantees hold whatever the model says:
 
@@ -140,8 +146,11 @@ Two guarantees hold whatever the model says:
 is drawn where it sits, numbered as the result numbers it and captioned with its
 label, in a second colour where the score is below half.
 
-Inside `ocr paddle` and `ocr vl` the stage takes `--no-layout` to skip it and
-`--layout-model` to choose the model.
+Inside `ocr paddle` and `ocr vl` the stage takes `--no-layout` to skip it,
+`--layout-model` to choose the model, and `--layout-threshold` for the same
+score floor as `--threshold` here. The longer name keeps it apart from
+`--thresh` and `--box-thresh`, which are the line detector's thresholds and a
+different stage.
 
 ## Runtimes
 

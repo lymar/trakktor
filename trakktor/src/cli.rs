@@ -382,6 +382,20 @@ pub(crate) struct OcrPaddleArgs {
     #[arg(long, value_name = "name|dir")]
     pub(crate) layout_model: Option<String>,
 
+    /// One score floor for every kind of block the layout model finds,
+    /// replacing the per-kind defaults.
+    ///
+    /// The model is as sure of a paragraph as the writing system is familiar —
+    /// around 0.98 for English, around 0.45 for Tibetan — so a page in an
+    /// unfamiliar script can come back with few labelled blocks or none, and
+    /// its structure is then guessed from the geometry. Lowering this floor
+    /// recovers them, but not for free: a picture box covering the whole sheet
+    /// passes a low floor too, and a picture swallows the blocks inside it,
+    /// which leaves the page with no labels at all. Try a value with
+    /// `ocr layout --boxes` first, where the result can be looked at.
+    #[arg(long, value_name = "p")]
+    pub(crate) layout_threshold: Option<f32>,
+
     /// Inference runtime executing the models. This engine serves `candle`
     /// only; of the OCR engines, `ocr vl` is the one with a burn runtime.
     #[arg(
@@ -565,6 +579,22 @@ pub(crate) struct OcrVlArgs {
     /// Layout model to run.
     #[arg(long, value_name = "name|dir")]
     pub(crate) layout_model: Option<String>,
+
+    /// One score floor for every kind of block the layout model finds,
+    /// replacing the per-kind defaults.
+    ///
+    /// It matters more here than in the classic engine: a labelled block is
+    /// what this one reads, so the floor decides how the page is cut into the
+    /// pictures the model is handed. The model is as sure of a paragraph as
+    /// the writing system is familiar — around 0.98 for English, around 0.45
+    /// for Tibetan — so an unfamiliar script leaves much of the page to the
+    /// line geometry. Lowering this floor gives the labels back, but not for
+    /// free: a picture box covering the whole sheet passes a low floor too,
+    /// and a picture swallows the blocks inside it — and a picture is not
+    /// read. Try a value with `ocr layout --boxes` first, where the result can
+    /// be looked at for the price of a second rather than a page of reading.
+    #[arg(long, value_name = "p")]
+    pub(crate) layout_threshold: Option<f32>,
 
     /// Inference runtime executing the model. Both read the pages the same,
     /// at the same precision (f16 on Metal, f32 on the CPU); `burn` needs a
