@@ -167,13 +167,15 @@ published separately). Rationale: `../trakktor_project/docs/adr/0002-cargo-works
   top-level `about` that opens the narrative guide). The generated `skill show
   --full` reference lists a new command automatically, but it does **not** make
   the skill discoverable for it — that is what the trigger `description` is for.
-- The GitHub repository **About description and topics** are hand-maintained
-  too, and live outside the repo. Whenever trakktor gains or changes a
-  capability, **propose an updated About text and topic set to the user** —
-  do not change repository settings on your own; apply them only when the user
-  agrees (`gh repo edit --description … --add-topic …`). Keep the About in sync
-  with the README intro and the CLI's top-level `about`; mind GitHub's cap of
-  20 topics (adding one may mean suggesting which existing topic to drop).
+- The documentation has a standing audit command: **`/docs-audit`**
+  (`.claude/commands/docs-audit.md`). It checks every user-facing surface —
+  `docs/`, `README.md`, the CLI/skill text, and the GitHub repository About
+  description and topics, which live outside the repo and are covered only by
+  the audit — for contradictions, gaps, and clarity. **Whenever a change adds
+  or alters a capability (a command, flag, engine, default), finish by
+  reminding the user to run `/docs-audit`** rather than launching it
+  unprompted, and never edit repository settings (About/topics) yourself —
+  the audit proposes them, the user applies them.
 
 ## Third-party attribution
 
