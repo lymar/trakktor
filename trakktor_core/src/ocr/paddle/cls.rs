@@ -28,10 +28,8 @@ use candle_core::{Device, Tensor};
 use super::{
     crop::Crop,
     image::{CHANNELS, resize_linear},
-    net::{
-        BatchNorm, Conv, HARD_SIGMOID_SLOPE, Linear, Loader, SqueezeExcite,
-        hardswish, subsample,
-    },
+    lcnet::{Backbone, FEATURES, Stride},
+    net::{Linear, Loader},
     rec::readable,
 };
 use crate::ocr::error::OcrError;
@@ -52,176 +50,26 @@ const CLASSES: usize = 2;
 /// [`THRESHOLD`] is also the arg-max, so one comparison settles both.
 const UPSIDE_DOWN: usize = 1;
 
-/// The width of the classifier's closing convolution, which no scale changes.
-const FEATURES: usize = 1280;
-
-/// What the graph's inference-time dropout multiplies the features by.
-///
-/// Paddle's `downgrade_in_infer` dropout is not a no-op at inference: it
-/// scales by `1 - p` instead of scaling during training. The published graph
-/// carries `p = 0.2`, so the features arrive at the classifier four fifths of
-/// their size. Dropping this is the single easiest way to get plausible but
-/// wrong probabilities out of this model.
-const DROPOUT_KEEP: f64 = 0.8;
-
 /// The normalization the model was trained with: the ImageNet statistics,
 /// applied to the `0..=1` scale.
 const MEAN: [f64; 3] = [0.485, 0.456, 0.406];
 const STD: [f64; 3] = [0.229, 0.224, 0.225];
 
-/// A convolution with batch normalization and a hard-swish, which is every
-/// convolution in this backbone but the last.
-#[derive(Debug)]
-struct Layer {
-    conv: Conv,
-    /// What is left of the stride after the convolution has taken its share.
-    stride: (usize, usize),
-    norm: BatchNorm,
-}
-
-impl Layer {
-    fn load(
-        loader: &Loader,
-        conv: &str,
-        norm: &str,
-        dims: [usize; 4],
-        stride: (usize, usize),
-        groups: usize,
-    ) -> Result<Self, OcrError> {
-        // A stride that is the same along both axes is the convolution's own;
-        // the per-axis ones the blocks use are taken from its output instead.
-        let (strided, kept) = if stride.0 == stride.1 {
-            (stride.0, (1, 1))
-        } else {
-            (1, stride)
-        };
-        Ok(Self {
-            conv: Conv::load(loader, conv, dims, strided, dims[2] / 2, groups)?,
-            stride: kept,
-            norm: BatchNorm::load(loader, norm, dims[0])?,
-        })
-    }
-
-    fn forward(&self, x: &Tensor) -> Result<Tensor, OcrError> {
-        let y = subsample(&self.conv.forward(x)?, self.stride)?;
-        hardswish(&self.norm.forward(&y)?)
-    }
-}
-
-/// A backbone block: depthwise, optional gate, pointwise.
-#[derive(Debug)]
-struct Block {
-    depthwise: Layer,
-    excite: Option<SqueezeExcite>,
-    pointwise: Layer,
-}
-
-impl Block {
-    fn forward(&self, x: &Tensor) -> Result<Tensor, OcrError> {
-        let y = self.depthwise.forward(x)?;
-        let y = match &self.excite {
-            None => y,
-            Some(excite) => excite.forward(&y)?,
-        };
-        self.pointwise.forward(&y)
-    }
-}
-
-/// One row of the backbone's block table. Every stride works on the height
-/// alone: the crop is 160 pixels long from the stem to the head, and only its
-/// 80 rows are spent — 40, 20, 10, 5 and finally 3.
-struct BlockSpec {
-    kernel: usize,
-    stride: (usize, usize),
-    excite: bool,
-}
-
-const BLOCKS: [BlockSpec; 13] = [
-    BlockSpec {
-        kernel: 3,
-        stride: (1, 1),
-        excite: false,
-    },
-    BlockSpec {
-        kernel: 3,
-        stride: (2, 1),
-        excite: false,
-    },
-    BlockSpec {
-        kernel: 3,
-        stride: (1, 1),
-        excite: false,
-    },
-    BlockSpec {
-        kernel: 3,
-        stride: (2, 1),
-        excite: false,
-    },
-    BlockSpec {
-        kernel: 3,
-        stride: (1, 1),
-        excite: false,
-    },
-    BlockSpec {
-        kernel: 3,
-        stride: (2, 1),
-        excite: false,
-    },
-    BlockSpec {
-        kernel: 5,
-        stride: (1, 1),
-        excite: false,
-    },
-    BlockSpec {
-        kernel: 5,
-        stride: (1, 1),
-        excite: false,
-    },
-    BlockSpec {
-        kernel: 5,
-        stride: (1, 1),
-        excite: false,
-    },
-    BlockSpec {
-        kernel: 5,
-        stride: (1, 1),
-        excite: false,
-    },
-    BlockSpec {
-        kernel: 5,
-        stride: (1, 1),
-        excite: false,
-    },
-    BlockSpec {
-        kernel: 5,
-        stride: (2, 1),
-        excite: true,
-    },
-    BlockSpec {
-        kernel: 5,
-        stride: (1, 1),
-        excite: true,
-    },
-];
-
 /// The text-line orientation classifier.
 #[derive(Debug)]
 pub struct Classifier {
     device: Device,
-    stem: Layer,
-    blocks: Vec<Block>,
-    last: Conv,
+    backbone: Backbone,
     head: Linear,
 }
 
 impl Classifier {
     /// Reads the weights.
     ///
-    /// The channel widths come off the file rather than out of a table: the
-    /// two published text-line classifiers are the same network at two scales,
-    /// and reading the widths is both shorter and safer than guessing which
-    /// scale a directory holds. Everything else — the strides, the kernels,
-    /// which blocks carry a gate — is the same in both.
+    /// Everything but the head is [`Backbone`], which the page-orientation
+    /// classifier shares — the two published text-line classifiers are that
+    /// same network at two scales, and it reads its own channel widths off the
+    /// file rather than out of a table.
     pub fn load(loader: &Loader) -> Result<Self, OcrError> {
         let classes = loader.artifact().output_classes().ok_or_else(|| {
             OcrError::Artifact(
@@ -238,79 +86,9 @@ impl Classifier {
             )));
         }
 
-        let mut channels = out_channels(loader, "conv2d_0")?;
-        let stem = Layer::load(
-            loader,
-            "conv2d_0",
-            "batch_norm2d_0",
-            [channels, 3, 3, 3],
-            (2, 2),
-            1,
-        )?;
-
-        // Convolutions are numbered in the order the modules declare them, so
-        // a gate's pair pushes the pointwise convolution that follows it along
-        // by two — while the normalizations, which gates do not have, keep
-        // their own count.
-        let mut conv = 1;
-        let mut norm = 1;
-        let mut blocks = Vec::with_capacity(BLOCKS.len());
-        for spec in &BLOCKS {
-            let depthwise = Layer::load(
-                loader,
-                &format!("conv2d_{conv}"),
-                &format!("batch_norm2d_{norm}"),
-                [channels, 1, spec.kernel, spec.kernel],
-                spec.stride,
-                channels,
-            )?;
-            conv += 1;
-            norm += 1;
-            let excite = if spec.excite {
-                let gate = SqueezeExcite::load(
-                    loader,
-                    &format!("conv2d_{conv}"),
-                    &format!("conv2d_{}", conv + 1),
-                    channels,
-                    channels / 4,
-                    HARD_SIGMOID_SLOPE,
-                )?;
-                conv += 2;
-                Some(gate)
-            } else {
-                None
-            };
-            let out = out_channels(loader, &format!("conv2d_{conv}"))?;
-            let pointwise = Layer::load(
-                loader,
-                &format!("conv2d_{conv}"),
-                &format!("batch_norm2d_{norm}"),
-                [out, channels, 1, 1],
-                (1, 1),
-                1,
-            )?;
-            conv += 1;
-            norm += 1;
-            channels = out;
-            blocks.push(Block {
-                depthwise,
-                excite,
-                pointwise,
-            });
-        }
-
         Ok(Self {
             device: loader.device().clone(),
-            stem,
-            blocks,
-            last: Conv::load(
-                loader,
-                &format!("conv2d_{conv}"),
-                [FEATURES, channels, 1, 1],
-                1,
-                0,
-                1,
-            )?,
+            backbone: Backbone::load(loader, Stride::Height)?,
             head: Linear::load(loader, "linear_0", FEATURES, CLASSES)?,
         })
     }
@@ -332,15 +110,8 @@ impl Classifier {
             )));
         }
 
-        let mut y = self.stem.forward(x)?;
-        for block in &self.blocks {
-            y = block.forward(&y)?;
-        }
-        let pooled = y.mean_keepdim(3)?.mean_keepdim(2)?;
-        let features = hardswish(&self.last.forward(&pooled)?)?;
-        let features = features.affine(DROPOUT_KEEP, 0.0)?;
-        let logits =
-            self.head.forward(&features.reshape((batch, FEATURES))?)?;
+        let logits = self.head.forward(&self.backbone.features(x)?)?;
+        debug_assert_eq!(logits.dim(0).ok(), Some(batch));
         Ok(candle_nn::ops::softmax_last_dim(&logits)?)
     }
 
@@ -370,17 +141,6 @@ impl Classifier {
             .into_iter()
             .map(|score| score > THRESHOLD)
             .collect())
-    }
-}
-
-/// The out-channel count a convolution's weight declares.
-fn out_channels(loader: &Loader, name: &str) -> Result<usize, OcrError> {
-    let dims = loader.dims(&format!("{name}.w_0"))?;
-    match dims.first() {
-        Some(out) if dims.len() == 4 => Ok(*out),
-        _ => Err(OcrError::Artifact(format!(
-            "`{name}.w_0` is {dims:?}, which is not a convolution weight"
-        ))),
     }
 }
 

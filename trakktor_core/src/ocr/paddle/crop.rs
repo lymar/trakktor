@@ -101,20 +101,45 @@ pub fn rotate_crop(
     page_height: usize,
     quad: &Quad,
 ) -> Crop {
+    let (crop, _) = straighten(page_bgr, page_width, page_height, quad);
+    let (w, h) = (crop.width as f64, crop.height as f64);
+    if w > 0.0 && h / w >= TURN_RATIO {
+        turn(&crop)
+    } else {
+        crop
+    }
+}
+
+/// Straightens `quad` into an upright rectangle and hands back the map that
+/// says where each of its pixels came from.
+///
+/// This is [`rotate_crop`] without the quarter turn — the turn is a rule about
+/// *text lines*, and a caller straightening something that is not a line (a
+/// whole sheet out of a photograph, say) wants the page the right way up
+/// however tall it is. The returned matrix carries a point of the rectangle
+/// back onto the page, which is what a caller has to do with every box it
+/// finds afterwards; it is `None` for a degenerate quadrangle, and then the
+/// crop is empty.
+pub fn straighten(
+    page_bgr: &[u8],
+    page_width: usize,
+    page_height: usize,
+    quad: &Quad,
+) -> (Crop, Option<[f64; 9]>) {
     let Some(bytes) = page_width
         .checked_mul(page_height)
         .and_then(|n| n.checked_mul(CHANNELS))
     else {
-        return Crop::empty();
+        return (Crop::empty(), None);
     };
     if bytes == 0 || page_bgr.len() < bytes {
-        return Crop::empty();
+        return (Crop::empty(), None);
     }
 
     let src = quad.points.map(|(x, y)| (f64::from(x), f64::from(y)));
     let (width, height) = crop_size(&src, page_width, page_height);
     if width == 0 || height == 0 {
-        return Crop::empty();
+        return (Crop::empty(), None);
     }
 
     // Solving from the rectangle *back* to the quadrangle gives the map the
@@ -124,7 +149,7 @@ pub fn rotate_crop(
     let (w, h) = (width as f64, height as f64);
     let dst = [(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)];
     let Some(m) = homography(&dst, &src) else {
-        return Crop::empty();
+        return (Crop::empty(), None);
     };
 
     let mut bgr = vec![0u8; width * height * CHANNELS];
@@ -137,12 +162,7 @@ pub fn rotate_crop(
         }
     }
 
-    let crop = Crop { width, height, bgr };
-    if h / w >= TURN_RATIO {
-        turn(&crop)
-    } else {
-        crop
-    }
+    (Crop { width, height, bgr }, Some(m))
 }
 
 /// Size of the rectangle `quad` is straightened into: the longer of the two
@@ -243,7 +263,7 @@ fn homography(
 
 /// Where destination pixel `(x, y)` reads from on the page. Pixel centers are
 /// the integers themselves, as in OpenCV's warp — no half-pixel shift.
-fn source_of(m: &[f64; 9], x: f64, y: f64) -> (f64, f64) {
+pub fn source_of(m: &[f64; 9], x: f64, y: f64) -> (f64, f64) {
     let w = m[6] * x + m[7] * y + m[8];
     // A destination pixel sitting on the transform's horizon has no source
     // point at all. OpenCV folds that denominator to zero rather than to

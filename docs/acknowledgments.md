@@ -97,6 +97,23 @@ Apache-licensed:
   [PaddleX](https://github.com/PaddlePaddle/PaddleX) (Apache-2.0). Weights are
   downloaded at runtime. Please cite the PaddleOCR 3.0 technical report
   (arXiv:2507.05595) and the RT-DETR paper if you use this model.
+- **`--doc-orientation`**, the page-orientation step both OCR engines can run —
+  [PP-LCNet_x1_0_doc_ori](https://huggingface.co/PaddlePaddle/PP-LCNet_x1_0_doc_ori)
+  (Apache-2.0) by the PaddlePaddle authors: a four-class classifier saying
+  which right angle a photographed page is at, ported to the same candle
+  runtime and sharing its backbone with the text-line orientation classifier
+  above. Weights are downloaded at runtime. Please cite the PaddleOCR 3.0
+  technical report (arXiv:2507.05595) if you use this model.
+- **`--unwarp`**, the page-straightening step both OCR engines can run —
+  [UVDoc](https://github.com/tanguymagne/UVDoc) (MIT; Verhoeven, Magne and
+  Sorkine-Hornung, *UVDoc: Neural Grid-based Document Unwarping*, SIGGRAPH
+  Asia 2023), in the form
+  [PaddleX](https://huggingface.co/PaddlePaddle/UVDoc) publishes it: a network
+  predicting a dense backward map that turns a photograph of a page into the
+  page a scanner would have seen. Ported to the same candle runtime; the map
+  is applied, and inverted for reporting boxes, by trakktor itself. Weights
+  are downloaded at runtime. Please cite the UVDoc paper if you use this
+  model.
 - [**`vad`**](features/vad/README.md), and
   [**`asr --vad`**](features/asr/whisper.md#voice-activity-detection-vad) —
   [Silero-VAD](https://github.com/snakers4/silero-vad)

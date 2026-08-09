@@ -13,6 +13,7 @@ pub mod markdown;
 pub mod overlay;
 pub mod paddle;
 pub mod page;
+pub mod preprocess;
 pub mod vl;
 
 pub use error::OcrError;

@@ -25,6 +25,7 @@ use trakktor_core::ocr::{
         model::{self, Quality},
         pipeline::{Device, Engine, Options},
     },
+    preprocess::{self, Prepared, Preprocessor},
     vl,
 };
 
@@ -100,14 +101,19 @@ pub(crate) fn run_paddle(
             trakktor_core::ocr::layout::model::DEFAULT_MODEL.to_string()
         })
     });
+    let preprocess = args.preprocess.options();
     announce_downloads(
         &paddle_download::pending(model_dir, &options),
         layout_model
             .as_deref()
             .map(|name| layout_download::pending(model_dir, name))
-            .unwrap_or_default(),
+            .unwrap_or_default()
+            .into_iter()
+            .chain(preprocess.pending(model_dir))
+            .collect(),
     );
 
+    let preprocessor = load_preprocessor(model_dir, preprocess, args.device)?;
     let engine = Engine::load(
         model_dir,
         device(args.device),
@@ -130,21 +136,34 @@ pub(crate) fn run_paddle(
     let mut pages: Vec<Page> = Vec::with_capacity(args.pages.len());
     let mut figures: Vec<Vec<Quad>> = Vec::with_capacity(args.pages.len());
     let mut regions: Vec<Vec<Region>> = Vec::with_capacity(args.pages.len());
+    let mut prepared: Vec<Prepared> = Vec::with_capacity(args.pages.len());
     for (index, path) in args.pages.iter().enumerate() {
         // One decode of the page serves every stage: the markup runs first,
         // because a line the detector glued across a boundary between two
         // regions is taken apart before it is read.
-        let raster = RawPage::load(path)?;
+        let photograph = RawPage::load(path)?;
+        // Boxes are drawn on the file the caller named, so the page as it
+        // arrived is kept when — and only when — there is a drawing to do.
+        let original = (args.boxes.is_some() && preprocess.any())
+            .then(|| photograph.clone());
+        let stage = prepare(&preprocessor, photograph)?;
+        write_rectified(
+            args.preprocess.rectified.as_deref(),
+            index + 1,
+            args.pages.len(),
+            &stage,
+        )?;
+        let raster = &stage.page;
         let marked = match &marker {
             None => Vec::new(),
-            Some(marker) => marker.detect(&raster)?,
+            Some(marker) => marker.detect(raster)?,
         };
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.display().to_string());
         let read =
-            engine.read_page_marked(&raster, index + 1, &name, &marked)?;
+            engine.read_page_marked(raster, index + 1, &name, &marked)?;
         if let Some(dir) = &args.crops {
             write_crops(dir, index + 1, &read.crops)?;
         }
@@ -161,20 +180,35 @@ pub(crate) fn run_paddle(
                 .collect()
         };
         if !found.is_empty() {
-            write_figures(args.out.as_deref(), index + 1, &raster, &found)?;
+            write_figures(args.out.as_deref(), index + 1, raster, &found)?;
         }
         if let Some(target) = &args.boxes {
-            write_boxes(
-                target,
-                index + 1,
-                args.pages.len(),
-                &raster,
-                &line_shapes(&read.page),
-            )?;
+            let mut shapes = line_shapes(&read.page);
+            if let Some(page) = &original {
+                for shape in &mut shapes {
+                    shape.quad = stage.locate(&shape.quad);
+                }
+                write_boxes(
+                    target,
+                    index + 1,
+                    args.pages.len(),
+                    page,
+                    &shapes,
+                )?;
+            } else {
+                write_boxes(
+                    target,
+                    index + 1,
+                    args.pages.len(),
+                    raster,
+                    &shapes,
+                )?;
+            }
         }
         figures.push(found.iter().map(Figure::quad).collect());
         regions.push(marked);
         pages.push(read.page);
+        prepared.push(stage);
     }
 
     let markdown = matches!(args.format, OcrFormatArg::Md);
@@ -189,12 +223,42 @@ pub(crate) fn run_paddle(
             recognition,
             layout: marker.as_ref().map(Detector::model),
         },
+        &prepared,
         markdown,
         args.out.as_deref(),
         json,
         pretty,
     )
     .map_err(CliError::from)
+}
+
+/// Loads the preprocessing stage, or nothing when nothing was asked for.
+fn load_preprocessor(
+    model_dir: &Path,
+    options: preprocess::Options,
+    device_arg: crate::cli::DeviceArg,
+) -> Result<Option<Preprocessor>, CliError> {
+    if !options.any() {
+        return Ok(None);
+    }
+    let resolved = device(device_arg).resolve()?;
+    Ok(Some(Preprocessor::load(
+        model_dir,
+        options,
+        &resolved,
+        &mut crate::asr::progress::download_progress(),
+    )?))
+}
+
+/// Runs the stage over one page, or hands it straight back.
+fn prepare(
+    preprocessor: &Option<Preprocessor>,
+    page: RawPage,
+) -> Result<Prepared, CliError> {
+    match preprocessor {
+        None => Ok(Prepared::untouched(page)),
+        Some(preprocessor) => Ok(preprocessor.run(page)?),
+    }
 }
 
 /// Resolves and loads the layout model.
@@ -321,14 +385,19 @@ pub(crate) fn run_vl(
         model_dir,
         &options.detection,
     ));
+    let preprocess = args.preprocess.options();
     announce_downloads(
         &reading,
         layout_model
             .as_deref()
             .map(|name| layout_download::pending(model_dir, name))
-            .unwrap_or_default(),
+            .unwrap_or_default()
+            .into_iter()
+            .chain(preprocess.pending(model_dir))
+            .collect(),
     );
 
+    let preprocessor = load_preprocessor(model_dir, preprocess, args.device)?;
     let mut engine = vl::Engine::load(
         model_dir,
         device(args.device),
@@ -353,16 +422,36 @@ pub(crate) fn run_vl(
     let mut pages: Vec<Page> = Vec::with_capacity(args.pages.len());
     let mut figures: Vec<Vec<Quad>> = Vec::with_capacity(args.pages.len());
     let mut regions: Vec<Vec<Region>> = Vec::with_capacity(args.pages.len());
+    let mut prepared: Vec<Prepared> = Vec::with_capacity(args.pages.len());
     let started = Instant::now();
     for (index, path) in args.pages.iter().enumerate() {
         let number = index + 1;
         let mut report = block_progress(started, number, args.pages.len());
+        let photograph = RawPage::load(path)?;
+        let original = (args.boxes.is_some() && preprocess.any())
+            .then(|| photograph.clone());
+        let stage = prepare(&preprocessor, photograph)?;
+        write_rectified(
+            args.preprocess.rectified.as_deref(),
+            number,
+            args.pages.len(),
+            &stage,
+        )?;
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string());
         let marked = match &marker {
             None => Vec::new(),
-            Some(marker) => marker.detect_file(path)?,
+            Some(marker) => marker.detect(&stage.page)?,
         };
-        let read =
-            engine.read_file_marked(path, number, &marked, &mut report)?;
+        let read = engine.read_page_marked(
+            &stage.page,
+            number,
+            &name,
+            &marked,
+            &mut report,
+        )?;
         if let Some(dir) = &args.crops {
             write_blocks(dir, number, &read)?;
         }
@@ -375,24 +464,30 @@ pub(crate) fn run_vl(
                 .map(figure_of)
                 .collect()
         };
-        if !found.is_empty() || args.boxes.is_some() {
-            let raster = RawPage::load(path)?;
-            if !found.is_empty() {
-                write_figures(args.out.as_deref(), number, &raster, &found)?;
-            }
-            if let Some(target) = &args.boxes {
+        if !found.is_empty() {
+            write_figures(args.out.as_deref(), number, &stage.page, &found)?;
+        }
+        if let Some(target) = &args.boxes {
+            let mut shapes = block_shapes(&read);
+            if let Some(page) = &original {
+                for shape in &mut shapes {
+                    shape.quad = stage.locate(&shape.quad);
+                }
+                write_boxes(target, number, args.pages.len(), page, &shapes)?;
+            } else {
                 write_boxes(
                     target,
                     number,
                     args.pages.len(),
-                    &raster,
-                    &block_shapes(&read),
+                    &stage.page,
+                    &shapes,
                 )?;
             }
         }
         figures.push(found.iter().map(Figure::quad).collect());
         regions.push(marked);
         pages.push(read.page);
+        prepared.push(stage);
     }
     finish_progress();
 
@@ -407,6 +502,7 @@ pub(crate) fn run_vl(
             recognition,
             layout: marker.as_ref().map(Detector::model),
         },
+        &prepared,
         matches!(args.format, OcrFormatArg::Md),
         args.out.as_deref(),
         json,
@@ -766,6 +862,46 @@ fn write_boxes(
         raster.width as usize,
         raster.height as usize,
         shapes,
+    )?;
+    let path = if pages > 1 || target.is_dir() {
+        std::fs::create_dir_all(target).map_err(|source| OcrError::Write {
+            path: target.display().to_string(),
+            source,
+        })?;
+        target.join(format!("p{page:03}.png"))
+    } else {
+        target.to_path_buf()
+    };
+    std::fs::write(&path, png).map_err(|source| OcrError::Write {
+        path: path.display().to_string(),
+        source,
+    })?;
+    Ok(())
+}
+
+/// Writes the page the reading was actually done on.
+///
+/// Only when the stage changed something: a run that asked for straightening
+/// and got a page that needed none should not be handed a copy of its own
+/// file.
+fn write_rectified(
+    target: Option<&Path>,
+    page: usize,
+    pages: usize,
+    prepared: &Prepared,
+) -> Result<(), CliError> {
+    let Some(target) = target else {
+        return Ok(());
+    };
+    if !prepared.changed() {
+        return Ok(());
+    }
+    let raster = &prepared.page;
+    let png = overlay::draw_png(
+        &raster.bgr,
+        raster.width as usize,
+        raster.height as usize,
+        &[],
     )?;
     let path = if pages > 1 || target.is_dir() {
         std::fs::create_dir_all(target).map_err(|source| OcrError::Write {

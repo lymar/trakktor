@@ -1299,6 +1299,12 @@ pub fn print_ocr(
     // reporting a language it never used would be an invention.
     language: Option<&str>,
     models: OcrModels<'_>,
+    // What the preprocessing stage did to each page, when it ran. Every
+    // quadrangle reported below is put back through this, so that a caller who
+    // straightened a photograph still gets boxes on the file they handed in —
+    // while the Markdown above is assembled on the straightened page, where
+    // the columns are columns and the lines are level.
+    prepared: &[trakktor_core::ocr::preprocess::Prepared],
     markdown: bool,
     out: Option<&std::path::Path>,
     json: bool,
@@ -1353,7 +1359,20 @@ pub fn print_ocr(
     }
 
     if json {
-        let pages_json: Vec<Value> = pages
+        // From here on the pages are the caller's own again: same lines, same
+        // order, quadrangles moved back onto the file they came from.
+        let located: Vec<trakktor_core::ocr::Page> = pages
+            .iter()
+            .enumerate()
+            .map(|(at, page)| {
+                let mut page = page.clone();
+                if let Some(prepared) = prepared.get(at) {
+                    prepared.relocate(&mut page);
+                }
+                page
+            })
+            .collect();
+        let pages_json: Vec<Value> = located
             .iter()
             .zip(&analysed)
             .enumerate()
@@ -1387,7 +1406,8 @@ pub fn print_ocr(
                 let marked =
                     regions.get(at).map(Vec::as_slice).unwrap_or_default();
                 if !marked.is_empty() {
-                    item["blocks"] = json!(blocks_json(layout));
+                    item["blocks"] =
+                        json!(blocks_json(layout, prepared.get(at)));
                 }
                 item
             })
@@ -1440,7 +1460,10 @@ impl OcrModels<'_> {
 /// the layout model's word, present only where the model claimed the block,
 /// and `kind` is what the analysis made of it, which is what the Markdown was
 /// built from. A block the model never saw carries the kind alone.
-fn blocks_json(layout: &trakktor_core::ocr::layout::Layout) -> Vec<Value> {
+fn blocks_json(
+    layout: &trakktor_core::ocr::layout::Layout,
+    prepared: Option<&trakktor_core::ocr::preprocess::Prepared>,
+) -> Vec<Value> {
     use trakktor_core::ocr::layout::BlockKind;
 
     layout
@@ -1455,9 +1478,13 @@ fn blocks_json(layout: &trakktor_core::ocr::layout::Layout) -> Vec<Value> {
                 BlockKind::PageFurniture => "furniture",
                 BlockKind::Caption => "caption",
             };
+            let quad = match prepared {
+                None => block.quad,
+                Some(prepared) => prepared.locate(&block.quad),
+            };
             let mut item = json!({
                 "kind": kind,
-                "quad": block.quad.points.iter()
+                "quad": quad.points.iter()
                     .map(|(x, y)| json!([round1(*x), round1(*y)]))
                     .collect::<Vec<_>>(),
                 "lines": block.lines,

@@ -1,0 +1,133 @@
+% Source pages for the photographed-page corpus.
+%
+% Three pages of invented prose: page 1 is the single-page subject, pages 2
+% and 3 are the two halves of a spread. Everything here is written for this
+% corpus and for nothing else.
+%
+% Two deliberate departures from ordinary book typesetting, both so that the
+% ground-truth text is exactly the text on the page:
+%
+%   * hyphenation is off, so no word is ever broken across a line;
+%   * ligatures are off, so "fi" is two characters on the page and two in the
+%     ground truth.
+%
+% Build: xelatex -output-directory <dir> page.tex
+
+\documentclass[11pt,twoside]{book}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[
+  paperwidth=5.5in, paperheight=8.5in,
+  inner=0.85in, outer=0.7in, top=0.8in, bottom=0.8in,
+  headsep=14pt, footskip=26pt
+]{geometry}
+\usepackage{tgtermes}
+\usepackage[verbose=silent]{microtype}
+\DisableLigatures[f,q]{encoding = T1}
+\usepackage{fancyhdr}
+
+% No hyphenation anywhere: the ground truth is the text, unbroken.
+\hyphenpenalty=10000
+\exhyphenpenalty=10000
+\tolerance=9999
+\emergencystretch=3em
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[LE]{\small\scshape The Harbour Lights of Calder Bay}
+\fancyhead[RO]{\small\scshape Keeping the Lamp}
+\fancyfoot[C]{\small\thepage}
+\renewcommand{\headrulewidth}{0pt}
+
+\setlength{\parindent}{1.2em}
+\setcounter{page}{41}
+
+\begin{document}
+
+%% ---------------------------------------------------------------- page 41
+\section*{3\quad Keeping the Lamp}
+
+The keeper who came to Calder Bay in the spring of 1874 found the lamp room
+in good order and the stair in none at all. His first report to the board
+runs to four pages, of which three concern the stair. It is a document worth
+reading, because it shows a man discovering that the work he had been hired
+to do was the smaller half of the work in front of him.
+
+A light is not a lamp. The lamp is the least of it: a wick, a reservoir, a
+chimney of clear glass. What makes a light is the discipline around the lamp,
+and that discipline was written down in a thin book the board issued to every
+station on the coast. The book gave the hour of lighting for each week of the
+year, the height of the flame in eighths of an inch, and the order in which
+the lenses were to be wiped. It did not give reasons. Keepers were expected
+to supply those themselves, and most of them did.
+
+Three duties fell outside the book and were understood to be absolute:
+
+\begin{itemize}
+  \setlength{\itemsep}{0.15em}
+  \item the light burns from sunset to sunrise, in every weather, without
+        exception and without shortening;
+  \item the log is written the same night, in ink, and never made up from
+        memory in the morning;
+  \item the store of oil is counted on the first day of each month and the
+        count is entered whether or not it agrees with the last one.
+\end{itemize}
+
+The third of these caused more trouble than the other two together. Oil
+disappeared. It disappeared slowly, in quantities too small to accuse anyone
+of, and the board's answer was to demand a count that would make the loss
+visible over a season rather than a night. Calder Bay lost eleven gallons in
+the year to March 1875, which the keeper recorded without comment, and four
+in the year after, which he recorded with a good deal of comment indeed.
+
+\newpage
+
+%% ---------------------------------------------------------------- page 42
+What the board never wrote down, and what every keeper learned in the first
+autumn, was the difference between a night that is merely dark and a night
+that is dark and moving. On a still night the light does its own work. The
+keeper trims the wick at ten, again at two, and spends the hours between
+them reading or writing or doing nothing at all. On a night of weather he
+does not sit down. Salt spray dries on the outer glass in a film that no
+amount of rubbing will shift once it has set, so the glass is wiped every
+hour whether it needs it or not, and the wiping is done from the inside
+where a man can stand.
+
+The Calder Bay tower is eighty-two feet from the rock to the gallery, and
+the stair turns eleven times. A keeper who wiped the glass hourly through a
+December gale climbed something near two thousand feet in a night, most of
+it after midnight, and came off watch at seven to sleep through the short
+grey daylight. The board considered this ordinary. So, on the evidence of the
+logs, did the keepers.
+
+There is a page in the Calder Bay log for the eighteenth of January 1877 that
+has been reproduced more often than any other. The entry is four words long
+and reads: \emph{Light burning. Sea over gallery.} The gallery is seventy
+feet above high water.
+
+\newpage
+
+%% ---------------------------------------------------------------- page 43
+The relief came by boat, and the boat came when it could. In the calmer half
+of the year the crossing was an hour and the relief was punctual to the day.
+Between November and March it was neither. A keeper due to be relieved on the
+first of the month might see the boat on the ninth, or the fourteenth, or not
+at all until the weather broke. The station held stores for ninety days for
+exactly this reason, and twice in its first decade it needed most of them.
+
+Being late is not the same as being forgotten, and the board took some care
+over the difference. Every station on this coast had a signal --- a shape
+hoisted on the gallery rail, visible from the headland in clear weather ---
+which meant that all was well and no boat was needed. The absence of the
+signal meant nothing in itself, because the weather that kept the boat away
+also kept the headland out of sight. What the board watched for was the
+light. A station that showed its light was a station in working order,
+whatever else might be true of it, and a station that failed to show one was
+a station in trouble, and the boat went out.
+
+In fifty-one years Calder Bay failed once, for two hours on the night of the
+fourth of March 1889, and the reason was entered in the log the same night
+in a hand that is noticeably steadier than the sentence it wrote.
+
+\end{document}

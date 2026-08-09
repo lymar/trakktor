@@ -271,6 +271,7 @@ pub struct Conv {
     bias: Option<Tensor>,
     stride: usize,
     padding: usize,
+    dilation: usize,
     groups: usize,
 }
 
@@ -296,13 +297,29 @@ impl Conv {
             bias,
             stride,
             padding,
+            dilation: 1,
             groups,
         })
     }
 
+    /// Spreads the kernel's taps `dilation` apart.
+    ///
+    /// Only the unwarper's bridge needs this, and it needs it badly: its six
+    /// branches see the page at dilations from one to eighteen, which is how a
+    /// network on a 45x31 grid reaches across a whole page.
+    pub fn dilated(mut self, dilation: usize) -> Self {
+        self.dilation = dilation;
+        self
+    }
+
     pub fn forward(&self, x: &Tensor) -> Result<Tensor, OcrError> {
-        let y =
-            x.conv2d(&self.weight, self.padding, self.stride, 1, self.groups)?;
+        let y = x.conv2d(
+            &self.weight,
+            self.padding,
+            self.stride,
+            self.dilation,
+            self.groups,
+        )?;
         Ok(add_channel_bias(&y, self.bias.as_ref())?)
     }
 }

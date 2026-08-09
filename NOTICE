@@ -237,6 +237,34 @@ PP-DocLayout / PaddleX — Apache-2.0 License
   (huggingface.co/PaddlePaddle/PP-DocLayout_plus-L) at runtime and are not
   redistributed in this repository.
 
+PP-LCNet_x1_0_doc_ori / PaddleX — Apache-2.0 License
+  Copyright (c) 2016 PaddlePaddle Authors
+  https://huggingface.co/PaddlePaddle/PP-LCNet_x1_0_doc_ori
+  https://github.com/PaddlePaddle/PaddleX
+  The page-orientation classifier of the document pre-processing stage: a
+  PP-LCNet backbone reading four classes, ported together with the
+  preparation PaddleX's image-classification predictor applies to a page
+  (short side to 256, centre crop to 224, ImageNet normalization) and the
+  reading of a class as the counter-clockwise turn that puts the page
+  upright. Model weights are downloaded from Hugging Face
+  (huggingface.co/PaddlePaddle/PP-LCNet_x1_0_doc_ori) at runtime and are not
+  redistributed in this repository.
+
+UVDoc — MIT License
+  Copyright (c) 2023 Floor Verhoeven, Tanguy Magne, Olga Sorkine-Hornung
+  https://github.com/tanguymagne/UVDoc
+  https://huggingface.co/PaddlePaddle/UVDoc
+  The unwarper of the document pre-processing stage: a dilated-residual
+  trunk, a six-branch dilated bridge and a head predicting a dense backward
+  map, which trakktor applies itself (bilinear enlargement of the map, then a
+  bilinear gather over the page). Ported from the model as PaddleX publishes
+  and exports it. Model weights are downloaded from Hugging Face
+  (huggingface.co/PaddlePaddle/UVDoc) at runtime and are not redistributed in
+  this repository.
+  If you use this work in academic context, its authors ask that you cite:
+  Verhoeven, Magne, Sorkine-Hornung, "UVDoc: Neural Grid-based Document
+  Unwarping", SIGGRAPH Asia 2023.
+
 RT-DETR — Apache-2.0 License
   Copyright (c) 2023 Baidu, Inc.
   https://github.com/lyuwenyu/RT-DETR

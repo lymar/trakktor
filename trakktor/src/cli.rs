@@ -33,7 +33,8 @@ const DEFAULT_MODEL_DIR_NAME: &str = ".trakktor";
 /// audio file to timestamped text, reading a text or Markdown file aloud into
 /// an audio file — in a preset voice or in one cloned from a sample
 /// recording — cutting the silence out of a recording, reading the text off a
-/// scan or a screenshot page by page, marking a page up into labelled blocks
+/// scan, a screenshot or a photograph of a page, page by page, straightening
+/// the photograph first, marking a page up into labelled blocks
 /// (title, heading, paragraph, footnote, table, formula, picture), restoring
 /// punctuation to a raw transcript, splitting a transcript into readable
 /// paragraphs, or marking where the stress falls in Russian text.
@@ -190,6 +191,15 @@ enum Command {
     /// once, and about a second a page; `--no-layout` skips it when only the
     /// lines are wanted. `ocr layout` runs the same model on its own and
     /// answers "what is on this page" without reading a word of it.
+    ///
+    /// A page **photographed** rather than scanned has two more steps waiting
+    /// for it, off by default and shared by both engines: `--doc-orientation`
+    /// turns a page shot sideways or upside down the right way up, and
+    /// `--unwarp` straightens it — the perspective of a shot taken at an
+    /// angle, and the curve of a page that will not lie flat. Add `--sheet`
+    /// when the page is small in the frame, which cuts it out of the desk
+    /// around it first. Boxes come back on the file you passed in whichever
+    /// of them ran.
     Ocr {
         #[command(subcommand)]
         command: OcrCommand,
@@ -272,6 +282,72 @@ pub(crate) enum OcrCommand {
     /// for `ocr vl`, the blocks the model is asked to read. It downloads once,
     /// about 130 MB, and takes about a second a page.
     Layout(Box<OcrLayoutArgs>),
+}
+
+/// What to do to a page before it is read: the two stages that turn a
+/// photograph into something a scanner could have produced.
+///
+/// Both are off by default. On a scan or a rendered PDF they do nothing —
+/// the page is already upright and already flat — and doing nothing costs a
+/// model and a second a page. Turn them on for a photograph.
+#[derive(Debug, Args, Clone)]
+pub(crate) struct OcrPreprocessArgs {
+    /// Find which of the four right angles the page is at, and turn it
+    /// upright before reading it.
+    ///
+    /// This is the whole page, not the individual lines: a photograph taken
+    /// with the phone held sideways comes out with every line running up the
+    /// frame, and no amount of per-line straightening fixes the reading
+    /// order. Only right angles — a page a few degrees off level is a
+    /// different problem, and `--unwarp` is what addresses it. Costs a 7 MB
+    /// model and about a tenth of a second a page.
+    #[arg(long)]
+    pub(crate) doc_orientation: bool,
+
+    /// Straighten the page: undo the perspective of a page shot at an angle
+    /// and the curve of one that will not lie flat.
+    ///
+    /// The result is the page as a scanner would have seen it, and it is what
+    /// gets read. Boxes are still reported on your own file — the way back is
+    /// kept and applied to every quadrangle — so `quad` always points at a
+    /// place in the photograph you handed in. Costs a 32 MB model and about a
+    /// second a page.
+    #[arg(long)]
+    pub(crate) unwarp: bool,
+
+    /// Find the sheet in the frame and cut it out before anything else.
+    ///
+    /// This is trakktor's own step, not upstream's, and it exists because
+    /// `--unwarp` straightens the *frame*: a page that fills the picture it
+    /// was shot in comes out straight, and a page lying on a desk at the far
+    /// end of a wide shot comes out no better than it went in. Cutting the
+    /// sheet out first gives the straightener a page-filling picture, and
+    /// costs no model at all — a threshold, the largest bright region, and
+    /// the same four-corner warp that straightens a line of text.
+    ///
+    /// It declines when there is nothing to do: a scan, or a photograph the
+    /// page already fills, is left alone.
+    #[arg(long)]
+    pub(crate) sheet: bool,
+
+    /// Also write the straightened page itself, so it can be looked at.
+    ///
+    /// A file for a single page, a directory for several. This is the third
+    /// of the checking flags, next to `--crops` and `--boxes`: those show what
+    /// was read and where it was, this one shows the page the reading was
+    /// done on.
+    #[arg(long, value_name = "file|dir")]
+    pub(crate) rectified: Option<PathBuf>,
+}
+
+impl OcrPreprocessArgs {
+    pub(crate) fn options(&self) -> trakktor_core::ocr::preprocess::Options {
+        trakktor_core::ocr::preprocess::Options {
+            orientation: self.doc_orientation,
+            unwarp: self.unwarp,
+            sheet: self.sheet,
+        }
+    }
 }
 
 #[derive(Args)]
@@ -450,6 +526,9 @@ pub(crate) struct OcrPaddleArgs {
     /// `ocr layout --boxes` first, where the result can be looked at.
     #[arg(long, value_name = "p")]
     pub(crate) layout_threshold: Option<f32>,
+
+    #[command(flatten)]
+    pub(crate) preprocess: OcrPreprocessArgs,
 
     /// Inference runtime executing the models. This engine serves `candle`
     /// only; of the OCR engines, `ocr vl` is the one with a burn runtime.
@@ -652,6 +731,9 @@ pub(crate) struct OcrVlArgs {
     /// be looked at for the price of a second rather than a page of reading.
     #[arg(long, value_name = "p")]
     pub(crate) layout_threshold: Option<f32>,
+
+    #[command(flatten)]
+    pub(crate) preprocess: OcrPreprocessArgs,
 
     /// Inference runtime executing the model. Both read the pages the same,
     /// at the same precision (f16 on Metal, f32 on the CPU); `burn` needs a
