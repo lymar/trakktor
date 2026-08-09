@@ -19,21 +19,21 @@ trakktor enhance unipase call.m4a --device metal   # the generative engine
 
 **`gtcrn`, unless you know the recording lost packets.**
 
-| | `gtcrn` (default) | `unipase` |
+| | `gtcrn` (the first choice) | `unipase` |
 |---|---|---|
 | what it is | a masking network on the spectrum | a generative pipeline on a speech encoder's representation |
 | parameters | **48 thousand** | 546 million |
 | weights | 580 KB | 2.17 GB |
-| speed | **a hundredth of real time, one CPU core** | about half of real time, on a GPU |
+| speed | **about a sixtieth of real time, one CPU core** | about half of real time, on a GPU |
 | can put back what is not there | **no** | yes |
 
 The rule has one clause, and it is about packet loss. A masking network predicts
 what to attenuate and multiplies — which is a hard limit, not a tuning choice:
 any mask times digital silence is silence, so it cannot fill the hole a dropped
 packet left. Measured, that is the one degradation where `unipase` is better.
-Everywhere else `gtcrn` is as good or better, at a hundred and fiftieth of the
-cost, and it is the gentler of the two on a recording that did not need
-enhancing.
+Everywhere else `gtcrn` is as good or better — at about a thirtieth of the
+wall clock, on one CPU core against a GPU — and it is the gentler of the two
+on a recording that did not need enhancing.
 
 ## Read this before you use it
 
@@ -56,7 +56,10 @@ The reason is what the model is: a *generative* model that rebuilds speech from
 what a speech encoder understood of it, rather than a filter that subtracts
 noise. When there is enough signal to understand, that is exactly why it can put
 back a band or a lost packet. When there is not, it confabulates — and a made-up
-word comes out of the recogniser looking as confident as a real one.
+word comes out of the recogniser looking as confident as a real one. One more
+caution: the measurements above are on Russian, which is not among the
+languages UniPASE's authors list for it (English, Chinese, Spanish, French,
+German) — on a covered language the confabulation line may sit elsewhere.
 
 So: run it because you know the recording is damaged, not as a matter of course.
 It is deliberately not wired into `asr` as an automatic preprocessing step.
@@ -115,7 +118,7 @@ speech.
 ## Output
 
 ```sh
-trakktor enhance unipase meeting.wav --pretty
+trakktor enhance unipase meeting.wav --device metal --pretty
 ```
 
 ```json
@@ -153,19 +156,22 @@ with a different extension.
 `gtcrn` downloads **580 KB** once and runs on one CPU core faster than the audio
 plays. It has no `--device` or `--runtime`: forty-eight thousand parameters are
 not work a GPU can help with, and a second tensor backend would be a second
-implementation of the same thing.
+implementation of the same thing. `--model` names the checkpoint (default
+`dns3`) or takes a directory of converted weights.
 
 `unipase` downloads **2.17 GB** once, converted into a single file in the model
-directory (`~/.trakktor` by default). Running it is half a billion parameters
-over every eight seconds of audio, so `--device metal` is worth having; on a
-CPU, expect a long recording to take a while. Both runtimes are available there
-— `--runtime candle` (default) and `--runtime burn` — and they agree with the
-reference and with each other to within arithmetic noise. Precision is `f32` by
-default and is the only mode the port is verified in; `--precision f16` is a
-candle-only speed option and is a different computation of the same model.
+directory (`~/.trakktor` by default); its `--model` likewise names the
+checkpoint (default `unipase`) or a local directory. Running it is half a
+billion parameters over every eight seconds of audio, so `--device metal` is
+worth having (the default is `cpu`; the build needs the `metal` feature). Both
+runtimes are available there — `--runtime candle` (default) and `--runtime
+burn`, behind the `burn` build feature — and they agree with the reference and
+with each other to within arithmetic noise. Precision is `f32` by default and
+is the only mode the port is verified in; `--precision f16` is a candle-only
+speed option and is a different computation of the same model.
 
 Both engines are checked against their reference implementations stage by stage:
-`gtcrn`'s waveform lands within 4e-7 of it, `unipase`'s within 2e-5.
+`gtcrn`'s waveform lands within 4e-7 of it, `unipase`'s within about 2e-5.
 
 ## Credits
 

@@ -13,7 +13,8 @@ pipeline (feature extraction, encoder, and transducer decoding follow the
 candle runtime as the other engines, and all the
 [shared behavior](README.md) — audio input, model storage, device and
 precision, output — applies as-is. The models emit **lowercase text without
-punctuation** (the usual form for downstream processing or WER evaluation).
+punctuation** (the usual form for downstream processing or word-error-rate,
+WER, evaluation).
 Vosk does not detect the language; `--language <code>` only annotates the
 output. The shared [`--runtime burn`](README.md#runtime) runs the same network
 on the alternative burn runtime.
@@ -28,7 +29,8 @@ trakktor asr vosk ru.mp3 --model small-streaming-ru --device metal
 Models (downloaded on first use into `~/.trakktor/asr/vosk/<name>/`, or pass a
 path to a directory holding a compatible export — `encoder.onnx`,
 `decoder.onnx`, `joiner.onnx`, `tokens.txt`). The size is the total download
-(the fp32 encoder dominates); "large" models are ~264 MB, "small" ones ~94 MB:
+(the fp32 encoder dominates); "large" models are ~264 MB, "small" ones
+~93–94 MB:
 
 | Model | Language | Type | Size |
 |---|---|---|---|
@@ -48,8 +50,9 @@ export (the same four files) from a local directory.
 Two searches are available with `--decoding`: **`beam`** (the default,
 modified beam search — the reference's method) and **`greedy`** (one token per
 frame — faster, usually slightly less accurate). The transducer decoder runs
-on the CPU from the encoder output, so a chunk is one encoder pass plus one
-read-back on the GPU, like GigaAM.
+on the CPU from the encoder output — always in f32, whatever `--precision`
+set for the encoder — so a chunk is one encoder pass plus one read-back on
+the GPU, like GigaAM.
 
 **Offline** models transcribe audio up to ~25 seconds directly; longer audio
 is split along detected speech into chunks (the same voice-activity

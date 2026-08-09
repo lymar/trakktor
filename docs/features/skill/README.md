@@ -36,5 +36,6 @@ install requires `~/.claude` to already exist — it is never created, and the
 command fails if it is missing. The stub only points back at `trakktor skill
 show`, so it never goes stale between releases. An existing `SKILL.md` is left
 untouched unless `--force` is given. By default the result is a single JSON
-object `{ "path": "…", "status": "written" | "skipped" }`; `--text` prints it as
-lines.
+object `{ "path": "…", "status": "written" | "skipped" }`; `--text` prints one
+status line instead — `installed: <path>`, or
+`skipped (exists, use --force): <path>`.

@@ -37,8 +37,8 @@ own models and flags live on its page.
 The one required argument is the path to an audio file. It is decoded by a
 **built-in decoder** — no ffmpeg or other external tool is needed — then
 internally downmixed to mono and resampled to 16 kHz. Supported inputs: mp3,
-aac (LC), vorbis, flac, alac, and raw PCM, held in wav, aiff, caf, ogg, mp4, or
-mkv containers.
+aac (LC), vorbis, flac, alac, adpcm, and raw PCM, held in wav, aiff, caf, ogg,
+mp4, or mkv containers.
 
 ```
 --audio-decoder builtin|ffmpeg   # default: builtin
@@ -118,23 +118,27 @@ runtime by default (as do [`text structify`](../text/README.md) and
 An alternative [burn](https://github.com/tracel-ai/burn)
 runtime is available behind the `burn` build feature and selected per run with
 `--runtime burn` (candle needs nothing extra; burn brings its own Metal
-backend, independent of the `metal` feature). Both runtimes produce the same
-transcription — byte-identical in f32 on our test material; f16 runs may swap
-the odd word, as with any half-precision kernel change (and since Whisper
-conditions each window on the previous text, on a long recording one swapped
-word can ripple into locally different, equally valid phrasing downstream).
-On Metal the two runtimes are close: burn measured moderately faster than
-candle for Whisper `large-v3` at a lower memory peak, and on par for GigaAM
-and Vosk.
-(One known exception: candle degrades on Metal with `--precision f32` on
-Whisper `large-v3` — for full precision on the GPU use `--runtime burn`,
-which handles it correctly.) The very first burn run on a machine is a few
-times slower while it autotunes its GPU kernels; trakktor announces this on
-stderr when it is about to happen, the tuning result is cached, and later
-runs are full speed. The burn CPU backend computes in f32 only, so
-combine `--runtime burn` on the CPU with `--precision f32` — and expect it to
-be several times slower than candle there (its CPU matmuls do not
-parallelize the way candle's do); the burn runtime is aimed at Metal.
+backend, independent of the `metal` feature). What to know about it:
+
+- **Parity.** Both runtimes produce the same transcription — byte-identical
+  in f32 on our test material; f16 runs may swap the odd word, as with any
+  half-precision kernel change (and since Whisper conditions each window on
+  the previous text, on a long recording one swapped word can ripple into
+  locally different, equally valid phrasing downstream).
+- **Speed on Metal.** The two are close: burn measured moderately faster than
+  candle for Whisper `large-v3` at a lower memory peak, and on par for GigaAM
+  and Vosk.
+- **A known candle defect.** candle degrades on Metal with `--precision f32`
+  on Whisper `large-v3` — for full precision on the GPU use `--runtime burn`,
+  which handles it correctly.
+- **First-run autotuning.** The very first burn run on a machine is a few
+  times slower while it autotunes its GPU kernels; trakktor announces this on
+  stderr when it is about to happen, the tuning result is cached, and later
+  runs are full speed.
+- **The burn CPU backend** computes in f32 only, so combine `--runtime burn`
+  on the CPU with `--precision f32` — and expect it to be several times
+  slower than candle there (its CPU matmuls do not parallelize the way
+  candle's do); the burn runtime is aimed at Metal.
 
 ## Timestamps and output shape
 

@@ -21,8 +21,8 @@ trakktor ocr vl     photo.jpg --doc-orientation --sheet --unwarp
 
 **Use all three together.** They are separate flags because they answer separate
 questions, not because they are meant to be picked between: `--unwarp` on its
-own can make a reading *worse* (see [below](#why-sheet-exists)), and `--sheet`
-is what stops it.
+own can make a reading *worse* (see [below](#why-the-sheet-step-exists)), and
+`--sheet` is what stops it.
 
 They are off by default because on a scan or a rendered PDF page they do
 nothing — the page is already upright and already flat — and doing nothing
@@ -94,7 +94,7 @@ wanted.
 A page that needed none of this pays none of it: with nothing to undo, there is
 no journey back.
 
-## Why `--sheet` exists
+## Why the sheet step exists
 
 The straightener works on the **frame**, not on the sheet in it. It shrinks the
 whole picture into a fixed 712×488 box and decides the page's shape from that.

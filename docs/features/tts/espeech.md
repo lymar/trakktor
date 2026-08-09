@@ -37,7 +37,8 @@ trakktor tts espeech --text-file chapter.md --ref-audio narrator.wav \
 | `--speed <float>` | `1.0` | Speech rate as a multiplier on the predicted duration: below 1 gives the words more room. |
 | `--seed <int>` | `0` | The noise the reading starts from. Same seed, same file; another seed, another reading of the same text in the same voice. |
 | `--stress <auto\|off>` | `auto` | Whether to mark the stress before speaking (see below). `auto` marks the text **and the reference transcript**; `off` speaks them exactly as given. |
-| `--text-file`, `--text-format`, `--pause-ms`, `--levels`, `--audio-encoder`, `--bitrate` | — | The [shared `tts` options](README.md). |
+| `--language <lang>` | `auto` | Exists for symmetry across the engines; this one speaks Russian — `auto` and `russian` are accepted, anything else is refused. |
+| `-o/--output`, `--text-file`, `--text-format`, `--pause-ms`, `--levels`, `--audio-encoder`, `--bitrate` | — | The [shared `tts` options](README.md). |
 | `--precision <f32\|f16>` | `f32` | `f16` is what the reference itself runs on a GPU and about 16 % faster here, but it is **not** the same run in fewer bits: over 32 steps the small differences compound into a slightly different — equally good — reading. The vocoder and the spectrogram always run in full precision. |
 | `--runtime <candle\|burn>` | `candle` | burn needs the `burn` build feature, computes in f32 only, and measured ~1.7× slower here. |
 | `--device <cpu\|metal>` | `cpu` | `metal` needs the `metal` build feature and is ~3.5× faster than the CPU. |
@@ -141,6 +142,10 @@ The engine reports what it used:
                "stressed_ref_text": "В+етер ст+их т+олько к +утру, +и ст+ало сл+ышно р+еку." }
 }
 ```
+
+`ref_seconds` is how much of the reference was actually used; when the
+recording ran past the 12-second cap and was trimmed, the block also carries
+`"ref_clipped": true`.
 
 The first use of a model downloads its checkpoint (2.7 GB as published) and
 converts it in place to what inference actually needs — the moving average of the

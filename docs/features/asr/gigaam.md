@@ -49,7 +49,8 @@ pass a path to a local `.ckpt`):
 The `v3_e2e_*` models emit readable, punctuated Russian. The plain `v3_ctc`
 and `v3_rnnt` models emit normalized lowercase text without punctuation
 (their alphabet has none) — the usual form for downstream text processing or
-WER evaluation; pick `v3_rnnt` when raw-text accuracy matters most:
+word-error-rate (WER) evaluation; pick `v3_rnnt` when raw-text accuracy
+matters most:
 
 ```sh
 trakktor asr gigaam ru.mp3 --model v3_rnnt --device metal --text

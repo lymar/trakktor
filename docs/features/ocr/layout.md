@@ -5,7 +5,8 @@
 
 A model that looks at a page and returns the **blocks it is made of**, each with
 a label — document title, section heading, paragraph, abstract, footnote,
-running head, page number, table, formula, picture, caption, stamp, chart. It
+running head, page number, table, formula, picture, caption, stamp, chart,
+among the twenty classes the model tells apart. It
 reads no text. This is the answer to *what is on this page*, not *what does it
 say*.
 

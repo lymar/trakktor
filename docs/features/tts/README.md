@@ -42,11 +42,12 @@ cat notes.md | trakktor tts qwen3-tts --text-file - --text-format md -o notes.wa
 The text comes as the positional argument, from `--text-file`, or from standard
 input (`--text-file -`) — exactly one of them.
 
-**Long text is spoken whole.** One utterance is capped at two minutes of speech
-(the checkpoints would allow more, but a single derailed generation costs
-minutes and the model was trained on utterances, not chapters), so the text is
-split into paragraphs, each is spoken separately, and the pieces are joined
-into one file:
+**Long text is spoken whole.** Every engine caps one utterance — `qwen3-tts`
+at two minutes of speech (its checkpoints would allow more, but a single
+derailed generation costs minutes and the model was trained on utterances, not
+chapters), `espeech` at the ~22 seconds its window fits, `silero` at just over
+a minute — so the text is split into paragraphs, each is spoken separately,
+and the pieces are joined into one file:
 
 - `--text-format <auto|txt|md>` says where paragraphs end. `txt` takes one
   paragraph per line; `md` separates them with blank lines and strips the
@@ -73,10 +74,12 @@ into one file:
   6 dB and never into clipping. `--levels keep` leaves them as synthesized.
   (Pace and delivery drift too, and that part cannot be fixed after the fact —
   lowering the temperature does not help either.)
-- Every piece is sampled from a seed derived from `--seed`, so the same run
-  reproduces the same file.
+- In the sampling engines — `qwen3-tts` and `espeech` — every piece starts
+  from a seed derived from `--seed`, so the same run reproduces the same file.
+  `silero` samples nothing and has no seed: one pass is always the same pass.
 
-The audio is always written to a file — raw samples on stdout would not survive
+The audio is always written to a file (`-o/--output`, default `speech.wav`) —
+raw samples on stdout would not survive
 the machine-readable contract — and `stdout` carries the metadata:
 
 ```json
@@ -94,9 +97,11 @@ the machine-readable contract — and `stdout` carries the metadata:
 ```
 
 `chunks` is how many pieces were spoken and stitched together, and `frames`
-their total. Should a piece still run into the two-minute cap, it is cut down
-and spoken again (twice at most); if even that does not help, the engine block
-carries `"truncated": true` and the tail of that piece is missing.
+their total. Should a `qwen3-tts` piece still run into its two-minute cap, it
+is cut down and spoken again (twice at most); if even that does not help, the
+engine block carries `"truncated": true` and the tail of that piece is
+missing. The other engines never truncate: `espeech` sizes its window to the
+piece, and `silero` refuses an over-long piece with `text_too_long` instead.
 
 The container follows the `--output` extension: `.wav` (32-bit float, exactly
 as synthesized) and `.flac` (quantized to 24 bits) are written by the built-in

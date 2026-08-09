@@ -12,7 +12,7 @@ That is a different bargain from [`paddle`](paddle.md), not a better one:
 
 | | `paddle` | `vl` |
 |---|---|---|
-| download | ~96 MB, or 13 MB at `--quality fast` | **~2 GB**, once |
+| download | ~139 MB, or 13 MB at `--quality fast` | **~2 GB**, once |
 | a page | some ten seconds, less at `--quality fast` | tens of seconds |
 | alphabet | the recognizer's dictionary | whatever the model knows |
 | tables, formulas | lines of text | markup, LaTeX |
@@ -41,13 +41,16 @@ blocks, and reads a block at a time. The detector is what makes the arrangement
 work: it finds lines in scripts that no recognizer in the classic catalog could
 read.
 
-**The detector here is the large one** (`PP-OCRv5_server_det`, 88 MB), as it is
-in `paddle` — but there is no `--quality fast` here to trade it back for. A line
+**The detector here is the large one** (`PP-OCRv5_server_det`, 88 MB —
+`paddle` has since moved its default to the newer `PP-OCRv6_medium_det`; this
+engine keeps the v5) — and there is no `--quality fast` here to trade it back
+for. A line
 the small detector misses is not merely missing from the result: it also changes
 how the lines around it are grouped, so a footnote can come back as a fragment
 with its opening gone. The saving would be about three seconds on a page that
 already takes thirty, which is not a speed anybody came here for. Pass
-`--det-model PP-OCRv5_mobile_det` if you want it anyway.
+`--det-model PP-OCRv5_mobile_det` if you want it anyway; `--model` does the
+same for the VL checkpoint itself — a published name or a local directory.
 
 One caveat comes with it, and it applies here as much as in `paddle`: the large
 detector's probability map is sharper, so an ordinary line can score just under
@@ -57,7 +60,9 @@ weak boxes over decorative ink also make it in, shift the blocks around them,
 and can pull hallucinated lines into the result. Measured across a page set,
 0.4 changed nothing on most pages, recovered a dropped line on one, and traded
 lines for hallucinations on the ornate ones — which is why it is a flag and not
-the default.
+the default. The detector's other two knobs, `--thresh` and `--unclip-ratio`,
+exist here as well, at the v5 defaults (0.3 and 1.5) —
+[the `paddle` page](paddle.md) explains all three.
 
 Two consequences worth knowing:
 
@@ -157,7 +162,9 @@ the sheet's blocks have nothing to do with it.
 `ocr` reads the text and is the only one that works block by block. The other
 three are asked of the **page as a whole**, because a table or a formula is
 itself one region and cutting it up destroys the structure that made the
-question worth asking.
+question worth asking. What each returns: a table as markup and a formula as
+LaTeX (both below); `chart` has the model describe what the chart shows, and
+the description is passed through as the model wrote it.
 
 ### What a table comes back as
 
@@ -208,7 +215,8 @@ and plain in the source.
 A generative reader does not fail by producing a wrong letter; it fails by not
 stopping — one syllable, or one short phrase, repeated until the budget runs
 out. So the loop watches for that explicitly and cuts the answer where the
-repetition began.
+repetition began. A line cut that way — or at the `--max-tokens` ceiling —
+carries `"truncated": true` in the output.
 
 ```
 --max-tokens <n>           # default: 1024   ceiling on one block's answer
@@ -238,7 +246,8 @@ reported rather than a made-up precise one.
 
 This engine takes the shared [page preprocessing](photo.md) too —
 `--doc-orientation --sheet --unwarp`, off by default. It matters here for the
-same reason `--limit-side-len` does: this engine reads **blocks**, and blocks
+same reason `--limit-side-len` does (its default here is 1440, against
+`paddle`'s 960): this engine reads **blocks**, and blocks
 are assembled from the detector's lines. A page that is not upright does not
 merely read badly, it is grouped into blocks that were never on the page.
 
@@ -265,13 +274,13 @@ text, so the choice costs nothing but memory and speed.
 ```
 
 Two independent implementations of the same networks, reading the pages the
-same. `candle` is the default and the fast one. `burn` sits behind the `burn`
-build feature and computes in f32 on either device — its half-precision Metal
-backend cannot run this model yet — which on a GPU makes it measurably slower
-than candle's f16; it is kept as a second, independently written implementation
-to check the first against, not as a speed play. The detection stage runs on
-candle either way. Of the two OCR engines only `vl` has a burn runtime;
-`ocr paddle --runtime burn` is a validation error.
+same and at the same precision — f16 on Metal, f32 on the CPU. `candle` is the
+default. `burn` sits behind the `burn` build feature and runs its Metal
+backend with tensor-op fusion turned off — fused, the f16 kernels break on
+this model's mixed-precision chains — and is kept as a second, independently
+written implementation to check the first against, not as a speed play. The
+detection stage runs on candle either way. Of the two OCR engines only `vl`
+has a burn runtime; `ocr paddle --runtime burn` is a validation error.
 
 ## Languages
 

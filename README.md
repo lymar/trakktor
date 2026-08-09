@@ -68,9 +68,9 @@ Each command is documented in full on its own page under
   a damaged recording in, a repaired one out — room noise and hiss removed,
   reverberation reduced, and, with the right engine, the holes a dropped packet
   leaves in a call filled in from the words on either side. Two engines.
-  `gtcrn` is the default and the one to reach for: a masking network of
-  **forty-eight thousand** parameters, 580 KB of weights, a hundredth of real
-  time on one CPU core. `unipase` is generative — five hundred and forty-six
+  `gtcrn` is the one to reach for: a masking network of
+  **forty-eight thousand** parameters, 580 KB of weights, about a sixtieth of
+  real time on one CPU core. `unipase` is generative — five hundred and forty-six
   million parameters — and earns its keep on exactly one thing a mask cannot do,
   filling a hole. Either way this repairs damage and does **not** improve a
   recording that is already good: the page says where each helps and where it
@@ -114,8 +114,10 @@ cd trakktor
 cargo install --locked --path trakktor
 ```
 
-For GPU acceleration on macOS (speech recognition and text structuring), add
-`--features metal` to either install command; see
+For GPU acceleration on macOS — speech recognition and synthesis, OCR, speech
+enhancement, and the `text` commands — add `--features metal` to either
+install command; the `burn` build feature adds the alternative burn runtime
+(`--runtime burn`) the same way. See
 [Device and precision](docs/features/asr/README.md#device-and-precision) in
 the `asr` docs.
 
@@ -174,10 +176,12 @@ read-state), `--model-dir <path>` (also `TRAKKTOR_MODEL_DIR`; default
 
 trakktor ports and builds on several open-source projects, all MIT- or
 Apache-licensed — Whisper, GigaAM, Vosk, Qwen3-TTS, F5-TTS and the ESpeech
-checkpoints, Vocos, Silero-VAD, Silero Stress, SaT / wtpsplit, the
-1-800-BAD-CODE punctuation model, PaddleOCR (with DB, the detection algorithm
-it builds on) and PaddleOCR-VL (with the ERNIE-4.5 decoder it is built on),
-UniPASE (with WavLM and PASE behind it), on the candle and burn runtimes. The full credits — with
-licenses, upstream links, and papers — live in
-[`docs/acknowledgments.md`](docs/acknowledgments.md); see [`NOTICE`](NOTICE)
-for the complete third-party attributions and license notices.
+checkpoints, Vocos, Silero-VAD, Silero TTS, Silero Stress, SaT / wtpsplit,
+the 1-800-BAD-CODE punctuation model, PaddleOCR (with DB, the detection
+algorithm it builds on), PaddleOCR-VL (with the ERNIE-4.5 decoder it is built
+on) and UVDoc for straightening photographed pages, GTCRN and UniPASE (with
+WavLM and PASE behind them) for speech enhancement, on the candle and burn
+runtimes. The full credits — with licenses, upstream links, and papers — live
+in [`docs/acknowledgments.md`](docs/acknowledgments.md); see
+[`NOTICE`](NOTICE) for the complete third-party attributions and license
+notices.

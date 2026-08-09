@@ -71,11 +71,13 @@ trakktor text structify transcript.txt --model sat-3l-sm --text
 --precision f16|f32     # default: f16
 ```
 
-`--device metal` runs on the macOS GPU and needs a build with the `metal`
-feature (as for [`asr`](../asr/README.md#device-and-precision)); without it,
-`--device metal` is rejected. `--precision
+`--device metal` runs on the macOS GPU: on the candle runtime it needs a build
+with the `metal` feature, on burn the `burn` feature brings its own backend
+(as for [`asr`](../asr/README.md#device-and-precision)); without the matching
+feature, `--device metal` is rejected. `--precision
 f16` (the default) uses about half the memory and is faster; `f32` computes in
-full precision for reproducible results.
+full precision for reproducible results — and on the burn CPU backend f32 is
+what runs regardless, as it has no half-precision elements.
 
 The shared `--runtime` flag applies too: `--runtime burn` runs the same
 network on the alternative burn runtime (see the
@@ -284,7 +286,11 @@ model runs. A malformed line is an error, not a silent skip.
 
 This is the way to fix a word the model gets wrong. On its own it reads
 `Он показал мне киноварь` as `к+иноварь`; with the entry above it reads
-`кинов+арь`, and it stays that way in every later run.
+`кинов+арь`, and it stays that way in every later run:
+
+```sh
+trakktor text stress chapter.txt --dict names.dict --text
+```
 
 ### Models, runtime, device, precision
 
@@ -292,7 +298,8 @@ This is the way to fix a word the model gets wrong. On its own it reads
 --model <name|dir>      # default: silero-ru
 --runtime candle|burn   # default: candle
 --device cpu|metal      # default: cpu
---precision f32|f16     # default: f32
+--precision f16|f32     # default: f32
+--batch-size 256        # words per forward batch
 ```
 
 One model ships today: **`silero-ru`**, downloaded on first use (54 MB) into

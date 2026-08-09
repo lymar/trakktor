@@ -10,11 +10,17 @@ codebook of every 12.5 Hz frame; a small code predictor fills that frame's
 remaining 15 residual codebooks; and a causal convolutional codec decoder turns
 the finished frames into a 24 kHz waveform.
 
+```bash
+trakktor tts qwen3-tts "Привет! Это синтез речи." --language russian -o hello.wav
+trakktor tts qwen3-tts --text-file article.md --language russian -o article.mp3
+```
+
 | Flag | Default | Meaning |
 |---|---|---|
 | `--voice <name>` | `serena` | Preset timbre: `serena`, `vivian`, `uncle_fu`, `ryan`, `aiden`, `ono_anna`, `sohee`, `eric`, `dylan`. |
 | `--language <lang>` | `auto` | Target language, set independently of the voice: `russian`, `english`, `german`, `spanish`, `chinese`, `japanese`, `french`, `korean`, `italian`, `portuguese`. |
 | `--model <name\|dir>` | `0.6b-customvoice` | `0.6b-customvoice` or `1.7b-customvoice` (larger, slower), or a checkpoint directory. |
+| `-o, --output <path>` | `speech.wav` | Where to write the audio; the container follows the extension. |
 | `--text-file <path\|->` | — | Read the text from a file, or from standard input with `-`. |
 | `--text-format <auto\|txt\|md>` | `auto` | Where paragraphs end and whether markup is stripped. |
 | `--pause-ms <ms>` | `500` | Gap between paragraphs (half that inside a split paragraph). |

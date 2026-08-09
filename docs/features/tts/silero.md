@@ -2,7 +2,10 @@
 
 > Part of [`tts`](README.md) and of [trakktor](../../../README.md); the global
 > flags and the output/exit-code contract are described in
-> [Output and exit codes](../../../README.md#output-and-exit-codes).
+> [Output and exit codes](../../../README.md#output-and-exit-codes), and the
+> shared `tts` behavior — text input (`--text-file`, `--text-format`),
+> paragraph splitting and joining, `-o/--output`, output containers and
+> encoders (`--audio-encoder`, `--bitrate`) — on [the `tts` page](README.md).
 
 A native port of Silero TTS v5: **sixty preset voices across twenty languages**,
 synthesized at **48 kHz**. It is the engine to reach for on a machine without a
@@ -98,7 +101,8 @@ trakktor tts silero --text-file marked.txt --stress off -o article.wav
 ## Voices and models
 
 `--voice list` prints the voices of the selected model, whose prefixes say what
-each of them speaks (see [Languages](#languages)).
+each of them speaks (see [Languages](#languages)); the default voice is
+`ru_zhadyra`.
 
 | `--model` | License | Voices |
 |---|---|---|

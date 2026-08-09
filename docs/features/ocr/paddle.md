@@ -158,9 +158,9 @@ line and rarely fires on a scanned book.
 
 ## What Markdown does and does not do
 
-`--format md` works from two things: the geometry of the lines — spacing,
-indents, the width of the column, where each line ends — and the **labels** of
-the layout model, which runs by default.
+`--format md` (the default is `lines`) works from two things: the geometry of
+the lines — spacing, indents, the width of the column, where each line ends —
+and the **labels** of the layout model, which runs by default.
 
 The geometry gives the reading order (including columns), the paragraphs, the
 joining of hyphenated line breaks, and the continuation of a paragraph across a
@@ -215,4 +215,5 @@ where it becomes the larger half of the page.
 `--device metal` moves everything onto the GPU. It is worth roughly a quarter of
 the large detector's time, which is to say it does not turn tens of seconds into
 one: the choice between the two qualities is not a choice a faster device makes
-for you.
+for you. (`--runtime` exists here for symmetry but serves `candle` only — of
+the OCR engines, [`vl` is the one with a burn runtime](vl.md#runtime).)

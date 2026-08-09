@@ -17,17 +17,13 @@ Two engines, both fully offline once their models are downloaded.
   can return a table as markup or a formula as LaTeX. About 2 GB downloaded
   once, and tens of seconds per page.
 
-There is also a [**layout stage**](layout.md), shared by both engines and
-available on its own: a model that labels the blocks of a page — document title,
-section heading, paragraph, abstract, footnote, running head, page number,
-table, formula, picture, caption — without reading any text. About 130 MB
-downloaded once, and about a second per page. Both engines run it by default;
-`--no-layout` skips it, and `ocr layout` runs it alone.
-
 Two stages sit around the engines and are shared by both:
 
-- the [**layout stage**](layout.md) runs **by default** — `--no-layout` skips
-  it, and `ocr layout` runs it alone;
+- the [**layout stage**](layout.md) runs **by default**: a model that labels
+  the blocks of a page — document title, section heading, paragraph, abstract,
+  footnote, running head, page number, table, formula, picture, caption and
+  more — without reading any text, for about 130 MB downloaded once and about
+  a second per page. `--no-layout` skips it, and `ocr layout` runs it alone;
 - the [**page preprocessing**](photo.md) is **off by default** and is what a
   page you *photographed* needs: `--doc-orientation` turns a page shot sideways
   the right way up, `--sheet` cuts the sheet out of the frame, and `--unwarp`
@@ -100,6 +96,11 @@ JSON (the default) is one object for the run:
   page is found by the newest detector and read by an older recognizer, because
   the newest generation carries no Cyrillic. `--quality` and `--lang` move them,
   so this field is how to tell which reading a result came from.
+- with the layout stage on (the default) each page also carries `blocks` — the
+  labelled regions, each with its own `quad` — and `models.layout` names the
+  model. `--format md` adds a top-level `markdown` field; `--out` writes it to
+  a file instead (reported as `out`), with any illustrations saved to an
+  `imgs` directory next to it and linked from the Markdown.
 
 `--text` prints the lines, with the pages separated by a marker that is part of
 the data (`=== page 2 · scan-02.png ===`) — without it the text of a multi-page
@@ -110,9 +111,10 @@ reading order that follows columns, hyphenated line breaks joined back into
 words, and page-to-page paragraph continuation. A table `vl` returned as cell
 markup becomes a table there as well — a pipe table, or an HTML one when a cell
 spans rows or columns and a pipe table could not say so ([the engine
-page](vl.md#what-a-table-comes-back-as)). What it does **not** do yet is
-tell a heading from body text by anything other than geometry, or find
-illustrations — see [the engine page](paddle.md#what-markdown-does-and-does-not-do).
+page](vl.md#what-a-table-comes-back-as)). With the layout stage on (the
+default) the labels supply the heading levels and the pictures; with
+`--no-layout` the assembly falls back to geometry alone — the details:
+[the engine page](paddle.md#what-markdown-does-and-does-not-do).
 
 ## Languages
 
@@ -179,6 +181,7 @@ photographed](photo.md).
 When a line is missing from the result and neither `--crops` nor `--boxes`
 shows it at all, the lever is `--limit-side-len`. It decides how far the page is
 scaled down before detection, and with it whether small type is found at all:
-see [the engine page](paddle.md#finding-small-type). Both engines have it, and
+see [the engine page](paddle.md#finding-small-type). Both engines have it —
+with different defaults, 960 for `paddle` and 1440 for `vl` — and
 it matters to `vl` twice over — a line the detector misses there is not merely
 unreported, it is a block the model never sees.

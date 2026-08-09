@@ -107,25 +107,26 @@ The decoding defaults mirror the reference behavior and rarely need touching;
 every flag below has a sensible default. Run `trakktor asr whisper --help` for
 the complete list with defaults and exact value formats. In brief:
 
-- **Temperature fallback** — `--temperature`,
-  `--temperature-increment-on-fallback`: the schedule the decoder climbs when a
-  window looks like a failure.
-- **Sampling and search** — `--best-of` (trajectories at non-zero temperature),
-  `--beam-size` (beam width at temperature 0), `--patience`, `--length-penalty`.
+- **Temperature fallback** — `--temperature` (default 0) and
+  `--temperature-increment-on-fallback` (0.2): the schedule the decoder climbs
+  when a window looks like a failure.
+- **Sampling and search** — `--best-of` (5; trajectories at non-zero
+  temperature), `--beam-size` (5; beam width at temperature 0), `--patience`
+  and `--length-penalty` (both unset).
 - **Failure gates** (each triggers a hotter retry) —
-  `--compression-ratio-threshold` (repetition), `--logprob-threshold`
-  (confidence), `--no-speech-threshold` (silence).
+  `--compression-ratio-threshold` (2.4; repetition), `--logprob-threshold`
+  (-1.0; confidence), `--no-speech-threshold` (0.6; silence).
 - **Prompting** — `--initial-prompt` (bias the first window toward domain
   vocabulary or proper nouns), `--carry-initial-prompt`,
-  `--condition-on-previous-text`.
-- **Token suppression** — `--suppress-tokens` (`-1` expands to a built-in
-  non-speech set).
+  `--condition-on-previous-text` (on by default).
+- **Token suppression** — `--suppress-tokens` (default `-1`, which expands to
+  a built-in non-speech set).
 - **Word-timestamp tuning** (with `--timestamps word`) —
   `--prepend-punctuations`, `--append-punctuations`,
-  `--hallucination-silence-threshold`.
-- **Partial audio** — `--clip-timestamps` to transcribe only selected
-  `start,end` second ranges. For a single range, the `--start`/`--end` flags
-  above are usually easier.
+  `--hallucination-silence-threshold` (unset).
+- **Partial audio** — `--clip-timestamps` (default `0`, the whole recording)
+  to transcribe only selected `start,end` second ranges. For a single range,
+  the `--start`/`--end` flags above are usually easier.
 - **Voice-activity detection** — `--vad` (with the `--vad-*` tuning flags)
   detects speech and skips non-speech before transcribing; see the VAD section
   above.

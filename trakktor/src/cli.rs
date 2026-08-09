@@ -120,6 +120,15 @@ enum Command {
     /// capabilities and flags; pick one as the subcommand. The result is JSON
     /// with the full text, the detected or given language, and timestamped
     /// segments (`--text` prints readable `[start --> end] text` lines).
+    ///
+    /// Which engine: `whisper` for anything but Russian, for translation to
+    /// English, or when the language is unknown — its default model `tiny` is
+    /// a quick look, pick a larger one for real work. `gigaam` for Russian:
+    /// its default model writes punctuated, capitalized text. `vosk` streams
+    /// with small models — Russian, Bengali, Tajik — the pick for a slow
+    /// machine or an hours-long recording. A voice message in `.ogg` is
+    /// usually opus, which the built-in decoder does not read — add
+    /// `--audio-decoder ffmpeg`.
     Asr {
         #[command(subcommand)]
         command: AsrCommand,
@@ -134,6 +143,12 @@ enum Command {
     /// extension (wav and flac directly, others through ffmpeg), and the
     /// result on stdout is JSON with the path, the duration, and the voice
     /// used.
+    ///
+    /// Which engine: `qwen3-tts` for English and the rest of its ten
+    /// languages, in nine preset voices. `silero` for Russian and nineteen
+    /// more languages of the region — sixty preset voices, fast on a plain
+    /// CPU, but no Latin-script language and so no English. `espeech` for
+    /// Russian in a voice cloned from a recording you supply.
     Tts {
         #[command(subcommand)]
         command: TtsCommand,
@@ -163,7 +178,8 @@ enum Command {
     /// capitalization in raw lowercase text, such as the output of the Vosk and
     /// GigaAM speech engines; `stress` marks the stressed vowel of every
     /// Russian word (and restores the letter ё), which is what a speech
-    /// synthesizer needs to read the text correctly.
+    /// synthesizer needs to read the text correctly. For a raw transcript the
+    /// natural order is `punctuate` first, then `structify`.
     Text {
         #[command(subcommand)]
         command: TextCommand,
@@ -180,7 +196,7 @@ enum Command {
     /// a reading order worked out from the geometry.
     ///
     /// Which engine: `paddle` for a page in one writing system it covers —
-    /// about 96 MB and some ten seconds a page, less of both with
+    /// about 139 MB and some ten seconds a page, less of both with
     /// `--quality fast`, and the right default. `vl` for a page whose script
     /// it does not cover, for one that mixes scripts, or when a table or a
     /// formula is wanted as structure rather than as lines — about 2 GB
@@ -196,7 +212,9 @@ enum Command {
     ///
     /// A page **photographed** rather than scanned has three more steps
     /// waiting for it, off by default and shared by both engines: use them
-    /// together — `--doc-orientation --sheet --unwarp`. They turn a page shot
+    /// together — `--doc-orientation --sheet --unwarp`. On a page that needs
+    /// none of them they change nothing, so when in doubt they are safe to
+    /// add. They turn a page shot
     /// sideways or upside down the right way up, cut the sheet out of the
     /// frame, and straighten what is left: the perspective of a shot taken at
     /// an angle, and the curve of a page that will not lie flat. On a set of
@@ -227,19 +245,20 @@ enum Command {
     ///
     /// Which engine: `gtcrn` unless you know the recording lost packets.
     /// It is forty-eight thousand parameters against five hundred and
-    /// forty-six million, runs at a hundredth of real time on a CPU, and
-    /// measures at least as well everywhere except concealment — which it
-    /// cannot do at all, because a mask can only attenuate what is there.
-    /// `unipase` is the generative one, and the only one that can put back a
-    /// band that was never carried or the sixty milliseconds a dropped packet
-    /// took.
+    /// forty-six million, runs at about a sixtieth of real time on one CPU
+    /// core, and measures at least as well everywhere except concealment —
+    /// which it cannot do at all, because a mask can only attenuate what is
+    /// there. `unipase` is the generative one, and the only one that can put
+    /// back a band that was never carried or the twenty milliseconds a
+    /// dropped packet took.
     ///
     /// This repairs damage; it does not improve a recording that is already
     /// good. Measured against two independent speech recognisers, the one
     /// reliable win is a recording damaged the way a phone call is — a narrow
     /// band and noise and dropped packets together — with a reverberant room a
-    /// distant second. Both engines *hurt* on a clean recording, and hurt badly
-    /// on one buried in noise. Everything in between depends on which
+    /// distant second. Both engines *hurt* on a clean recording; buried in
+    /// noise, the generative one hurts badly while `gtcrn` stays about
+    /// level. Everything in between depends on which
     /// recogniser reads the result. Run this because the recording is damaged,
     /// not as a matter of course.
     Enhance {
@@ -278,12 +297,13 @@ enum Command {
 pub(crate) enum EnhanceCommand {
     /// Enhance a recording with the GTCRN network — the one to reach for.
     ///
-    /// Forty-eight thousand parameters, a hundredth of real time on one CPU
-    /// core, and 580 KB of weights. Measured against two independent speech
-    /// recognisers it matches the generative engine where enhancement helps at
-    /// all — a recording damaged the way a phone call is, and a reverberant
-    /// room — for a hundred and fiftieth of the cost, and it is the less
-    /// harmful of the two everywhere else.
+    /// Forty-eight thousand parameters, about a sixtieth of real time on one
+    /// CPU core, and 580 KB of weights. Measured against two independent
+    /// speech recognisers it matches the generative engine where enhancement
+    /// helps at all — a recording damaged the way a phone call is, and a
+    /// reverberant room — for about a thirtieth of the wall clock on far
+    /// humbler hardware, and it is the less harmful of the two everywhere
+    /// else.
     ///
     /// It is a masking network: it predicts what to attenuate and multiplies.
     /// That is a hard limit, not a tuning choice — it cannot fill the hole a
@@ -317,7 +337,9 @@ pub(crate) enum EnhanceCommand {
 
 #[derive(Args)]
 pub(crate) struct EnhanceGtcrnArgs {
-    /// Path to the recording to enhance.
+    /// Path to the recording to enhance. Any audio file the built-in decoder
+    /// reads: mp3, aac (LC), vorbis, flac, alac, adpcm, and pcm audio in
+    /// wav/aiff/caf/ogg/mp4/mkv containers.
     pub(crate) audio: PathBuf,
 
     /// Where to write the result. The container follows the extension — wav
@@ -348,7 +370,9 @@ pub(crate) struct EnhanceGtcrnArgs {
 
 #[derive(Args)]
 pub(crate) struct EnhanceUnipaseArgs {
-    /// Path to the recording to enhance.
+    /// Path to the recording to enhance. Any audio file the built-in decoder
+    /// reads: mp3, aac (LC), vorbis, flac, alac, adpcm, and pcm audio in
+    /// wav/aiff/caf/ogg/mp4/mkv containers.
     pub(crate) audio: PathBuf,
 
     /// Where to write the result. The container follows the extension — wav
@@ -484,7 +508,7 @@ pub(crate) struct OcrPreprocessArgs {
     /// frame, and no amount of per-line straightening fixes the reading
     /// order. Only right angles — a page a few degrees off level is a
     /// different problem, and `--unwarp` is what addresses it. Costs a 7 MB
-    /// model and about a tenth of a second a page.
+    /// model and about 0.15 s a page.
     #[arg(long)]
     pub(crate) doc_orientation: bool,
 
@@ -494,8 +518,8 @@ pub(crate) struct OcrPreprocessArgs {
     /// The result is the page as a scanner would have seen it, and it is what
     /// gets read. Boxes are still reported on your own file — the way back is
     /// kept and applied to every quadrangle — so `quad` always points at a
-    /// place in the photograph you handed in. Costs a 32 MB model and about a
-    /// second a page.
+    /// place in the photograph you handed in. Costs a 32 MB model and about
+    /// 0.7 s a page.
     #[arg(long)]
     pub(crate) unwarp: bool,
 
@@ -556,7 +580,8 @@ pub(crate) struct OcrPaddleArgs {
     /// the default: an OCR run is wanted for its accuracy, and a page that
     /// reads badly is worth less than a page that reads slowly. It always
     /// means the newest text detector — 62 MB against 4.7 — which on a
-    /// photographed book page found 62 lines where a small one found 40.
+    /// photographed book page found 62 lines where the older large one
+    /// found 40.
     ///
     /// `fast` takes the small models and cuts a quarter to a third off the
     /// time a page takes, more at a raised `--limit-side-len`. On a page of
@@ -1043,7 +1068,7 @@ pub(crate) enum AsrCommand {
     /// Transcribe audio with a Whisper model.
     ///
     /// The audio file is decoded by the built-in decoder — mp3, aac (LC),
-    /// vorbis, flac, alac, and pcm audio in wav/aiff/caf/ogg/mp4/mkv
+    /// vorbis, flac, alac, adpcm, and pcm audio in wav/aiff/caf/ogg/mp4/mkv
     /// containers — and transcribed window by window with a fallback policy
     /// that guards against repetition loops. The first use of a model
     /// downloads its checkpoint into the model directory (~/.trakktor by
@@ -1056,11 +1081,11 @@ pub(crate) enum AsrCommand {
     /// (transducer) decoding — mainly for Russian and, with the
     /// multilingual checkpoints, several more languages. The default model
     /// emits punctuated, capitalized Russian; see --model for the
-    /// alternatives. The audio is decoded by the built-in decoder, split
-    /// along detected speech into chunks, and each chunk transcribed in a
-    /// single pass. The first use of a model downloads its checkpoint into
-    /// the model directory (~/.trakktor by default; see --model-dir), and
-    /// later runs reuse it.
+    /// alternatives. The audio is decoded by the built-in decoder (or by
+    /// ffmpeg, with --audio-decoder), split along detected speech into
+    /// chunks, and each chunk transcribed in a single pass. The first use of a
+    /// model downloads its checkpoint into the model directory (~/.trakktor
+    /// by default; see --model-dir), and later runs reuse it.
     Gigaam(GigaamArgs),
 
     /// Transcribe audio with a Vosk model.
@@ -2196,7 +2221,7 @@ pub(crate) enum RuntimeArg {
 /// The `--precision` value of `asr whisper`.
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum PrecisionArg {
-    /// Half precision: less memory, faster (the default).
+    /// Half precision: less memory, faster.
     F16,
     /// Full precision: reproducible, at twice the memory.
     F32,
@@ -2675,7 +2700,9 @@ pub(crate) enum VadCommand {
 /// The audio input and detection options shared by every `vad` subcommand.
 #[derive(Args)]
 pub(crate) struct VadDetectArgs {
-    /// Path to the audio file.
+    /// Path to the audio file. Any format the built-in decoder reads: mp3,
+    /// aac (LC), vorbis, flac, alac, adpcm, and pcm audio in
+    /// wav/aiff/caf/ogg/mp4/mkv containers.
     #[arg(value_name = "audio")]
     pub(crate) audio: PathBuf,
 
