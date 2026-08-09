@@ -234,6 +234,14 @@ because this model reflows text and joins words broken across a line break —
 every line of that block gets the block's own rectangle instead. A coarse box is
 reported rather than a made-up precise one.
 
+## A photograph rather than a scan
+
+This engine takes the shared [page preprocessing](photo.md) too —
+`--doc-orientation --sheet --unwarp`, off by default. It matters here for the
+same reason `--limit-side-len` does: this engine reads **blocks**, and blocks
+are assembled from the detector's lines. A page that is not upright does not
+merely read badly, it is grouped into blocks that were never on the page.
+
 ## Device
 
 ```

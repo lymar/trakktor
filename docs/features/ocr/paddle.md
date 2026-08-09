@@ -92,6 +92,19 @@ one has the dash, and so does the newest model, which is what the default reads
 English and Latin script with. A character outside the dictionary is simply
 missing from the output, which reads like a recognition failure and is not one.
 
+## A photograph rather than a scan
+
+This engine takes the shared [page preprocessing](photo.md) — a page shot
+sideways turned upright, the sheet cut out of the frame, the page straightened
+— with `--doc-orientation --sheet --unwarp`. Off by default; on a scan they
+change nothing.
+
+Worth knowing before reaching for them: **moderate perspective is not this
+engine's problem.** The detector boxes every line as its own quadrangle and the
+crop straightens each one independently, so a page shot twenty degrees off the
+normal reads as well as its scan untouched. What it cannot absorb is curvature
+and a page that is not the right way up.
+
 ## Finding small type
 
 ```

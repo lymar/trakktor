@@ -55,11 +55,15 @@ Each command is documented in full on its own page under
   head, page number, table, formula, picture — so the structure is read rather
   than guessed; it runs by default, `--no-layout` skips it, and `ocr layout`
   runs it on its own and answers "what is on this page" without reading a word.
-  A page **photographed** rather than scanned gets two more steps, off by
-  default and available to both engines: `--doc-orientation` finds which right
-  angle the page is at and turns it upright, and `--unwarp` straightens it —
-  the perspective of a shot taken at an angle and the curve of a page that
-  will not lie flat. Boxes still come back on the photograph you passed in.
+  A page **photographed** rather than scanned gets
+  [three more steps](docs/features/ocr/photo.md), off by default and available
+  to both engines: `--doc-orientation` finds which right angle the page is at
+  and turns it upright, `--sheet` cuts the sheet out of the frame, and
+  `--unwarp` straightens it — the perspective of a shot taken at an angle and
+  the curve of a page that will not lie flat. On a set of twelve photographs of
+  one page, that takes a sideways or curled shot from unreadable to reading
+  exactly as well as a 300 dpi scan of the same page. Boxes still come back on
+  the photograph you passed in.
 - [**`vad` — voice-activity audio editing**](docs/features/vad/README.md):
   find the speech in an audio file and report it, cut the silence out, or
   split the recording into clips.

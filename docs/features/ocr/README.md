@@ -24,6 +24,15 @@ table, formula, picture, caption — without reading any text. About 130 MB
 downloaded once, and about a second per page. Both engines run it by default;
 `--no-layout` skips it, and `ocr layout` runs it alone.
 
+Two stages sit around the engines and are shared by both:
+
+- the [**layout stage**](layout.md) runs **by default** — `--no-layout` skips
+  it, and `ocr layout` runs it alone;
+- the [**page preprocessing**](photo.md) is **off by default** and is what a
+  page you *photographed* needs: `--doc-orientation` turns a page shot sideways
+  the right way up, `--sheet` cuts the sheet out of the frame, and `--unwarp`
+  straightens it.
+
 ```sh
 trakktor ocr paddle page.png                     # JSON: pages, lines, boxes, scores
 trakktor ocr paddle page.png --text              # the recognized lines
@@ -37,6 +46,8 @@ trakktor ocr vl table.png --task table --text    # the table as markup
 trakktor ocr vl page.png --no-layout --text      # blocks from geometry alone
 
 trakktor ocr layout page.png --text              # what is on this page
+
+trakktor ocr paddle photo.jpg --doc-orientation --sheet --unwarp  # a page you photographed
 ```
 
 ## Pages, not files
@@ -145,8 +156,29 @@ what the model thinks is a table.
 `--boxes` takes the file to write for a single page, and a directory to fill
 with one `pNNN.png` per page for a longer run.
 
-The other lever is `--limit-side-len`. It decides how far the page is scaled
-down before detection, and it is the setting that decides whether small type is
-found at all: see [the engine page](paddle.md#finding-small-type). Both engines
-have it, and it matters to `vl` twice over — a line the detector misses there is
-not merely unreported, it is a block the model never sees.
+## A page you photographed
+
+A photograph of a page differs from a scan in five ways, and three of them can
+be taken out before the detector sees it — the page being sideways, the sheet
+being small in a cluttered frame, and the page not being flat:
+
+```sh
+trakktor ocr paddle photo.jpg --doc-orientation --sheet --unwarp
+trakktor ocr paddle photo.jpg --doc-orientation --sheet --unwarp --rectified out.png
+```
+
+All three are off by default, both engines take them, and the reported boxes
+stay on **your** file however much the page was moved to read it. A photograph
+of a page lying on its side goes from unreadable to reading exactly as well as
+a scan of the same page. The two things this does *not* fix are uneven light and
+a two-page spread. Details, numbers and the reasons: [reading a page you
+photographed](photo.md).
+
+## Finding small type
+
+When a line is missing from the result and neither `--crops` nor `--boxes`
+shows it at all, the lever is `--limit-side-len`. It decides how far the page is
+scaled down before detection, and with it whether small type is found at all:
+see [the engine page](paddle.md#finding-small-type). Both engines have it, and
+it matters to `vl` twice over — a line the detector misses there is not merely
+unreported, it is a block the model never sees.

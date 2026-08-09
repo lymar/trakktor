@@ -192,14 +192,23 @@ enum Command {
     /// lines are wanted. `ocr layout` runs the same model on its own and
     /// answers "what is on this page" without reading a word of it.
     ///
-    /// A page **photographed** rather than scanned has two more steps waiting
-    /// for it, off by default and shared by both engines: `--doc-orientation`
-    /// turns a page shot sideways or upside down the right way up, and
-    /// `--unwarp` straightens it — the perspective of a shot taken at an
-    /// angle, and the curve of a page that will not lie flat. Add `--sheet`
-    /// when the page is small in the frame, which cuts it out of the desk
-    /// around it first. Boxes come back on the file you passed in whichever
-    /// of them ran.
+    /// A page **photographed** rather than scanned has three more steps
+    /// waiting for it, off by default and shared by both engines: use them
+    /// together — `--doc-orientation --sheet --unwarp`. They turn a page shot
+    /// sideways or upside down the right way up, cut the sheet out of the
+    /// frame, and straighten what is left: the perspective of a shot taken at
+    /// an angle, and the curve of a page that will not lie flat. On a set of
+    /// twelve photographs of one page they take a sideways or curled shot
+    /// from unreadable to reading exactly as well as a 300 dpi scan of the
+    /// same page. Boxes come back on the file you passed in whichever of them
+    /// ran, and `--rectified` writes out the page the reading was done on.
+    ///
+    /// Two things they do not fix: uneven light (a reflection off the paper
+    /// costs about nine times the error rate of a scan, and none of the three
+    /// moves it), and a two-page spread, which stays one page of output.
+    /// Moderate perspective needs no help — the detector boxes every line
+    /// separately, so a page shot twenty degrees off the normal already reads
+    /// as well as its scan.
     Ocr {
         #[command(subcommand)]
         command: OcrCommand,
@@ -317,13 +326,14 @@ pub(crate) struct OcrPreprocessArgs {
 
     /// Find the sheet in the frame and cut it out before anything else.
     ///
-    /// This is trakktor's own step, not upstream's, and it exists because
-    /// `--unwarp` straightens the *frame*: a page that fills the picture it
-    /// was shot in comes out straight, and a page lying on a desk at the far
-    /// end of a wide shot comes out no better than it went in. Cutting the
-    /// sheet out first gives the straightener a page-filling picture, and
-    /// costs no model at all — a threshold, the largest bright region, and
-    /// the same four-corner warp that straightens a line of text.
+    /// Pair this with `--unwarp` rather than choosing between them. The
+    /// straightener works on the *frame*: a page that fills the picture it was
+    /// shot in comes out straight, and a page lying on a desk at the far end
+    /// of a wide shot comes out resampled and no straighter — worse than not
+    /// straightening at all. Cutting the sheet out first gives the
+    /// straightener a page-filling picture, and costs no model — a threshold,
+    /// the largest bright region of the frame, its four sides, and the same
+    /// four-corner warp that straightens a line of text.
     ///
     /// It declines when there is nothing to do: a scan, or a photograph the
     /// page already fills, is left alone.
