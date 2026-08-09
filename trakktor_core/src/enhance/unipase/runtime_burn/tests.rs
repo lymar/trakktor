@@ -5,7 +5,10 @@
 use burn::backend::ndarray::{NdArray, NdArrayDevice};
 
 use super::BurnModel;
-use crate::enhance::unipase::{config::HOP, model::EnhanceModel, plc};
+use crate::enhance::{
+    EnhanceModel,
+    unipase::{config::HOP, plc},
+};
 
 fn golden_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))

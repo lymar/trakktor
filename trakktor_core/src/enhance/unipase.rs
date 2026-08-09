@@ -53,11 +53,8 @@ pub mod config;
 pub mod download;
 #[cfg(feature = "enhance-runtime")]
 pub mod enhance;
-pub mod error;
 #[cfg(feature = "enhance-runtime")]
 pub mod istft;
-#[cfg(feature = "enhance-runtime")]
-pub mod model;
 pub mod plc;
 #[cfg(feature = "enhance-runtime")]
 pub mod runtime;
@@ -69,12 +66,7 @@ pub use download::{
     DEFAULT_MODEL, KNOWN_MODELS, ResolvedModel, download_size, resolve_model,
 };
 #[cfg(feature = "enhance-runtime")]
-pub use enhance::{
-    EnhanceOptions, EnhanceProgress, Enhanced, enhance_file, enhance_samples,
-};
-pub use error::UnipaseError;
-#[cfg(feature = "enhance-runtime")]
-pub use model::{EnhanceModel, Precision, Runtime};
+pub use enhance::{enhance_file, enhance_samples};
 #[cfg(feature = "enhance-runtime")]
 pub use runtime::CandleModel;
 #[cfg(feature = "enhance-burn")]

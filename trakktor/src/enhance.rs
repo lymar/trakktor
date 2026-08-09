@@ -9,15 +9,18 @@ use std::{path::PathBuf, time::Instant};
 
 use trakktor_core::{
     audio::encode::Format,
-    enhance::unipase::{
-        self, EnhanceOptions, Precision, ResolvedModel, download_size,
-        enhance_file,
+    enhance::{
+        EnhanceModel, EnhanceOptions, EnhanceProgress, Enhanced, Precision,
+        gtcrn, unipase,
     },
 };
 
 use crate::{
     asr::progress,
-    cli::{DeviceArg, EnhanceUnipaseArgs, PrecisionArg, RuntimeArg},
+    cli::{
+        DeviceArg, EnhanceGtcrnArgs, EnhanceUnipaseArgs, PrecisionArg,
+        RuntimeArg,
+    },
     error::CliError,
     output,
 };
@@ -42,7 +45,7 @@ pub(crate) fn run_unipase(
     // Where the result goes is settled before anything expensive starts: this
     // is hours of work on a long recording, and finding out at the end that
     // the directory cannot be created would throw all of it away.
-    let path = output_path(args);
+    let path = output_path(&args.audio, args.output.as_ref());
     prepare_output(&path)?;
 
     let resolved = resolve(models_dir, &args.model)?;
@@ -61,11 +64,15 @@ pub(crate) fn run_unipase(
 
     let started = Instant::now();
     let mut reporter = progress::live_reporter_for(VERB, started);
-    let enhanced =
-        enhance_file(&args.audio, model.as_mut(), &options, &mut |p| {
-            let p: unipase::EnhanceProgress = p;
+    let enhanced = unipase::enhance_file(
+        &args.audio,
+        model.as_mut(),
+        &options,
+        &mut |p| {
+            let p: EnhanceProgress = p;
             reporter(p.done_seconds, Some(p.total_seconds));
-        })?;
+        },
+    )?;
     progress::finish_line_for(VERB, started, enhanced.duration());
 
     write(&enhanced, &path, args.bitrate.as_deref())?;
@@ -73,6 +80,7 @@ pub(crate) fn run_unipase(
         &enhanced,
         &path,
         format_name(&path),
+        "unipase",
         &label,
         if burn { "burn" } else { "candle" },
         if metal { "metal" } else { "cpu" },
@@ -87,7 +95,7 @@ pub(crate) fn run_unipase(
 fn resolve(
     models_dir: &std::path::Path,
     model: &str,
-) -> Result<ResolvedModel, CliError> {
+) -> Result<unipase::ResolvedModel, CliError> {
     let cold = !models_dir
         .join("enhance")
         .join("unipase")
@@ -97,7 +105,7 @@ fn resolve(
         eprintln!(
             "downloading and converting the pipeline ({:.2} GB) — this \
              happens once",
-            download_size() as f64 / 1e9
+            unipase::download_size() as f64 / 1e9
         );
     }
     let mut reporter = progress::download_progress();
@@ -106,11 +114,11 @@ fn resolve(
 
 /// Loads the pipeline on the runtime and device asked for.
 fn load(
-    resolved: &ResolvedModel,
+    resolved: &unipase::ResolvedModel,
     burn: bool,
     metal: bool,
     precision: Precision,
-) -> Result<Box<dyn unipase::EnhanceModel>, CliError> {
+) -> Result<Box<dyn EnhanceModel>, CliError> {
     if burn {
         #[cfg(feature = "burn")]
         {
@@ -127,7 +135,7 @@ fn load(
             )?);
         }
         #[cfg(not(feature = "burn"))]
-        return Err(unipase::UnipaseError::InvalidOptions(
+        return Err(trakktor_core::enhance::EnhanceError::InvalidOptions(
             "this build has no burn runtime; rebuild with the `burn` feature, \
              or use `--runtime candle`"
                 .into(),
@@ -144,17 +152,15 @@ fn load(
 
 /// Where the enhanced recording goes: next to the input unless asked
 /// otherwise, and never on top of the input itself.
-fn output_path(args: &EnhanceUnipaseArgs) -> PathBuf {
-    if let Some(path) = &args.output {
+fn output_path(audio: &std::path::Path, chosen: Option<&PathBuf>) -> PathBuf {
+    if let Some(path) = chosen {
         return path.clone();
     }
-    let stem = args
-        .audio
+    let stem = audio
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "audio".into());
-    let dir = args
-        .audio
+    let dir = audio
         .parent()
         .map(std::path::Path::to_path_buf)
         .unwrap_or_default();
@@ -181,7 +187,7 @@ fn prepare_output(path: &std::path::Path) -> Result<(), CliError> {
         !parent.as_os_str().is_empty()
     {
         std::fs::create_dir_all(parent).map_err(|e| {
-            unipase::UnipaseError::Io(format!(
+            trakktor_core::enhance::EnhanceError::Io(format!(
                 "creating {}: {e}",
                 parent.display()
             ))
@@ -193,7 +199,7 @@ fn prepare_output(path: &std::path::Path) -> Result<(), CliError> {
 /// Writes the result, through ffmpeg for anything the built-in encoders do not
 /// cover.
 fn write(
-    enhanced: &unipase::Enhanced,
+    enhanced: &Enhanced,
     path: &std::path::Path,
     bitrate: Option<&str>,
 ) -> Result<(), CliError> {
@@ -202,5 +208,71 @@ fn write(
         "flac" => enhanced.write(path, Format::Flac)?,
         _ => enhanced.write_ffmpeg(path, bitrate)?,
     }
+    Ok(())
+}
+
+/// Runs `enhance gtcrn`.
+pub(crate) fn run_gtcrn(
+    args: &EnhanceGtcrnArgs,
+    models_dir: &std::path::Path,
+    json: bool,
+    pretty: bool,
+) -> Result<(), CliError> {
+    let path = output_path(&args.audio, args.output.as_ref());
+    prepare_output(&path)?;
+
+    let cold = !models_dir
+        .join("enhance")
+        .join("gtcrn")
+        .join("model.safetensors")
+        .is_file();
+    if cold && !std::path::Path::new(&args.model).is_dir() {
+        eprintln!(
+            "downloading the network ({} KB) — this happens once",
+            gtcrn::download_size() / 1024
+        );
+    }
+    let mut reporter = progress::download_progress();
+    let resolved =
+        gtcrn::resolve_model(models_dir, &args.model, &mut reporter)?;
+    let label = resolved
+        .name
+        .clone()
+        .unwrap_or_else(|| resolved.dir.display().to_string());
+
+    // This engine streams: its chunks continue one another rather than
+    // overlap, so the driver speaks to it directly instead of through the
+    // one-window-at-a-time seam.
+    let mut model = gtcrn::CandleModel::load(&resolved.dir)?;
+    let options = EnhanceOptions {
+        sample_rate: args.sample_rate,
+        plc: false,
+    };
+
+    let started = Instant::now();
+    let mut reporter = progress::live_reporter_for(VERB, started);
+    let enhanced = gtcrn::enhance_file(
+        &args.audio,
+        &mut model,
+        &options,
+        &mut |p: EnhanceProgress| {
+            reporter(p.done_seconds, Some(p.total_seconds));
+        },
+    )?;
+    progress::finish_line_for(VERB, started, enhanced.duration());
+
+    write(&enhanced, &path, args.bitrate.as_deref())?;
+    output::print_enhance(
+        &enhanced,
+        &path,
+        format_name(&path),
+        "gtcrn",
+        &label,
+        "candle",
+        "cpu",
+        false,
+        json,
+        pretty,
+    );
     Ok(())
 }

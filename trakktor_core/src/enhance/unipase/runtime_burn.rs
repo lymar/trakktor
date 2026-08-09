@@ -35,20 +35,19 @@ use burn::{
 use super::{
     config::{HOP, PAD_REMAINDER},
     download::WEIGHTS_FILE,
-    error::UnipaseError,
     istft,
-    model::{EnhanceModel, Precision, Runtime},
     runtime::model_err,
 };
+use crate::enhance::{EnhanceError, EnhanceModel, Precision, Runtime};
 
 /// Lazy access to the converted checkpoint through candle's safetensors reader.
 pub struct Weights(candle_core::safetensors::MmapedSafetensors);
 
 impl Weights {
     /// Opens the converted checkpoint.
-    fn open(path: &Path) -> Result<Self, UnipaseError> {
+    fn open(path: &Path) -> Result<Self, EnhanceError> {
         if !path.is_file() {
-            return Err(UnipaseError::Checkpoint(format!(
+            return Err(EnhanceError::Checkpoint(format!(
                 "no {}",
                 path.display()
             )));
@@ -65,7 +64,7 @@ impl Weights {
     pub fn parts(
         &self,
         key: &str,
-    ) -> Result<(Vec<f32>, Vec<usize>), UnipaseError> {
+    ) -> Result<(Vec<f32>, Vec<usize>), EnhanceError> {
         let tensor = self
             .0
             .load(key, &candle_core::Device::Cpu)
@@ -93,9 +92,9 @@ impl<B: Backend> BurnModel<B> {
     ///
     /// # Errors
     ///
-    /// Returns [`UnipaseError::Checkpoint`] when the weights are missing or do
+    /// Returns [`EnhanceError::Checkpoint`] when the weights are missing or do
     /// not match the geometry the engine expects.
-    pub fn load(dir: &Path, device: B::Device) -> Result<Self, UnipaseError> {
+    pub fn load(dir: &Path, device: B::Device) -> Result<Self, EnhanceError> {
         let weights = Weights::open(&dir.join(WEIGHTS_FILE))?;
         Ok(Self {
             encoder: net::Encoder::load(&weights, &device)?,
@@ -111,7 +110,7 @@ impl<B: Backend> EnhanceModel for BurnModel<B> {
         &mut self,
         samples: &[f32],
         lost: &[bool],
-    ) -> Result<Vec<f32>, UnipaseError> {
+    ) -> Result<Vec<f32>, EnhanceError> {
         debug_assert_eq!(samples.len() % HOP, PAD_REMAINDER);
         let frames = samples.len() / HOP;
         let input: Tensor<B, 2> = Tensor::from_data(
@@ -132,12 +131,12 @@ impl<B: Backend> EnhanceModel for BurnModel<B> {
 ///
 /// # Errors
 ///
-/// Returns [`UnipaseError::InvalidOptions`] for half precision; otherwise see
+/// Returns [`EnhanceError::InvalidOptions`] for half precision; otherwise see
 /// [`BurnModel::load`].
 pub fn load_cpu(
     dir: &Path,
     precision: Precision,
-) -> Result<Box<dyn EnhanceModel>, UnipaseError> {
+) -> Result<Box<dyn EnhanceModel>, EnhanceError> {
     match precision {
         Precision::F32 => Ok(Box::new(BurnModel::<NdArray<f32>>::load(
             dir,
@@ -152,12 +151,12 @@ pub fn load_cpu(
 ///
 /// # Errors
 ///
-/// Returns [`UnipaseError::InvalidOptions`] for half precision; otherwise see
+/// Returns [`EnhanceError::InvalidOptions`] for half precision; otherwise see
 /// [`BurnModel::load`].
 pub fn load_metal(
     dir: &Path,
     precision: Precision,
-) -> Result<Box<dyn EnhanceModel>, UnipaseError> {
+) -> Result<Box<dyn EnhanceModel>, EnhanceError> {
     match precision {
         Precision::F32 => Ok(Box::new(BurnModel::<Metal<f32>>::load(
             dir,
@@ -168,8 +167,8 @@ pub fn load_metal(
 }
 
 /// Reports the one precision this runtime does not serve.
-fn half_precision_unavailable() -> UnipaseError {
-    UnipaseError::InvalidOptions(
+fn half_precision_unavailable() -> EnhanceError {
+    EnhanceError::InvalidOptions(
         "the burn runtime computes in f32 only; use `--precision f32`, or \
          `--runtime candle` for f16"
             .into(),

@@ -206,14 +206,22 @@ enum Command {
     /// engines; pick one as the subcommand. The result on stdout is JSON with
     /// the path, the duration, and what concealment did.
     ///
+    /// Which engine: `gtcrn` unless you know the recording lost packets.
+    /// It is forty-eight thousand parameters against five hundred and
+    /// forty-six million, runs at a hundredth of real time on a CPU, and
+    /// measures at least as well everywhere except concealment — which it
+    /// cannot do at all, because a mask can only attenuate what is there.
+    /// `unipase` is the generative one, and the only one that can put back a
+    /// band that was never carried or the sixty milliseconds a dropped packet
+    /// took.
+    ///
     /// This repairs damage; it does not improve a recording that is already
     /// good. Measured against two independent speech recognisers, the one
     /// reliable win is a recording damaged the way a phone call is — a narrow
     /// band and noise and dropped packets together — with a reverberant room a
-    /// distant second. It *hurts* on a clean recording, and it hurts badly on
-    /// one buried in noise, where a generative model has too little to work
-    /// from and starts inventing words. Everything in between depends on which
-    /// recogniser reads the result. Run it because the recording is damaged,
+    /// distant second. Both engines *hurt* on a clean recording, and hurt badly
+    /// on one buried in noise. Everything in between depends on which
+    /// recogniser reads the result. Run this because the recording is damaged,
     /// not as a matter of course.
     Enhance {
         #[command(subcommand)]
@@ -249,7 +257,23 @@ enum Command {
 
 #[derive(Subcommand)]
 pub(crate) enum EnhanceCommand {
-    /// Enhance a recording with the UniPASE pipeline.
+    /// Enhance a recording with the GTCRN network — the one to reach for.
+    ///
+    /// Forty-eight thousand parameters, a hundredth of real time on one CPU
+    /// core, and 580 KB of weights. Measured against two independent speech
+    /// recognisers it matches the generative engine where enhancement helps at
+    /// all — a recording damaged the way a phone call is, and a reverberant
+    /// room — for a hundred and fiftieth of the cost, and it is the less
+    /// harmful of the two everywhere else.
+    ///
+    /// It is a masking network: it predicts what to attenuate and multiplies.
+    /// That is a hard limit, not a tuning choice — it cannot fill the hole a
+    /// dropped packet left, because any mask times silence is silence. For a
+    /// call with dropped packets, use `unipase`.
+    #[command(name = "gtcrn")]
+    Gtcrn(EnhanceGtcrnArgs),
+
+    /// Enhance a recording with the UniPASE pipeline — the generative engine.
     ///
     /// Four networks in a row, of which three run: a speech encoder reads the
     /// recording and is tapped at two depths — one layer that still carries
@@ -260,12 +284,47 @@ pub(crate) enum EnhanceCommand {
     /// on the spectrum, it can put back what is missing (a band, a lost packet)
     /// and not only take away what is not wanted.
     ///
+    /// That is also the only reason to prefer it over `gtcrn`, which is
+    /// smaller by four orders of magnitude and measures at least as well
+    /// everywhere else. Reach for this one when the recording lost packets.
+    ///
     /// The pipeline works at 16 kHz, which is what a speech recognizer wants
     /// and all the bandwidth speech needs; `--sample-rate` resamples the result
     /// rather than inventing a wider band. The models are 2.17 GB, downloaded
     /// and converted once into the model directory (~/.trakktor by default).
     #[command(name = "unipase")]
     Unipase(EnhanceUnipaseArgs),
+}
+
+#[derive(Args)]
+pub(crate) struct EnhanceGtcrnArgs {
+    /// Path to the recording to enhance.
+    pub(crate) audio: PathBuf,
+
+    /// Where to write the result. The container follows the extension — wav
+    /// and flac are written directly, anything else through ffmpeg. Defaults
+    /// to the input's name with `.enhanced.wav` in its place, next to it.
+    /// Prefer wav: the built-in FLAC encoder codes enhanced audio very badly,
+    /// and a size guard will refuse to write the result rather than leave a
+    /// file many times larger than the audio.
+    #[arg(short, long, value_name = "path")]
+    pub(crate) output: Option<PathBuf>,
+
+    /// Model: the published name, downloaded on first use, or a path to a
+    /// directory holding converted weights.
+    #[arg(long, default_value = "dns3", value_name = "name|dir")]
+    pub(crate) model: String,
+
+    /// Sample rate to write at. Defaults to the recording's own. The network
+    /// works at 16 kHz whatever this is, so a higher rate matches the source's
+    /// container rather than adding bandwidth.
+    #[arg(long, value_name = "hz")]
+    pub(crate) sample_rate: Option<u32>,
+
+    /// Bitrate for a lossy output format written through ffmpeg, for example
+    /// `192k`. Ignored for wav and flac.
+    #[arg(long, value_name = "rate")]
+    pub(crate) bitrate: Option<String>,
 }
 
 #[derive(Args)]
@@ -2957,6 +3016,12 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             },
         },
         Command::Enhance { command } => match command {
+            EnhanceCommand::Gtcrn(args) => crate::enhance::run_gtcrn(
+                args,
+                &global.model_dir()?,
+                global.json(),
+                global.pretty,
+            ),
             EnhanceCommand::Unipase(args) => crate::enhance::run_unipase(
                 args,
                 &global.model_dir()?,

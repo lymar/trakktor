@@ -12,11 +12,12 @@
 use candle_core::{DType, Device, Tensor};
 
 use super::CandleModel;
-use crate::enhance::unipase::{
-    config::{HOP, SAMPLE_RATE},
-    istft,
-    model::{EnhanceModel, Precision},
-    plc,
+use crate::enhance::{
+    EnhanceModel, Precision,
+    unipase::{
+        config::{HOP, SAMPLE_RATE},
+        istft, plc,
+    },
 };
 
 /// Where the reference dumps live.

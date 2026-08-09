@@ -56,13 +56,15 @@ Each command is documented in full on its own page under
   runs it on its own and answers "what is on this page" without reading a word.
 - [**`enhance` — clean up a speech recording**](docs/features/enhance/README.md):
   a damaged recording in, a repaired one out — room noise and hiss removed,
-  reverberation reduced, a telephone-narrow band widened, and the holes a
-  dropped packet leaves in a call filled in from the words on either side. One
-  engine, [`unipase`](docs/features/enhance/README.md), a port of a generative
-  pipeline built around a fine-tuned speech encoder, so it can put back what is
-  missing rather than only subtract what is not wanted. It repairs damage and
-  does **not** improve a recording that is already good — the page says where it
-  helps and where it hurts, measured.
+  reverberation reduced, and, with the right engine, the holes a dropped packet
+  leaves in a call filled in from the words on either side. Two engines.
+  `gtcrn` is the default and the one to reach for: a masking network of
+  **forty-eight thousand** parameters, 580 KB of weights, a hundredth of real
+  time on one CPU core. `unipase` is generative — five hundred and forty-six
+  million parameters — and earns its keep on exactly one thing a mask cannot do,
+  filling a hole. Either way this repairs damage and does **not** improve a
+  recording that is already good: the page says where each helps and where it
+  hurts, measured against two independent recognisers.
 - [**`vad` — voice-activity audio editing**](docs/features/vad/README.md):
   find the speech in an audio file and report it, cut the silence out, or
   split the recording into clips.

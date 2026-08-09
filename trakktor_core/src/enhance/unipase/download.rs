@@ -27,8 +27,10 @@ use std::{
 
 use candle_core::Tensor;
 
-use super::error::UnipaseError;
-use crate::download::{self, Download, Progress};
+use crate::{
+    download::{self, Download, Progress},
+    enhance::EnhanceError,
+};
 
 /// The converted checkpoint every runtime loads.
 pub const WEIGHTS_FILE: &str = "model.safetensors";
@@ -105,18 +107,18 @@ pub struct ResolvedModel {
 ///
 /// # Errors
 ///
-/// Returns [`UnipaseError::InvalidModel`] for an unknown name,
-/// [`UnipaseError::ModelDownload`] when a checkpoint cannot be fetched, and
-/// [`UnipaseError::Checkpoint`] when one cannot be converted.
+/// Returns [`EnhanceError::InvalidModel`] for an unknown name,
+/// [`EnhanceError::ModelDownload`] when a checkpoint cannot be fetched, and
+/// [`EnhanceError::Checkpoint`] when one cannot be converted.
 pub fn resolve_model(
     models_dir: &Path,
     model: &str,
     progress: Progress<'_>,
-) -> Result<ResolvedModel, UnipaseError> {
+) -> Result<ResolvedModel, EnhanceError> {
     let as_path = Path::new(model);
     if as_path.is_dir() {
         if !as_path.join(WEIGHTS_FILE).is_file() {
-            return Err(UnipaseError::InvalidModel(format!(
+            return Err(EnhanceError::InvalidModel(format!(
                 "the directory `{model}` holds no {WEIGHTS_FILE}"
             )));
         }
@@ -127,7 +129,7 @@ pub fn resolve_model(
     }
 
     if !KNOWN_MODELS.contains(&model) {
-        return Err(UnipaseError::InvalidModel(format!(
+        return Err(EnhanceError::InvalidModel(format!(
             "unknown model `{model}` (known: {}; or pass a directory holding \
              {WEIGHTS_FILE})",
             KNOWN_MODELS.join(", ")
@@ -179,7 +181,7 @@ const ISTFT_WINDOW: &str = "head.istft.window";
 fn convert(
     archives: &[(PathBuf, &'static Part)],
     out: &Path,
-) -> Result<(), UnipaseError> {
+) -> Result<(), EnhanceError> {
     let mut all: HashMap<String, Tensor> = HashMap::new();
     for (archive, part) in archives {
         let tensors = read_state_dict(archive)?;
@@ -188,7 +190,7 @@ fn convert(
                 continue;
             }
             if tensor.dtype() != candle_core::DType::F32 {
-                return Err(UnipaseError::Checkpoint(format!(
+                return Err(EnhanceError::Checkpoint(format!(
                     "{}: `{name}` is stored as {:?}, expected f32",
                     archive.display(),
                     tensor.dtype()
@@ -207,7 +209,7 @@ fn convert(
         "vocoder.head.out.weight",
     ] {
         if !all.contains_key(required) {
-            return Err(UnipaseError::Checkpoint(format!(
+            return Err(EnhanceError::Checkpoint(format!(
                 "the converted checkpoint has no `{required}`, so it is not \
                  the published pipeline"
             )));
@@ -216,20 +218,20 @@ fn convert(
 
     let temp = out.with_extension("partial");
     candle_core::safetensors::save(&all, &temp).map_err(|e| {
-        UnipaseError::Checkpoint(format!("writing {}: {e}", temp.display()))
+        EnhanceError::Checkpoint(format!("writing {}: {e}", temp.display()))
     })?;
     fs::rename(&temp, out).map_err(|e| {
-        UnipaseError::Checkpoint(format!("finalizing {}: {e}", out.display()))
+        EnhanceError::Checkpoint(format!("finalizing {}: {e}", out.display()))
     })
 }
 
 /// Reads the `model` half of a published archive.
 fn read_state_dict(
     archive: &Path,
-) -> Result<Vec<(String, Tensor)>, UnipaseError> {
+) -> Result<Vec<(String, Tensor)>, EnhanceError> {
     candle_core::pickle::read_all_with_key(archive, Some("model")).map_err(
         |e| {
-            UnipaseError::Checkpoint(format!(
+            EnhanceError::Checkpoint(format!(
                 "{}: cannot read its `model` state dictionary ({e})",
                 archive.display()
             ))
@@ -245,8 +247,8 @@ fn read_state_dict(
 /// convolution.
 fn fold_weight_norm(
     all: &mut HashMap<String, Tensor>,
-) -> Result<(), UnipaseError> {
-    let failed = |what: String| UnipaseError::Checkpoint(what);
+) -> Result<(), EnhanceError> {
+    let failed = |what: String| EnhanceError::Checkpoint(what);
     let (Some(gain), Some(direction)) =
         (all.remove(WEIGHT_G), all.remove(WEIGHT_V))
     else {

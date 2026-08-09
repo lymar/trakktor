@@ -285,6 +285,16 @@ oar-ocr — Apache-2.0 License
   rotary sections in `ocr vl` follow it. No code is vendored — the crate is
   not a dependency of trakktor.
 
+GTCRN — MIT License
+  Copyright (c) 2024 Xiaobin Rong
+  https://github.com/Xiaobin-Rong/gtcrn
+  The `enhance gtcrn` engine ports the GTCRN speech-enhancement network: its
+  equivalent-rectangular band folding, subband feature extraction, grouped
+  temporal convolution blocks with their recurrent attention, the dual-path
+  grouped recurrent core, and the complex ratio mask it ends in. The published
+  checkpoint is downloaded from the project's own repository at runtime and is
+  not redistributed here.
+
 UniPASE — MIT License
   Copyright (c) 2026 Rong Xiaobin
   https://github.com/Xiaobin-Rong/unipase

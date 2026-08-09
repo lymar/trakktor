@@ -12,15 +12,15 @@ impl EnhanceModel for Echo {
         &mut self,
         samples: &[f32],
         _lost: &[bool],
-    ) -> Result<Vec<f32>, UnipaseError> {
+    ) -> Result<Vec<f32>, EnhanceError> {
         self.seen.push(samples.len());
         // A real runtime returns `frames × 320`, which drops the alignment
         // remainder; imitate that exactly.
         Ok(samples[..samples.len() / HOP * HOP].to_vec())
     }
 
-    fn runtime(&self) -> super::super::model::Runtime {
-        super::super::model::Runtime::Candle
+    fn runtime(&self) -> crate::enhance::Runtime {
+        crate::enhance::Runtime::Candle
     }
 }
 
@@ -156,7 +156,7 @@ fn an_empty_recording_is_an_error() {
         &mut |_| {},
     )
     .unwrap_err();
-    assert!(matches!(error, UnipaseError::Empty));
+    assert!(matches!(error, EnhanceError::Empty));
 }
 
 #[test]

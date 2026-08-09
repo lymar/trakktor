@@ -18,31 +18,30 @@ use candle_nn::VarBuilder;
 use super::{
     config::{HOP, PAD_REMAINDER},
     download::WEIGHTS_FILE,
-    error::UnipaseError,
     istft,
-    model::{EnhanceModel, Precision, Runtime},
 };
+use crate::enhance::{EnhanceError, EnhanceModel, Precision, Runtime};
 
 /// Creates the compute device, reporting a build without Metal as a validation
 /// error rather than falling back silently.
 ///
 /// # Errors
 ///
-/// Returns [`UnipaseError::InvalidOptions`] when Metal is asked for and this
-/// build has no Metal support, and [`UnipaseError::Checkpoint`] when the device
+/// Returns [`EnhanceError::InvalidOptions`] when Metal is asked for and this
+/// build has no Metal support, and [`EnhanceError::Checkpoint`] when the device
 /// cannot be created.
-pub fn device(metal: bool) -> Result<Device, UnipaseError> {
+pub fn device(metal: bool) -> Result<Device, EnhanceError> {
     if !metal {
         return Ok(Device::Cpu);
     }
     #[cfg(feature = "enhance-metal")]
     {
         Device::new_metal(0).map_err(|e| {
-            UnipaseError::Checkpoint(format!("opening the Metal device: {e}"))
+            EnhanceError::Checkpoint(format!("opening the Metal device: {e}"))
         })
     }
     #[cfg(not(feature = "enhance-metal"))]
-    Err(UnipaseError::InvalidOptions(
+    Err(EnhanceError::InvalidOptions(
         "this build has no Metal support; rebuild with the `metal` feature, \
          or use `--device cpu`"
             .into(),
@@ -50,8 +49,8 @@ pub fn device(metal: bool) -> Result<Device, UnipaseError> {
 }
 
 /// Wraps a candle failure as a checkpoint error, naming what was being read.
-pub(super) fn model_err(what: &str, error: candle_core::Error) -> UnipaseError {
-    UnipaseError::Checkpoint(format!("{what}: {error}"))
+pub(super) fn model_err(what: &str, error: candle_core::Error) -> EnhanceError {
+    EnhanceError::Checkpoint(format!("{what}: {error}"))
 }
 
 /// The pipeline on candle.
@@ -68,16 +67,16 @@ impl CandleModel {
     ///
     /// # Errors
     ///
-    /// Returns [`UnipaseError::Checkpoint`] when the weights are missing or do
+    /// Returns [`EnhanceError::Checkpoint`] when the weights are missing or do
     /// not match the geometry the engine expects.
     pub fn load(
         dir: &Path,
         device: Device,
         precision: Precision,
-    ) -> Result<Self, UnipaseError> {
+    ) -> Result<Self, EnhanceError> {
         let path = dir.join(WEIGHTS_FILE);
         if !path.is_file() {
-            return Err(UnipaseError::Checkpoint(format!(
+            return Err(EnhanceError::Checkpoint(format!(
                 "no {}",
                 path.display()
             )));
@@ -114,7 +113,7 @@ impl EnhanceModel for CandleModel {
         &mut self,
         samples: &[f32],
         lost: &[bool],
-    ) -> Result<Vec<f32>, UnipaseError> {
+    ) -> Result<Vec<f32>, EnhanceError> {
         debug_assert_eq!(samples.len() % HOP, PAD_REMAINDER);
         let frames = samples.len() / HOP;
         let run = || -> candle_core::Result<Vec<f32>> {
@@ -125,7 +124,7 @@ impl EnhanceModel for CandleModel {
             let adapted = self.adapter.forward(&acoustic, &phonetic)?;
             self.vocoder.spectrum(&adapted)
         };
-        let head = run().map_err(|e| UnipaseError::Compute(e.to_string()))?;
+        let head = run().map_err(|e| EnhanceError::Compute(e.to_string()))?;
         Ok(istft::spectrum_to_wave(&head, frames))
     }
 

@@ -22,158 +22,29 @@ use super::{
         HOP, HOP_SECONDS, PAD_REMAINDER, SAMPLE_RATE, WINDOW_SECONDS,
         aligned_len,
     },
-    error::UnipaseError,
-    model::EnhanceModel,
     plc,
 };
-use crate::audio::{
-    AudioError, DecodedAudio, MonoS16Stream,
-    encode::{self, Format},
-    pipeline::NativeBuf,
-    resample::Resampler,
+use crate::{
+    audio::{MonoS16Stream, resample::Resampler},
+    enhance::{
+        EnhanceError, EnhanceModel, EnhanceOptions, EnhanceProgress, Enhanced,
+        Progress,
+    },
 };
-
-/// Everything one enhancement run needs beyond the recording itself.
-#[derive(Debug, Clone)]
-pub struct EnhanceOptions {
-    /// The rate to write at. `None` keeps the recording's own rate.
-    ///
-    /// The pipeline works at 16 kHz whatever this is, and the result is
-    /// resampled to what is asked for. A rate above 16 kHz therefore buys a
-    /// container that matches the source, not bandwidth that is not there.
-    pub sample_rate: Option<u32>,
-    /// Whether to conceal lost packets.
-    pub plc: bool,
-}
-
-impl Default for EnhanceOptions {
-    fn default() -> Self {
-        Self {
-            sample_rate: None,
-            plc: true,
-        }
-    }
-}
-
-/// How far along a run is, reported as it goes.
-#[derive(Debug, Clone, Copy)]
-pub struct EnhanceProgress {
-    /// 1-based index of the window just finished.
-    pub window: usize,
-    /// Windows in the recording.
-    pub windows: usize,
-    /// Seconds of audio the finished windows cover.
-    pub done_seconds: f64,
-    /// Seconds of audio in the recording.
-    pub total_seconds: f64,
-}
-
-/// A callback invoked after each window.
-pub type Progress<'a> = &'a mut dyn FnMut(EnhanceProgress);
-
-/// The enhanced recording.
-#[derive(Debug, Clone)]
-pub struct Enhanced {
-    /// Mono samples in `[-1, 1]`.
-    pub samples: Vec<f32>,
-    /// Their rate.
-    pub sample_rate: u32,
-    /// The recording's own rate, before anything was done to it.
-    pub source_sample_rate: u32,
-    /// Windows the pipeline ran.
-    pub windows: usize,
-    /// Frames the packet-loss detector concealed.
-    pub concealed_frames: usize,
-}
-
-impl Enhanced {
-    /// Length of the result, in seconds.
-    #[must_use]
-    pub fn duration(&self) -> f64 {
-        if self.sample_rate == 0 {
-            return 0.0;
-        }
-        self.samples.len() as f64 / f64::from(self.sample_rate)
-    }
-
-    /// Seconds of audio the packet-loss detector filled in.
-    #[must_use]
-    pub fn concealed_seconds(&self) -> f64 {
-        self.concealed_frames as f64 * HOP as f64 / f64::from(SAMPLE_RATE)
-    }
-
-    /// Writes the audio to `path`.
-    ///
-    /// WAV keeps the samples exactly as enhanced — 32-bit float. FLAC is
-    /// integer-only, so the samples are quantized to 24 bits first.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AudioError`] when the encoder or the file write fails.
-    pub fn write(&self, path: &Path, format: Format) -> Result<(), AudioError> {
-        let audio = match format {
-            Format::Wav => DecodedAudio::from_parts(
-                self.sample_rate,
-                None,
-                None,
-                NativeBuf::F32(vec![self.samples.clone()]),
-            ),
-            Format::Flac => {
-                let peak = f64::from((1u32 << 23) - 1);
-                let quantized: Vec<i32> = self
-                    .samples
-                    .iter()
-                    .map(|&sample| {
-                        let scaled = (f64::from(sample) * peak).round();
-                        (scaled.clamp(-peak, peak) as i32) << 8
-                    })
-                    .collect();
-                DecodedAudio::from_parts(
-                    self.sample_rate,
-                    None,
-                    Some(24),
-                    NativeBuf::S32(vec![quantized]),
-                )
-            },
-        };
-        encode::write(path, &audio, format)
-    }
-
-    /// Writes the audio through an external `ffmpeg`, which picks the container
-    /// and codec from `path`'s extension.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AudioError`] when ffmpeg is missing, fails, or the file cannot
-    /// be written.
-    pub fn write_ffmpeg(
-        &self,
-        path: &Path,
-        bitrate: Option<&str>,
-    ) -> Result<(), AudioError> {
-        let audio = DecodedAudio::from_parts(
-            self.sample_rate,
-            None,
-            None,
-            NativeBuf::F32(vec![self.samples.clone()]),
-        );
-        encode::write_ffmpeg(path, &audio, bitrate)
-    }
-}
 
 /// Enhances a recording.
 ///
 /// # Errors
 ///
-/// Returns [`UnipaseError::Decode`] when the file cannot be read,
-/// [`UnipaseError::Empty`] when it holds no audio, and
-/// [`UnipaseError::Compute`] when the network fails.
+/// Returns [`EnhanceError::Decode`] when the file cannot be read,
+/// [`EnhanceError::Empty`] when it holds no audio, and
+/// [`EnhanceError::Compute`] when the network fails.
 pub fn enhance_file(
     path: &Path,
     model: &mut dyn EnhanceModel,
     options: &EnhanceOptions,
     progress: Progress<'_>,
-) -> Result<Enhanced, UnipaseError> {
+) -> Result<Enhanced, EnhanceError> {
     let mut stream = MonoS16Stream::open(path, SAMPLE_RATE)?;
     let source_rate = stream.source_sample_rate();
     let mut samples = Vec::new();
@@ -183,7 +54,7 @@ pub fn enhance_file(
         );
     }
     if samples.is_empty() {
-        return Err(UnipaseError::Empty);
+        return Err(EnhanceError::Empty);
     }
     let out_rate = options.sample_rate.unwrap_or(source_rate);
     let enhanced =
@@ -199,16 +70,16 @@ pub fn enhance_file(
 ///
 /// # Errors
 ///
-/// Returns [`UnipaseError::Compute`] when the network fails.
+/// Returns [`EnhanceError::Compute`] when the network fails.
 pub fn enhance_samples(
     samples: &[f32],
     model: &mut dyn EnhanceModel,
     options: &EnhanceOptions,
     out_rate: u32,
     progress: Progress<'_>,
-) -> Result<Enhanced, UnipaseError> {
+) -> Result<Enhanced, EnhanceError> {
     if samples.is_empty() {
-        return Err(UnipaseError::Empty);
+        return Err(EnhanceError::Empty);
     }
     let peak = samples.iter().fold(0f32, |acc, &v| acc.max(v.abs()));
 
@@ -254,6 +125,8 @@ pub fn enhance_samples(
         source_sample_rate: SAMPLE_RATE,
         windows: spans.len(),
         concealed_frames: concealed,
+        concealed_seconds: concealed as f64 * HOP as f64 /
+            f64::from(SAMPLE_RATE),
     })
 }
 
@@ -326,12 +199,12 @@ fn resample_mono(
     samples: &[f32],
     from: u32,
     to: u32,
-) -> Result<Vec<f32>, UnipaseError> {
+) -> Result<Vec<f32>, EnhanceError> {
     if from == to {
         return Ok(samples.to_vec());
     }
     let mut resampler =
-        Resampler::<f32>::new(to, from, 1).map_err(UnipaseError::from)?;
+        Resampler::<f32>::new(to, from, 1).map_err(EnhanceError::from)?;
     let mut out = resampler.feed(&[samples]).remove(0);
     out.extend(resampler.finish().remove(0));
     Ok(out)

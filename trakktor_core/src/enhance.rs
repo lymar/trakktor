@@ -15,7 +15,25 @@
 //! Engines live one per module, the way they do under [`asr`](crate::asr) and
 //! [`tts`](crate::tts):
 //!
+//! - [`gtcrn`] — an ultra-light masking network: 48 K parameters, a hundredth
+//!   of real time on one CPU core;
 //! - [`unipase`] — a four-network generative pipeline around a fine-tuned WavLM
-//!   encoder.
+//!   encoder: 546 M parameters, and the only one of the two that can put back
+//!   what is not there.
+//!
+//! What is shared sits here rather than in either of them: the failures
+//! ([`error`]), and the seam a runtime implements plus the result it produces
+//! ([`model`]). Neither depends on which network is behind the command.
 
+pub mod error;
+pub mod gtcrn;
+#[cfg(feature = "enhance-runtime")]
+pub mod model;
 pub mod unipase;
+
+pub use error::EnhanceError;
+#[cfg(feature = "enhance-runtime")]
+pub use model::{
+    EnhanceModel, EnhanceOptions, EnhanceProgress, Enhanced, Precision,
+    Progress, Runtime,
+};

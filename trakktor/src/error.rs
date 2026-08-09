@@ -8,7 +8,7 @@
 use trakktor_core::{
     asr::{gigaam::GigaamError, vosk::VoskError, whisper::WhisperError},
     audio::AudioError,
-    enhance::unipase::UnipaseError,
+    enhance::EnhanceError,
     feed::FeedError,
     http::HttpError,
     ocr::OcrError,
@@ -53,8 +53,8 @@ pub enum CliError {
     Espeech(EspeechError),
     /// An error from the Silero engine.
     Silero(SileroError),
-    /// An error from the UniPASE speech-enhancement engine.
-    Unipase(UnipaseError),
+    /// An error from the speech-enhancement domain.
+    Enhance(EnhanceError),
 }
 
 impl CliError {
@@ -76,7 +76,7 @@ impl CliError {
             CliError::Qwen3Tts(err) => qwen3_tts_code(err),
             CliError::Espeech(err) => espeech_code(err),
             CliError::Silero(err) => silero_code(err),
-            CliError::Unipase(err) => unipase_code(err),
+            CliError::Enhance(err) => enhance_code(err),
         }
     }
 }
@@ -98,7 +98,7 @@ impl std::fmt::Display for CliError {
             CliError::Qwen3Tts(err) => write!(f, "{err}"),
             CliError::Espeech(err) => write!(f, "{err}"),
             CliError::Silero(err) => write!(f, "{err}"),
-            CliError::Unipase(err) => write!(f, "{err}"),
+            CliError::Enhance(err) => write!(f, "{err}"),
         }
     }
 }
@@ -155,8 +155,8 @@ impl From<SileroError> for CliError {
     fn from(err: SileroError) -> Self { CliError::Silero(err) }
 }
 
-impl From<UnipaseError> for CliError {
-    fn from(err: UnipaseError) -> Self { CliError::Unipase(err) }
+impl From<EnhanceError> for CliError {
+    fn from(err: EnhanceError) -> Self { CliError::Enhance(err) }
 }
 
 impl From<Qwen3TtsError> for CliError {
@@ -347,16 +347,16 @@ fn qwen3_tts_code(err: &Qwen3TtsError) -> &'static str {
     }
 }
 
-/// Maps a [`UnipaseError`] to its stable `code`.
-fn unipase_code(err: &UnipaseError) -> &'static str {
+/// Maps an [`EnhanceError`] to its stable `code`.
+fn enhance_code(err: &EnhanceError) -> &'static str {
     match err {
-        UnipaseError::InvalidModel(_) => "invalid_model",
-        UnipaseError::ModelDownload(_) => "model_download_failed",
-        UnipaseError::Checkpoint(_) => "checkpoint_invalid",
-        UnipaseError::InvalidOptions(_) => "invalid_options",
-        UnipaseError::Decode(_) => "audio_decode_failed",
-        UnipaseError::Empty => "audio_empty",
-        UnipaseError::Compute(_) => "enhance_failed",
-        UnipaseError::Io(_) => "io_error",
+        EnhanceError::InvalidModel(_) => "invalid_model",
+        EnhanceError::ModelDownload(_) => "model_download_failed",
+        EnhanceError::Checkpoint(_) => "checkpoint_invalid",
+        EnhanceError::InvalidOptions(_) => "invalid_options",
+        EnhanceError::Decode(_) => "audio_decode_failed",
+        EnhanceError::Empty => "audio_empty",
+        EnhanceError::Compute(_) => "enhance_failed",
+        EnhanceError::Io(_) => "io_error",
     }
 }

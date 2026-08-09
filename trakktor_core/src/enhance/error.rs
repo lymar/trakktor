@@ -1,8 +1,11 @@
-//! Failures of the UniPASE engine, in the shape the output contract needs.
+//! Failures of the enhancement domain, in the shape the output contract
+//! needs. Shared by every engine: what can go wrong — an unknown model, a
+//! checkpoint that will not load, a recording that will not decode — does not
+//! depend on which network is behind the command.
 
 /// What can go wrong in one enhancement run.
 #[derive(Debug, thiserror::Error)]
-pub enum UnipaseError {
+pub enum EnhanceError {
     /// The model name is neither a published variant nor a checkpoint
     /// directory.
     #[error("{0}")]
@@ -37,13 +40,13 @@ pub enum UnipaseError {
     Io(String),
 }
 
-impl From<crate::download::DownloadError> for UnipaseError {
+impl From<crate::download::DownloadError> for EnhanceError {
     fn from(error: crate::download::DownloadError) -> Self {
         Self::ModelDownload(error.to_string())
     }
 }
 
-impl From<crate::audio::AudioError> for UnipaseError {
+impl From<crate::audio::AudioError> for EnhanceError {
     fn from(error: crate::audio::AudioError) -> Self {
         Self::Decode(error.to_string())
     }

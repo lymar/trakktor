@@ -95,6 +95,19 @@ Apache-licensed:
   [PaddleX](https://github.com/PaddlePaddle/PaddleX) (Apache-2.0). Weights are
   downloaded at runtime. Please cite the PaddleOCR 3.0 technical report
   (arXiv:2507.05595) and the RT-DETR paper if you use this model.
+- [**`enhance gtcrn`**](features/enhance/README.md) —
+  [GTCRN](https://github.com/Xiaobin-Rong/gtcrn) (MIT) by Xiaobin Rong, Jing Lu
+  and co-authors: the ultra-lightweight masking enhancer — 48 K parameters —
+  ported to the same candle runtime. Its checkpoint (MIT, carried in the
+  project's own repository) is downloaded at runtime. Paper:
+  [ICASSP 2024](https://ieeexplore.ieee.org/document/10448310).
+
+  If you use this engine, please cite:
+
+  > X. Rong, T. Sun, X. Zhang, Y. Hu, C. Zhu and J. Lu, "GTCRN: A Speech
+  > Enhancement Model Requiring Ultralow Computational Resources," *ICASSP
+  > 2024*, pp. 971-975.
+
 - [**`enhance unipase`**](features/enhance/README.md) —
   [UniPASE](https://github.com/Xiaobin-Rong/unipase) (MIT) by Xiaobin Rong,
   Zheng Wang, Yushi Wang, Jun Gao and Jing Lu: the generative

@@ -13,7 +13,7 @@ use trakktor_core::{
         gigaam, vosk,
         whisper::{Segment, Transcription, Word},
     },
-    enhance::unipase::Enhanced,
+    enhance::Enhanced,
     feed::{
         Author, ContentBlock, DiscoveredFeed, Field, MarkReadSummary,
         Publication,
@@ -937,6 +937,7 @@ pub fn print_enhance(
     enhanced: &Enhanced,
     output: &Path,
     format: &str,
+    engine: &str,
     model: &str,
     runtime: &str,
     device: &str,
@@ -964,12 +965,12 @@ pub fn print_enhance(
         let mut plc_block = Map::new();
         plc_block.insert("enabled".into(), json!(plc));
         plc_block.insert("frames".into(), json!(enhanced.concealed_frames));
-        insert_f64(&mut plc_block, "seconds", enhanced.concealed_seconds());
+        insert_f64(&mut plc_block, "seconds", enhanced.concealed_seconds);
         object.insert("packet_loss".into(), Value::Object(plc_block));
         object.insert(
             "engine".into(),
             json!({
-                "name": "unipase",
+                "name": engine,
                 "model": model,
                 "runtime": runtime,
                 "device": device,
@@ -981,13 +982,13 @@ pub fn print_enhance(
 
     println!("{}", output.display());
     println!(
-        "{:.2}s\t{} Hz\t{} window{}\t{:.2}s concealed\t{model} ({runtime}, \
-         {device})",
+        "{:.2}s\t{} Hz\t{} window{}\t{:.2}s concealed\t{engine} {model} \
+         ({runtime}, {device})",
         duration,
         enhanced.sample_rate,
         enhanced.windows,
         if enhanced.windows == 1 { "" } else { "s" },
-        enhanced.concealed_seconds(),
+        enhanced.concealed_seconds,
     );
 }
 

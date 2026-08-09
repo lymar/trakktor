@@ -22,16 +22,18 @@ use burn::tensor::{
 };
 
 use super::Weights;
-use crate::enhance::unipase::{
-    config::{
-        ATTENTION_HEADS, BACKBONE_DIM, BACKBONE_FF, BACKBONE_LAYERS,
-        BACKBONE_NORM_EPS, CONV_LAYERS, CONV_POS, CONV_POS_GROUPS, ENCODER_DIM,
-        ENCODER_LAYERS, ENCODER_NORM_EPS, FFN_DIM, GREP_DIM, POS_NET_ATTN,
-        POS_NET_GROUPS, POS_NET_RES, TAP_ACOUSTIC, TAP_NORM_EPS, TAP_PHONETIC,
-        bins, head_dim,
+use crate::enhance::{
+    EnhanceError,
+    unipase::{
+        config::{
+            ATTENTION_HEADS, BACKBONE_DIM, BACKBONE_FF, BACKBONE_LAYERS,
+            BACKBONE_NORM_EPS, CONV_LAYERS, CONV_POS, CONV_POS_GROUPS,
+            ENCODER_DIM, ENCODER_LAYERS, ENCODER_NORM_EPS, FFN_DIM, GREP_DIM,
+            POS_NET_ATTN, POS_NET_GROUPS, POS_NET_RES, TAP_ACOUSTIC,
+            TAP_NORM_EPS, TAP_PHONETIC, bins, head_dim,
+        },
+        runtime::net::relative_buckets,
     },
-    error::UnipaseError,
-    runtime::net::relative_buckets,
 };
 
 /// Reads a checkpoint tensor of the given shape as a burn tensor.
@@ -40,7 +42,7 @@ fn weight<B: Backend, const D: usize>(
     device: &B::Device,
     key: &str,
     shape: [usize; D],
-) -> Result<Tensor<B, D>, UnipaseError> {
+) -> Result<Tensor<B, D>, EnhanceError> {
     let (values, dims) = weights.parts(key)?;
     if dims != shape {
         return Err(model_err_str(
@@ -52,8 +54,8 @@ fn weight<B: Backend, const D: usize>(
 }
 
 /// A checkpoint error naming the tensor it is about.
-fn model_err_str(key: &str, what: &str) -> UnipaseError {
-    UnipaseError::Checkpoint(format!("{key}: {what}"))
+fn model_err_str(key: &str, what: &str) -> EnhanceError {
+    EnhanceError::Checkpoint(format!("{key}: {what}"))
 }
 
 /// Blocked out-of-place transpose of a row-major `[rows, cols]` matrix.
@@ -79,7 +81,7 @@ fn matrix<B: Backend>(
     key: &str,
     out_dim: usize,
     in_dim: usize,
-) -> Result<Tensor<B, 2>, UnipaseError> {
+) -> Result<Tensor<B, 2>, EnhanceError> {
     let (values, dims) = weights.parts(key)?;
     if dims != [out_dim, in_dim] {
         return Err(model_err_str(
@@ -109,7 +111,7 @@ impl<B: Backend> Dense<B> {
         prefix: &str,
         out_dim: usize,
         in_dim: usize,
-    ) -> Result<Self, UnipaseError> {
+    ) -> Result<Self, EnhanceError> {
         Ok(Self {
             weight: matrix(
                 weights,
@@ -153,7 +155,7 @@ impl<B: Backend> Conv<B> {
         padding: usize,
         groups: usize,
         bias: bool,
-    ) -> Result<Self, UnipaseError> {
+    ) -> Result<Self, EnhanceError> {
         Ok(Self {
             weight: weight(
                 weights,
@@ -202,7 +204,7 @@ impl<B: Backend> AffineNorm<B> {
         prefix: &str,
         size: usize,
         eps: f64,
-    ) -> Result<Self, UnipaseError> {
+    ) -> Result<Self, EnhanceError> {
         Ok(Self {
             weight: weight(
                 weights,
@@ -243,7 +245,7 @@ impl<B: Backend> GroupNorm<B> {
         device: &B::Device,
         prefix: &str,
         channels: usize,
-    ) -> Result<Self, UnipaseError> {
+    ) -> Result<Self, EnhanceError> {
         Ok(Self {
             weight: weight(
                 weights,
@@ -286,7 +288,7 @@ impl<B: Backend> ConvExtractor<B> {
         weights: &Weights,
         device: &B::Device,
         prefix: &str,
-    ) -> Result<Self, UnipaseError> {
+    ) -> Result<Self, EnhanceError> {
         let mut blocks = Vec::with_capacity(CONV_LAYERS.len());
         let mut in_channels = 1;
         for (index, &(channels, kernel, stride)) in
@@ -348,7 +350,7 @@ impl<B: Backend> Attention<B> {
         device: &B::Device,
         prefix: &str,
         first: bool,
-    ) -> Result<Self, UnipaseError> {
+    ) -> Result<Self, EnhanceError> {
         Ok(Self {
             q_proj: Dense::load(
                 weights,
@@ -501,7 +503,7 @@ impl<B: Backend> EncoderLayer<B> {
         device: &B::Device,
         prefix: &str,
         first: bool,
-    ) -> Result<Self, UnipaseError> {
+    ) -> Result<Self, EnhanceError> {
         Ok(Self {
             attention: Attention::load(
                 weights,
@@ -570,7 +572,7 @@ impl<B: Backend> Encoder<B> {
     pub fn load(
         weights: &Weights,
         device: &B::Device,
-    ) -> Result<Self, UnipaseError> {
+    ) -> Result<Self, EnhanceError> {
         let (last, _, _) = CONV_LAYERS[CONV_LAYERS.len() - 1];
         Ok(Self {
             extractor: ConvExtractor::load(
@@ -710,7 +712,7 @@ impl<B: Backend> ConvNeXtBlock<B> {
         weights: &Weights,
         device: &B::Device,
         prefix: &str,
-    ) -> Result<Self, UnipaseError> {
+    ) -> Result<Self, EnhanceError> {
         Ok(Self {
             dwconv: Conv::load(
                 weights,
@@ -779,7 +781,7 @@ impl<B: Backend> ResBlock<B> {
         weights: &Weights,
         device: &B::Device,
         prefix: &str,
-    ) -> Result<Self, UnipaseError> {
+    ) -> Result<Self, EnhanceError> {
         let conv = |name: &str| {
             Conv::load(
                 weights,
@@ -839,7 +841,7 @@ impl<B: Backend> AttnBlock<B> {
         weights: &Weights,
         device: &B::Device,
         prefix: &str,
-    ) -> Result<Self, UnipaseError> {
+    ) -> Result<Self, EnhanceError> {
         let point = |name: &str| {
             Conv::load(
                 weights,
@@ -899,7 +901,7 @@ impl<B: Backend> Backbone<B> {
         weights: &Weights,
         device: &B::Device,
         prefix: &str,
-    ) -> Result<Self, UnipaseError> {
+    ) -> Result<Self, EnhanceError> {
         let half = POS_NET_RES / 2;
         let res = |from: usize, count: usize| {
             (0..count)
@@ -1003,7 +1005,7 @@ impl<B: Backend> Adapter<B> {
     pub fn load(
         weights: &Weights,
         device: &B::Device,
-    ) -> Result<Self, UnipaseError> {
+    ) -> Result<Self, EnhanceError> {
         Ok(Self {
             proj: Dense::load(
                 weights,
@@ -1046,7 +1048,7 @@ impl<B: Backend> Vocoder<B> {
     pub fn load(
         weights: &Weights,
         device: &B::Device,
-    ) -> Result<Self, UnipaseError> {
+    ) -> Result<Self, EnhanceError> {
         Ok(Self {
             backbone: Backbone::load(weights, device, "vocoder.decoder")?,
             out: Dense::load(
