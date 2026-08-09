@@ -7,6 +7,7 @@ mod asr;
 #[cfg(feature = "burn")]
 mod burn_notice;
 mod cli;
+mod enhance;
 mod error;
 mod ocr;
 mod output;

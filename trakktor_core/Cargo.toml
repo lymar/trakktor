@@ -19,6 +19,7 @@ default = [
     "stress-runtime",
     "tts-runtime",
     "ocr-runtime",
+    "enhance-runtime",
 ]
 # Built-in audio decoding (symphonia), the sample-rate/channel conversion
 # pipeline, and the WAV/FLAC encoders. Off the default set the crate builds
@@ -129,6 +130,19 @@ ocr-runtime = [
 # candle one. Builds on top of the candle runtime (shared artifact reader and
 # model plumbing).
 ocr-burn = ["ocr-runtime", "dep:burn"]
+# The candle-backed speech-enhancement runtime (`enhance unipase`): a
+# fine-tuned WavLM encoder, a Vocos adapter and a Vocos vocoder. Needs candle
+# and the audio stack (it decodes a recording and writes one back). Off the
+# default set the crate builds without it.
+enhance-runtime = [
+    "dep:candle-core",
+    "dep:candle-nn",
+    "audio",
+]
+# The burn-backed alternative enhancement runtime, selectable at run time next
+# to the candle one. Builds on top of the candle runtime (shared checkpoint
+# conversion, windowing and inverse transform).
+enhance-burn = ["enhance-runtime", "dep:burn"]
 # GPU acceleration for the Whisper runtime.
 whisper-metal = ["whisper-runtime", "candle-core/metal", "candle-nn/metal"]
 whisper-cuda = ["whisper-runtime", "candle-core/cuda", "candle-nn/cuda"]
@@ -153,6 +167,9 @@ tts-cuda = ["tts-runtime", "candle-core/cuda", "candle-nn/cuda"]
 # GPU acceleration for the OCR runtime.
 ocr-metal = ["ocr-runtime", "candle-core/metal", "candle-nn/metal"]
 ocr-cuda = ["ocr-runtime", "candle-core/cuda", "candle-nn/cuda"]
+# GPU acceleration for the enhancement runtime.
+enhance-metal = ["enhance-runtime", "candle-core/metal", "candle-nn/metal"]
+enhance-cuda = ["enhance-runtime", "candle-core/cuda", "candle-nn/cuda"]
 
 [dependencies]
 base64.workspace = true

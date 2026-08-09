@@ -24,19 +24,19 @@ const DESCRIPTION_MAX: usize = 1024;
 const STUB_DESCRIPTION: &str =
     "Use {name}, a predictable, automation-friendly CLI toolbox for coding \
      agents. Feeds: discover the RSS/Atom/JSON feeds a page declares, read \
-     unread entries as JSON, track read state. Speech: transcribe audio with \
-     a local Whisper, GigaAM or Vosk model, or translate it to English; read \
-     text or Markdown aloud, Russian too, in a preset or cloned voice. Audio: \
-     by voice-activity detection, report a speech/silence timeline, cut \
-     silence, or split it up. Images: read the text off scans and \
-     screenshots, page by page, in a dozen scripts — or with a document model \
-     that finds the script itself and reads tables and formulas; mark a page \
-     up into labelled blocks (heading, paragraph, footnote). Text: restore \
-     punctuation and casing, split into paragraphs, mark Russian stress — \
-     offline. Reach for it whenever a task involves a feed URL, turning audio \
-     into a transcript, reading text aloud, cloning a voice, removing dead \
-     air, extracting text or structure from a scan or PDF page, punctuating a \
-     transcript, or Russian stress marks.";
+     unread entries, track read state. Speech: transcribe audio with a local \
+     Whisper, GigaAM or Vosk model, or translate it to English; read text or \
+     Markdown aloud, Russian too, in a preset or cloned voice; clean up a \
+     damaged recording (noise, reverb, telephone band, dropped packets). \
+     Audio: by voice-activity detection, report a speech/silence timeline, \
+     cut silence, or split it. Images: read the text off scans and \
+     screenshots page by page in a dozen scripts, or a document model that \
+     reads tables and formulas; mark a page up into labelled blocks (heading, \
+     paragraph, footnote). Text: restore punctuation and casing, split into \
+     paragraphs, mark Russian stress — offline. Reach for it whenever a task \
+     involves a feed URL, audio to transcribe, text to read aloud, a voice to \
+     clone, a recording to clean up or trim, a page to read, a transcript to \
+     punctuate, or Russian stress marks.";
 
 /// Renders the agent-facing guide (`trakktor skill show`).
 ///

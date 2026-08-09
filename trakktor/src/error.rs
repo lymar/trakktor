@@ -8,6 +8,7 @@
 use trakktor_core::{
     asr::{gigaam::GigaamError, vosk::VoskError, whisper::WhisperError},
     audio::AudioError,
+    enhance::unipase::UnipaseError,
     feed::FeedError,
     http::HttpError,
     ocr::OcrError,
@@ -52,6 +53,8 @@ pub enum CliError {
     Espeech(EspeechError),
     /// An error from the Silero engine.
     Silero(SileroError),
+    /// An error from the UniPASE speech-enhancement engine.
+    Unipase(UnipaseError),
 }
 
 impl CliError {
@@ -73,6 +76,7 @@ impl CliError {
             CliError::Qwen3Tts(err) => qwen3_tts_code(err),
             CliError::Espeech(err) => espeech_code(err),
             CliError::Silero(err) => silero_code(err),
+            CliError::Unipase(err) => unipase_code(err),
         }
     }
 }
@@ -94,6 +98,7 @@ impl std::fmt::Display for CliError {
             CliError::Qwen3Tts(err) => write!(f, "{err}"),
             CliError::Espeech(err) => write!(f, "{err}"),
             CliError::Silero(err) => write!(f, "{err}"),
+            CliError::Unipase(err) => write!(f, "{err}"),
         }
     }
 }
@@ -148,6 +153,10 @@ impl From<EspeechError> for CliError {
 
 impl From<SileroError> for CliError {
     fn from(err: SileroError) -> Self { CliError::Silero(err) }
+}
+
+impl From<UnipaseError> for CliError {
+    fn from(err: UnipaseError) -> Self { CliError::Unipase(err) }
 }
 
 impl From<Qwen3TtsError> for CliError {
@@ -335,5 +344,19 @@ fn qwen3_tts_code(err: &Qwen3TtsError) -> &'static str {
         Qwen3TtsError::InvalidOptions(_) => "invalid_options",
         Qwen3TtsError::Io(_) => "io_error",
         Qwen3TtsError::HomeDirUnknown => "no_home_dir",
+    }
+}
+
+/// Maps a [`UnipaseError`] to its stable `code`.
+fn unipase_code(err: &UnipaseError) -> &'static str {
+    match err {
+        UnipaseError::InvalidModel(_) => "invalid_model",
+        UnipaseError::ModelDownload(_) => "model_download_failed",
+        UnipaseError::Checkpoint(_) => "checkpoint_invalid",
+        UnipaseError::InvalidOptions(_) => "invalid_options",
+        UnipaseError::Decode(_) => "audio_decode_failed",
+        UnipaseError::Empty => "audio_empty",
+        UnipaseError::Compute(_) => "enhance_failed",
+        UnipaseError::Io(_) => "io_error",
     }
 }

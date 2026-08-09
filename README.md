@@ -2,11 +2,11 @@
 
 `trakktor` is a predictable, automation-friendly Rust CLI toolbox for coding
 agents such as Claude Code and OpenCode (humans are welcome to use it too):
-speech-to-text and text-to-speech, voice-activity audio editing, feeds, text
-structuring, and more — machine-readable output, stable flags, and meaningful
-exit codes. No Python, no virtual environments, no drawn-out setup: a single
-binary that takes care of everything itself, downloading and caching the
-models it needs on first use.
+speech-to-text and text-to-speech, speech enhancement, voice-activity audio
+editing, feeds, text structuring, and more — machine-readable output, stable
+flags, and meaningful exit codes. No Python, no virtual environments, no
+drawn-out setup: a single binary that takes care of everything itself,
+downloading and caching the models it needs on first use.
 
 ## Commands
 
@@ -54,6 +54,15 @@ Each command is documented in full on its own page under
   head, page number, table, formula, picture — so the structure is read rather
   than guessed; it runs by default, `--no-layout` skips it, and `ocr layout`
   runs it on its own and answers "what is on this page" without reading a word.
+- [**`enhance` — clean up a speech recording**](docs/features/enhance/README.md):
+  a damaged recording in, a repaired one out — room noise and hiss removed,
+  reverberation reduced, a telephone-narrow band widened, and the holes a
+  dropped packet leaves in a call filled in from the words on either side. One
+  engine, [`unipase`](docs/features/enhance/README.md), a port of a generative
+  pipeline built around a fine-tuned speech encoder, so it can put back what is
+  missing rather than only subtract what is not wanted. It repairs damage and
+  does **not** improve a recording that is already good — the page says where it
+  helps and where it hurts, measured.
 - [**`vad` — voice-activity audio editing**](docs/features/vad/README.md):
   find the speech in an audio file and report it, cut the silence out, or
   split the recording into clips.
@@ -155,8 +164,8 @@ trakktor ports and builds on several open-source projects, all MIT- or
 Apache-licensed — Whisper, GigaAM, Vosk, Qwen3-TTS, F5-TTS and the ESpeech
 checkpoints, Vocos, Silero-VAD, Silero Stress, SaT / wtpsplit, the
 1-800-BAD-CODE punctuation model, PaddleOCR (with DB, the detection algorithm
-it builds on) and PaddleOCR-VL (with the ERNIE-4.5 decoder it is built on), on
-the candle and burn runtimes. The full credits — with
+it builds on) and PaddleOCR-VL (with the ERNIE-4.5 decoder it is built on),
+UniPASE (with WavLM and PASE behind it), on the candle and burn runtimes. The full credits — with
 licenses, upstream links, and papers — live in
 [`docs/acknowledgments.md`](docs/acknowledgments.md); see [`NOTICE`](NOTICE)
 for the complete third-party attributions and license notices.

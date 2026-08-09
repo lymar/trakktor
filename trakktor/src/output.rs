@@ -13,6 +13,7 @@ use trakktor_core::{
         gigaam, vosk,
         whisper::{Segment, Transcription, Word},
     },
+    enhance::unipase::Enhanced,
     feed::{
         Author, ContentBlock, DiscoveredFeed, Field, MarkReadSummary,
         Publication,
@@ -928,6 +929,65 @@ pub fn print_silero_synthesis(
         options.voice,
         model.label(),
         model.license().unwrap_or("license unknown"),
+    );
+}
+
+/// Prints the result of a speech-enhancement run.
+pub fn print_enhance(
+    enhanced: &Enhanced,
+    output: &Path,
+    format: &str,
+    model: &str,
+    runtime: &str,
+    device: &str,
+    plc: bool,
+    json: bool,
+    pretty: bool,
+) {
+    let duration = enhanced.duration();
+    if json {
+        let mut object = Map::new();
+        object.insert(
+            "output".into(),
+            Value::String(output.display().to_string()),
+        );
+        object.insert("format".into(), Value::String(format.into()));
+        object.insert("sample_rate".into(), json!(enhanced.sample_rate));
+        object.insert(
+            "source_sample_rate".into(),
+            json!(enhanced.source_sample_rate),
+        );
+        insert_f64(&mut object, "duration", duration);
+        object.insert("windows".into(), json!(enhanced.windows));
+        // What concealment actually did, so a run that filled in half the
+        // recording cannot look like one that changed nothing.
+        let mut plc_block = Map::new();
+        plc_block.insert("enabled".into(), json!(plc));
+        plc_block.insert("frames".into(), json!(enhanced.concealed_frames));
+        insert_f64(&mut plc_block, "seconds", enhanced.concealed_seconds());
+        object.insert("packet_loss".into(), Value::Object(plc_block));
+        object.insert(
+            "engine".into(),
+            json!({
+                "name": "unipase",
+                "model": model,
+                "runtime": runtime,
+                "device": device,
+            }),
+        );
+        print_json(&Value::Object(object), pretty);
+        return;
+    }
+
+    println!("{}", output.display());
+    println!(
+        "{:.2}s\t{} Hz\t{} window{}\t{:.2}s concealed\t{model} ({runtime}, \
+         {device})",
+        duration,
+        enhanced.sample_rate,
+        enhanced.windows,
+        if enhanced.windows == 1 { "" } else { "s" },
+        enhanced.concealed_seconds(),
     );
 }
 

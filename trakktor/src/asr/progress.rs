@@ -1,4 +1,4 @@
-//! Shared transcription progress reporting.
+//! Shared progress reporting for work measured in seconds of audio.
 //!
 //! Every ASR engine drives the same live stderr line while it transcribes —
 //! the audio position, percentage, elapsed wall time, and a rough estimate of
@@ -12,6 +12,10 @@
 //! audio length is known (the common file case) and is omitted only when the
 //! source has no length (for example an `ffmpeg` pipe). Reporting is
 //! throttled and, off a terminal, deduplicated so it never floods stderr.
+//!
+//! Speech enhancement measures its work the same way — seconds of audio out of
+//! seconds of audio — so it draws the same line through
+//! [`live_reporter_for`], with its own verb.
 
 use std::{
     io::{IsTerminal, Write},
@@ -31,6 +35,15 @@ const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '�
 /// carries the percentage and a `~mm:ss left` estimate; when it is not, just
 /// the position and elapsed time.
 pub(crate) fn live_reporter(started: Instant) -> impl FnMut(f64, Option<f64>) {
+    live_reporter_for("transcribing", started)
+}
+
+/// The same line under another verb, for work that is not transcription but is
+/// measured the same way.
+pub(crate) fn live_reporter_for(
+    verb: &'static str,
+    started: Instant,
+) -> impl FnMut(f64, Option<f64>) {
     let interactive = std::io::stderr().is_terminal();
     let mut frame: usize = 0;
     let mut last_render: Option<Instant> = None;
@@ -69,8 +82,8 @@ pub(crate) fn live_reporter(started: Instant) -> impl FnMut(f64, Option<f64>) {
                 let left = eta.as_deref().unwrap_or("--:--");
                 (
                     format!(
-                        "transcribing {} / {} ({percent}%) · {} elapsed · \
-                         ~{left} left",
+                        "{verb} {} / {} ({percent}%) · {} elapsed · ~{left} \
+                         left",
                         clock(position),
                         clock(total),
                         clock(elapsed_s),
@@ -80,7 +93,7 @@ pub(crate) fn live_reporter(started: Instant) -> impl FnMut(f64, Option<f64>) {
             },
             _ => (
                 format!(
-                    "transcribing {} · {} elapsed",
+                    "{verb} {} · {} elapsed",
                     clock(position),
                     clock(elapsed_s),
                 ),
@@ -113,14 +126,17 @@ pub(crate) fn live_reporter(started: Instant) -> impl FnMut(f64, Option<f64>) {
 /// longer live line). A no-op off a terminal, where the live line was already
 /// newline-terminated.
 pub(crate) fn finish_line(started: Instant, duration: f64) {
+    finish_line_for("transcribing", started, duration);
+}
+
+/// The same close, under the verb [`live_reporter_for`] was given.
+pub(crate) fn finish_line_for(verb: &str, started: Instant, duration: f64) {
     if !std::io::stderr().is_terminal() {
         return;
     }
     let total = clock(duration);
     let elapsed = clock(started.elapsed().as_secs_f64());
-    eprintln!(
-        "\r✓ transcribing {total} / {total} (100%) · {elapsed} elapsed\x1b[K"
-    );
+    eprintln!("\r✓ {verb} {total} / {total} (100%) · {elapsed} elapsed\x1b[K");
 }
 
 /// Formats a number of seconds as `mm:ss`, or `h:mm:ss` past an hour.

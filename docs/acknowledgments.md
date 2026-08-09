@@ -95,6 +95,28 @@ Apache-licensed:
   [PaddleX](https://github.com/PaddlePaddle/PaddleX) (Apache-2.0). Weights are
   downloaded at runtime. Please cite the PaddleOCR 3.0 technical report
   (arXiv:2507.05595) and the RT-DETR paper if you use this model.
+- [**`enhance unipase`**](features/enhance/README.md) —
+  [UniPASE](https://github.com/Xiaobin-Rong/unipase) (MIT) by Xiaobin Rong,
+  Zheng Wang, Yushi Wang, Jun Gao and Jing Lu: the generative
+  speech-enhancement pipeline — the two-tap read of its fine-tuned
+  [WavLM](https://github.com/microsoft/unilm/tree/master/wavlm) encoder (MIT,
+  Microsoft), the Vocos adapter and vocoder around it in the variant published
+  by [WavTokenizer](https://github.com/jishengpeng/WavTokenizer) (MIT), and the
+  packet-loss concealment that rides on the encoder's masking — ported to the
+  same candle runtime with the same optional burn runtime. The pipeline
+  assembly and its long-form inference are adapted from
+  [PASE](https://github.com/cisco-open/pase) (Apache-2.0, Cisco Systems).
+  Weights ([`Xiaobin-Rong/unipase`](https://huggingface.co/Xiaobin-Rong/unipase),
+  Apache-2.0) are downloaded at runtime. Papers:
+  [arXiv:2604.14606](https://arxiv.org/abs/2604.14606) (UniPASE, *IEEE TASLP*
+  2026), [arXiv:2110.13900](https://arxiv.org/abs/2110.13900) (WavLM).
+
+  If you use this engine, please cite:
+
+  > X. Rong, Z. Wang, Y. Wang, J. Gao and J. Lu, "UniPASE: A Generative Model
+  > for Universal Speech Enhancement With High Fidelity and Low
+  > Hallucinations," *IEEE Transactions on Audio, Speech and Language
+  > Processing*, vol. 34, pp. 3901-3915, 2026.
 - [**`vad`**](features/vad/README.md), and
   [**`asr --vad`**](features/asr/whisper.md#voice-activity-detection-vad) —
   [Silero-VAD](https://github.com/snakers4/silero-vad)
