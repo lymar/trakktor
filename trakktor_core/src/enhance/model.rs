@@ -6,8 +6,9 @@
 //! result. A runtime owns exactly one operation, and it takes and returns
 //! plain host values:
 //!
-//! - [`enhance_window`](EnhanceModel::enhance_window): 16 kHz samples in, 16
-//!   kHz samples out.
+//! - [`enhance_window`](EnhanceModel::enhance_window): samples in, samples out,
+//!   both at whatever rate the engine works at — 16 kHz for most of them, 44.1
+//!   kHz for [`resemble`](super::resemble).
 //!
 //! Keeping the seam this coarse is deliberate. Everything inside one window is
 //! a single chain of matrix multiplications with no host decision in the
@@ -27,13 +28,13 @@ use crate::{
 
 /// One loaded pipeline, on one runtime and one device.
 pub trait EnhanceModel: Send {
-    /// Enhances one window of 16 kHz mono audio.
+    /// Enhances one window of mono audio at the engine's own rate.
     ///
     /// `lost` marks the frames the packet-loss detector found, one flag per 320
     /// samples; an empty slice disables concealment for this window. The result
-    /// is `frames × 320` samples long, where `frames` is what the window aligns
-    /// to — that is, as long as the aligned window, not necessarily as long as
-    /// what was passed in.
+    /// is as long as the window aligns to, which is not in general as long as
+    /// what was passed in — an engine whose transform returns whole frames
+    /// returns whole frames.
     ///
     /// # Errors
     ///
@@ -101,9 +102,10 @@ impl Precision {
 pub struct EnhanceOptions {
     /// The rate to write at. `None` keeps the recording's own rate.
     ///
-    /// The pipeline works at 16 kHz whatever this is, and the result is
-    /// resampled to what is asked for. A rate above 16 kHz therefore buys a
-    /// container that matches the source, not bandwidth that is not there.
+    /// The pipeline works at the engine's own rate whatever this is, and the
+    /// result is resampled to what is asked for. Asking for more than the
+    /// engine produces therefore buys a container that matches the source, not
+    /// bandwidth that is not there.
     pub sample_rate: Option<u32>,
     /// Whether to conceal lost packets.
     pub plc: bool,

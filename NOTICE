@@ -323,6 +323,49 @@ GTCRN — MIT License
   checkpoint is downloaded from the project's own repository at runtime and is
   not redistributed here.
 
+MP-SENet — MIT License
+  Copyright (c) 2023 Yexin Lu
+  https://github.com/yxlu-0102/MP-SENet
+  The `enhance mpsenet` engine ports the MP-SENet speech-enhancement network:
+  its power-law-compressed magnitude and phase front end, the dense encoder,
+  the two-stage blocks that attend along frequency and then along time with a
+  bidirectional recurrence in place of a feed-forward layer, and the two
+  decoders it ends in — a learned-sigmoid magnitude mask and a phase estimated
+  outright from two components. The published checkpoints are downloaded from
+  the project's own repository at runtime and are not redistributed here.
+
+resemble-enhance — MIT License
+  Copyright (c) 2023 Resemble AI
+  https://github.com/resemble-ai/resemble-enhance
+  The `enhance resemble-denoise` and `enhance resemble-enhance` engines port
+  both networks this project publishes. From the denoiser: its magnitude-and-
+  phase front end, the UNet over the time-by-frequency plane with its
+  pre-activation residual blocks and nearest-neighbour resampling, and the
+  complex rotation it applies to the phase. From the enhancer: the mel front
+  end, the IRMAE latent autoencoder, the conditional-flow-matching velocity
+  field with its warped time grid and midpoint solver, and the UnivNet vocoder
+  with its location-variable convolutions and anti-aliased Snake activation.
+  The long-form chunking, the per-chunk peak normalization and the cross-fade
+  are reproduced from its inference path. The published checkpoint is
+  downloaded from Hugging Face (huggingface.co/ResembleAI/resemble-enhance) at
+  runtime and is not redistributed in this repository.
+
+BigVGAN / NVIDIA — MIT License
+  Copyright (c) 2022 NVIDIA CORPORATION
+  https://github.com/NVIDIA/BigVGAN
+  The anti-aliased activation inside the `enhance resemble-enhance` vocoder is
+  adapted from BigVGAN by way of resemble-enhance: the Snake activation with a
+  learned frequency and a learned magnitude per channel, applied at twice the
+  rate through a pair of half-band filters.
+
+alias-free-torch — Apache License, Version 2.0
+  Copyright (c) 2022 Junhyeok Lee
+  https://github.com/junjun3518/alias-free-torch
+  Those half-band filters are alias-free-torch's, again by way of
+  resemble-enhance: the Kaiser-windowed sinc pair and the padding and trimming
+  around it. The filter taps themselves are read from the published checkpoint
+  rather than rebuilt, so what is ported here is the resampling arithmetic.
+
 UniPASE — MIT License
   Copyright (c) 2026 Rong Xiaobin
   https://github.com/Xiaobin-Rong/unipase
@@ -430,5 +473,5 @@ https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode
 Apache License 2.0 (applies to the Apache-licensed works listed in section 1 —
 Vosk/icefall/sherpa-onnx, the 1-800-BAD-CODE punctuation model, Qwen3-TTS,
 ESpeech-TTS-1, PaddleOCR, DBNet/DB, PaddleOCR-VL, ERNIE-4.5, Transformers,
-oar-ocr, and, at your option, candle and burn): see
+oar-ocr, PASE, alias-free-torch, and, at your option, candle and burn): see
 https://www.apache.org/licenses/LICENSE-2.0

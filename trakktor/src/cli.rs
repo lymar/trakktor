@@ -35,9 +35,9 @@ const DEFAULT_MODEL_DIR_NAME: &str = ".trakktor";
 /// Markdown file aloud into an audio file — in a preset voice or in one cloned
 /// from a sample recording — cutting the silence out of a recording, cleaning
 /// up a damaged one (room noise, reverberation, a telephone-narrow band, the
-/// gaps a dropped packet leaves in a call), turning a PDF made from layout
-/// into Markdown without recognizing anything,
-/// reading the text off a scan, a
+/// gaps a dropped packet leaves in a call) at 16 kHz or at the full 44.1 kHz
+/// band, turning a PDF made from layout into Markdown without recognizing
+/// anything, reading the text off a scan, a
 /// screenshot or a photograph of a page, page by page, straightening the
 /// photograph first, marking a page up into labelled blocks (title, heading,
 /// paragraph, footnote, table, formula, picture), restoring
@@ -269,24 +269,33 @@ enum Command {
     /// engines; pick one as the subcommand. The result on stdout is JSON with
     /// the path, the duration, and what concealment did.
     ///
-    /// Which engine: `gtcrn` unless you know the recording lost packets.
-    /// It is forty-eight thousand parameters against five hundred and
-    /// forty-six million, runs at about a sixtieth of real time on one CPU
-    /// core, and measures at least as well everywhere except concealment —
-    /// which it cannot do at all, because a mask can only attenuate what is
-    /// there. `unipase` is the generative one, and the only one that can put
-    /// back a band that was never carried or the twenty milliseconds a
-    /// dropped packet took.
+    /// Which engine, in four lines. `gtcrn` unless you have a reason not to:
+    /// forty-eight thousand parameters, about a sixtieth of real time on one
+    /// CPU core, and it measures at least as well as the far larger generative
+    /// engine everywhere except concealment. `resemble-denoise` when the
+    /// recording is not a phone call and you want to keep its band: it and
+    /// `resemble-enhance` are the only engines here that work at 44.1 kHz, and
+    /// the rest return 16 kHz of speech whatever rate you ask them to write.
+    /// `unipase` when the recording lost packets — it is the only one that can
+    /// put back the twenty milliseconds a dropped packet took, because every
+    /// other engine ends in a mask and a mask times silence is silence. And
+    /// when a person will listen and noise has wrecked the recording,
+    /// `mpsenet` if what needs repair is the phase, or `resemble-enhance` if
+    /// the recording needs rebuilding rather than filtering: that one does not
+    /// filter at all, it reads the recording and synthesises speech from
+    /// noise, which is both why it can widen a band and why it can invent a
+    /// word that was never said.
     ///
     /// This repairs damage; it does not improve a recording that is already
     /// good. Measured against two independent speech recognisers, the one
     /// reliable win is a recording damaged the way a phone call is — a narrow
     /// band and noise and dropped packets together — with a reverberant room a
-    /// distant second. Both engines *hurt* on a clean recording; buried in
-    /// noise, the generative one hurts badly while `gtcrn` stays about
-    /// level. Everything in between depends on which
-    /// recogniser reads the result. Run this because the recording is damaged,
-    /// not as a matter of course.
+    /// distant second. Both measured engines *hurt* on a clean recording;
+    /// buried in noise, the generative one hurts badly while `gtcrn` stays
+    /// about level. Everything in between depends on which recogniser reads
+    /// the result, and three of the five engines — `mpsenet` and both
+    /// `resemble` ones — have not been put through that measurement at all.
+    /// Run this because the recording is damaged, not as a matter of course.
     Enhance {
         #[command(subcommand)]
         command: EnhanceCommand,
@@ -372,15 +381,53 @@ pub(crate) enum EnhanceCommand {
     /// speech recognisers it matches the generative engine where enhancement
     /// helps at all — a recording damaged the way a phone call is, and a
     /// reverberant room — for about a thirtieth of the wall clock on far
-    /// humbler hardware, and it is the less harmful of the two everywhere
-    /// else.
+    /// humbler hardware, and of the two engines that measurement covers it is
+    /// the less harmful everywhere else.
     ///
     /// It is a masking network: it predicts what to attenuate and multiplies.
     /// That is a hard limit, not a tuning choice — it cannot fill the hole a
-    /// dropped packet left, because any mask times silence is silence. For a
-    /// call with dropped packets, use `unipase`.
+    /// dropped packet left, because any mask times silence is silence, and it
+    /// cannot repair a phase, because multiplying a spectrum moves magnitude
+    /// and phase together. For a call with dropped packets, use `unipase`;
+    /// for phase, `mpsenet`.
     #[command(name = "gtcrn")]
     Gtcrn(EnhanceGtcrnArgs),
+
+    /// Enhance a recording with MP-SENet — the one that also repairs phase.
+    ///
+    /// A transformer over the spectrum, two and a quarter million parameters,
+    /// with two output heads instead of one: a gain per frequency bin, and the
+    /// phase of that bin predicted outright rather than carried over from the
+    /// input. Every other masking enhancer moves magnitude and phase together,
+    /// because multiplying a spectrum by one number does both; this one
+    /// decides them apart, which is the one thing it can do that `gtcrn`
+    /// cannot — noise scrambles phase, and a multiply can never put it back.
+    ///
+    /// The cost is the arithmetic: two million parameters, but they are
+    /// applied to every point of the time-by-frequency grid eight times over,
+    /// so it costs about twenty-five times `gtcrn`. It wants a GPU, and on one
+    /// it is markedly faster on the burn runtime than on the default —
+    /// `--runtime burn --device metal` is about three times `--runtime candle
+    /// --device metal`, and is the combination to use. (On the CPU the order
+    /// reverses, and burn is much the slower.)
+    ///
+    /// Like `gtcrn` it is a mask in the end, so it cannot fill the hole a
+    /// dropped packet left; for that, use `unipase`.
+    ///
+    /// **Send the result to a person, not to a recogniser.** It has not been
+    /// through the measurement the other two have, and the spot checks that
+    /// exist carry a warning: on a recording where hiss dominates the top of
+    /// the band — an archival transfer, say — it takes the hiss and the band
+    /// with it, dropping everything above 2.5 kHz by twenty decibels and more.
+    /// The fricatives go with it, and a recogniser lost a third of its words.
+    /// On two ordinary room recordings the transcript was untouched. For a
+    /// transcript, use `gtcrn`.
+    ///
+    /// Two checkpoints, 9 MB each: `dns`, trained on the DNS Challenge data
+    /// (the default, and the one for a recording that was not made in a
+    /// studio), and `vb`, trained on VoiceBank+DEMAND.
+    #[command(name = "mpsenet")]
+    Mpsenet(EnhanceMpsenetArgs),
 
     /// Enhance a recording with the UniPASE pipeline — the generative engine.
     ///
@@ -396,6 +443,7 @@ pub(crate) enum EnhanceCommand {
     /// That is also the only reason to prefer it over `gtcrn`, which is
     /// smaller by four orders of magnitude and measures at least as well
     /// everywhere else. Reach for this one when the recording lost packets.
+    /// Neither of the other two can fill a hole: both end in a mask.
     ///
     /// The pipeline works at 16 kHz, which is what a speech recognizer wants
     /// and all the bandwidth speech needs; `--sample-rate` resamples the result
@@ -403,6 +451,71 @@ pub(crate) enum EnhanceCommand {
     /// and converted once into the model directory (~/.trakktor by default).
     #[command(name = "unipase")]
     Unipase(EnhanceUnipaseArgs),
+
+    /// Denoise a recording at 44.1 kHz — the only masking engine that keeps
+    /// the whole band.
+    ///
+    /// Every other engine here works at 16 kHz, which is all the bandwidth
+    /// speech needs and exactly what a recogniser wants, but it is not what a
+    /// listener wants from a recording that was never a phone call: a lecture,
+    /// an interview, a podcast. This one is trained at the full rate and
+    /// returns it, so what comes back still has the top two octaves — the air
+    /// on a consonant, the room, the instrument in the background.
+    ///
+    /// It is a mask with a twist: it predicts a gain per point of the spectrum
+    /// and, separately, a **rotation** of that point's phase. So unlike
+    /// `gtcrn` it can move phase without moving magnitude, and unlike
+    /// `mpsenet` the phase it produces is a correction of the one that came in
+    /// rather than an estimate from nothing. Ten million parameters over an
+    /// image-shaped network — a UNet over the whole time-by-frequency plane —
+    /// so it wants a GPU on anything long.
+    ///
+    /// It is still a mask, so it cannot fill the hole a dropped packet left;
+    /// for that, `unipase`. It has not been through the recogniser
+    /// measurement the first two engines have.
+    ///
+    /// The download is 713 MB and covers both `resemble` engines, because
+    /// upstream publishes them in one checkpoint.
+    #[command(name = "resemble-denoise")]
+    ResembleDenoise(EnhanceResembleDenoiseArgs),
+
+    /// Rebuild a recording at 44.1 kHz — the engine that synthesises rather
+    /// than filters.
+    ///
+    /// Nothing of the input waveform reaches the output. The recording is read
+    /// as a mel spectrogram, a flow model walks from noise to a latent
+    /// description of what clean speech would look like, and a vocoder builds
+    /// a waveform out of a second lot of noise. That is why it can widen a
+    /// band, unpick reverberation and repair a clipped syllable where a filter
+    /// can only attenuate — and why it can put a word in that was never said.
+    /// Send its output to a person, and listen to it before you trust it.
+    ///
+    /// The knobs are the reference's, with its defaults. `--nfe` is how many
+    /// times the flow model runs per chunk, and the cost is very nearly
+    /// proportional to it. `--temperature` is how much of the walk's starting
+    /// point is noise rather than the recording's own encoding — higher
+    /// invents more and cleans more. `--denoise` is how much of the mask
+    /// engine's output the flow model is conditioned on instead of the raw
+    /// recording; at 0 the denoiser does not run at all, which is also the
+    /// cheapest setting.
+    ///
+    /// Unlike every other engine here it is **not deterministic upstream** —
+    /// it draws Gaussian noise from a generator the reference never seeds, so
+    /// two runs of it give two different files. This port seeds its own, so a
+    /// run repeats; `--seed` picks a different draw.
+    ///
+    /// This is by far the most expensive engine in the toolbox: three hundred
+    /// and fifty million parameters, and the flow model alone runs `--nfe`
+    /// times over every chunk — about three times real time on a GPU and eight
+    /// on four CPU cores. `--device metal` is therefore worth asking for; it is
+    /// nevertheless not the default, because loading three hundred and
+    /// forty-six million parameters into GPU buffers takes about a gigabyte and
+    /// a half out of memory the rest of the machine shares, and on a machine
+    /// without it to spare the whole system suffers, not just this command.
+    ///
+    /// The download is 713 MB and covers both `resemble` engines.
+    #[command(name = "resemble-enhance")]
+    ResembleEnhance(EnhanceResembleEnhanceArgs),
 }
 
 #[derive(Args)]
@@ -431,6 +544,76 @@ pub(crate) struct EnhanceGtcrnArgs {
     /// container rather than adding bandwidth.
     #[arg(long, value_name = "hz")]
     pub(crate) sample_rate: Option<u32>,
+
+    /// Bitrate for a lossy output format written through ffmpeg, for example
+    /// `192k`. Ignored for wav and flac.
+    #[arg(long, value_name = "rate")]
+    pub(crate) bitrate: Option<String>,
+}
+
+#[derive(Args)]
+pub(crate) struct EnhanceMpsenetArgs {
+    /// Path to the recording to enhance. Any audio file the built-in decoder
+    /// reads: mp3, aac (LC), vorbis, flac, alac, adpcm, and pcm audio in
+    /// wav/aiff/caf/ogg/mp4/mkv containers.
+    pub(crate) audio: PathBuf,
+
+    /// Where to write the result. The container follows the extension — wav
+    /// and flac are written directly, anything else through ffmpeg. Defaults
+    /// to the input's name with `.enhanced.wav` in its place, next to it.
+    /// Prefer wav: the built-in FLAC encoder codes enhanced audio very badly,
+    /// and a size guard will refuse to write the result rather than leave a
+    /// file many times larger than the audio.
+    #[arg(short, long, value_name = "path")]
+    pub(crate) output: Option<PathBuf>,
+
+    /// Model: the published name, downloaded on first use, or a path to a
+    /// directory holding converted weights. `dns` is trained on the DNS
+    /// Challenge data, `vb` on VoiceBank+DEMAND.
+    #[arg(long, default_value = "dns", value_name = "name|dir")]
+    pub(crate) model: String,
+
+    /// Sample rate to write at. Defaults to the recording's own. The network
+    /// works at 16 kHz whatever this is, so a higher rate matches the source's
+    /// container rather than adding bandwidth.
+    #[arg(long, value_name = "hz")]
+    pub(crate) sample_rate: Option<u32>,
+
+    /// Inference runtime executing the model. Both produce the same result,
+    /// but not at the same speed here: on `metal`, `burn` is about three times
+    /// faster than `candle`, and on the CPU it is much slower. It needs a
+    /// build with the `burn` feature enabled and computes in f32 only.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = RuntimeArg::Candle,
+        value_name = "runtime"
+    )]
+    pub(crate) runtime: RuntimeArg,
+
+    /// Compute device. `metal` needs a build with the `metal` feature (for the
+    /// candle runtime) or the `burn` feature (for the burn runtime), and is
+    /// only available on macOS. This network is small but does a great deal of
+    /// arithmetic per second of audio, so a GPU is worth having.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = DeviceArg::Cpu,
+        value_name = "device"
+    )]
+    pub(crate) device: DeviceArg,
+
+    /// Compute precision. The published checkpoints are f32 throughout and the
+    /// reference offers no half-precision path, so f32 is the default and the
+    /// only mode the port is verified in. f16 is candle-only and, measured on
+    /// this network, buys no speed at all.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = PrecisionArg::F32,
+        value_name = "precision"
+    )]
+    pub(crate) precision: PrecisionArg,
 
     /// Bitrate for a lossy output format written through ffmpeg, for example
     /// `192k`. Ignored for wav and flac.
@@ -508,6 +691,195 @@ pub(crate) struct EnhanceUnipaseArgs {
     /// `192k`. Ignored for wav and flac.
     #[arg(long, value_name = "rate")]
     pub(crate) bitrate: Option<String>,
+}
+
+#[derive(Args)]
+pub(crate) struct EnhanceResembleDenoiseArgs {
+    /// Path to the recording to enhance. Any audio file the built-in decoder
+    /// reads: mp3, aac (LC), vorbis, flac, alac, adpcm, and pcm audio in
+    /// wav/aiff/caf/ogg/mp4/mkv containers.
+    pub(crate) audio: PathBuf,
+
+    /// Where to write the result. The container follows the extension — wav
+    /// and flac are written directly, anything else through ffmpeg. Defaults
+    /// to the input's name with `.enhanced.wav` in its place, next to it.
+    /// Prefer wav: the built-in FLAC encoder codes enhanced audio very badly,
+    /// and a size guard will refuse to write the result rather than leave a
+    /// file many times larger than the audio.
+    #[arg(short, long, value_name = "path")]
+    pub(crate) output: Option<PathBuf>,
+
+    /// Model: the published name, downloaded on first use, or a path to a
+    /// directory holding converted weights.
+    #[arg(long, default_value = "resemble", value_name = "name|dir")]
+    pub(crate) model: String,
+
+    /// Sample rate to write at. Defaults to the recording's own. This network
+    /// works at 44.1 kHz, so unlike the other engines a rate up to that is
+    /// bandwidth and not just a container.
+    #[arg(long, value_name = "hz")]
+    pub(crate) sample_rate: Option<u32>,
+
+    /// Inference runtime executing the model. Both produce the same result,
+    /// but not at the same speed: paired with `--device metal`, `burn` is
+    /// the fastest combination for this network by more than twice. It
+    /// needs a build with the `burn` feature enabled and computes in f32
+    /// only.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = RuntimeArg::Candle,
+        value_name = "runtime"
+    )]
+    pub(crate) runtime: RuntimeArg,
+
+    /// Compute device. `metal` needs a build with the `metal` feature (for the
+    /// candle runtime) or the `burn` feature (for the burn runtime), and is
+    /// only available on macOS. On the default `candle` runtime it buys almost
+    /// nothing here — four CPU cores keep up — but with `--runtime burn
+    /// --device metal` this network runs at about a fifth of real time, more
+    /// than twice anything else.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = DeviceArg::Cpu,
+        value_name = "device"
+    )]
+    pub(crate) device: DeviceArg,
+
+    /// Compute precision. The published checkpoint is half precision widened
+    /// to f32 on load, which is what the reference computes in, so f32 is the
+    /// default and the only mode the port is verified in; f16 is a candle-only
+    /// speed option.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = PrecisionArg::F32,
+        value_name = "precision"
+    )]
+    pub(crate) precision: PrecisionArg,
+
+    /// Bitrate for a lossy output format written through ffmpeg, for example
+    /// `192k`. Ignored for wav and flac.
+    #[arg(long, value_name = "rate")]
+    pub(crate) bitrate: Option<String>,
+}
+
+#[derive(Args)]
+pub(crate) struct EnhanceResembleEnhanceArgs {
+    /// Path to the recording to enhance. Any audio file the built-in decoder
+    /// reads: mp3, aac (LC), vorbis, flac, alac, adpcm, and pcm audio in
+    /// wav/aiff/caf/ogg/mp4/mkv containers.
+    pub(crate) audio: PathBuf,
+
+    /// Where to write the result. The container follows the extension — wav
+    /// and flac are written directly, anything else through ffmpeg. Defaults
+    /// to the input's name with `.enhanced.wav` in its place, next to it.
+    /// Prefer wav: the built-in FLAC encoder codes this model's output very
+    /// badly, and a size guard will refuse to write the result rather than
+    /// leave a file many times larger than the audio.
+    #[arg(short, long, value_name = "path")]
+    pub(crate) output: Option<PathBuf>,
+
+    /// Model: the published name, downloaded on first use, or a path to a
+    /// directory holding converted weights.
+    #[arg(long, default_value = "resemble", value_name = "name|dir")]
+    pub(crate) model: String,
+
+    /// Sample rate to write at. Defaults to the recording's own. This pipeline
+    /// works at 44.1 kHz and synthesises the whole band, so unlike the other
+    /// engines a rate up to that is bandwidth and not just a container.
+    #[arg(long, value_name = "hz")]
+    pub(crate) sample_rate: Option<u32>,
+
+    /// How many times the flow model runs per chunk, from 1 to 128. The whole
+    /// cost of the engine is very nearly proportional to it, so halving it
+    /// halves the wall clock; what that costs in quality has not been measured
+    /// here, and 64 is the reference's own default.
+    #[arg(long, default_value_t = 64, value_name = "count")]
+    pub(crate) nfe: usize,
+
+    /// How the flow is integrated. `midpoint` spends two evaluations per step,
+    /// `rk4` four, `euler` one — so at the same `--nfe` they buy different
+    /// numbers of steps of different accuracy.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = SolverArg::Midpoint,
+        value_name = "solver"
+    )]
+    pub(crate) solver: SolverArg,
+
+    /// How much of the walk's starting point is noise rather than the
+    /// recording's own encoding, from 0 to 1. Higher cleans more and invents
+    /// more; at 0 the result stays closest to what was recorded.
+    #[arg(long, default_value_t = 0.5, value_name = "0..1")]
+    pub(crate) temperature: f32,
+
+    /// How much of the masking denoiser's output the flow model is
+    /// conditioned on instead of the recording as it is, from 0 to 1. At 0 the
+    /// denoiser does not run at all, which is also the cheapest setting.
+    #[arg(long, default_value_t = 1.0, value_name = "0..1")]
+    pub(crate) denoise: f32,
+
+    /// Fixes the Gaussian noise this engine draws, and with it the whole run.
+    /// The reference has no equivalent: it draws from a generator it never
+    /// seeds, so it cannot repeat a result at all.
+    #[arg(long, default_value_t = 0, value_name = "seed")]
+    pub(crate) seed: u64,
+
+    /// Inference runtime executing the model. Both produce the same result;
+    /// `burn` needs a build with the `burn` feature enabled and computes in
+    /// f32 only.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = RuntimeArg::Candle,
+        value_name = "runtime"
+    )]
+    pub(crate) runtime: RuntimeArg,
+
+    /// Compute device. `metal` needs a build with the `metal` feature (for the
+    /// candle runtime) or the `burn` feature (for the burn runtime), and is
+    /// only available on macOS. Here it is about two and a half times faster
+    /// and costs about a gigabyte and a half of memory the rest of the machine
+    /// shares — so unlike the other engines the default stays `cpu`, and
+    /// `metal` is worth asking for when the GPU has room.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = DeviceArg::Cpu,
+        value_name = "device"
+    )]
+    pub(crate) device: DeviceArg,
+
+    /// Compute precision. The published checkpoint is half precision widened
+    /// to f32 on load, which is what the reference computes in, so f32 is the
+    /// default and the only mode the port is verified in; f16 is a candle-only
+    /// speed option.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = PrecisionArg::F32,
+        value_name = "precision"
+    )]
+    pub(crate) precision: PrecisionArg,
+
+    /// Bitrate for a lossy output format written through ffmpeg, for example
+    /// `192k`. Ignored for wav and flac.
+    #[arg(long, value_name = "rate")]
+    pub(crate) bitrate: Option<String>,
+}
+
+/// How the generative engine integrates its flow.
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
+pub(crate) enum SolverArg {
+    /// One evaluation per step.
+    Euler,
+    /// Two evaluations per step.
+    Midpoint,
+    /// Four evaluations per step.
+    Rk4,
 }
 
 #[derive(Subcommand)]
@@ -3219,6 +3591,12 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
         },
 
         Command::Enhance { command } => match command {
+            EnhanceCommand::Mpsenet(args) => crate::enhance::run_mpsenet(
+                args,
+                &global.model_dir()?,
+                global.json(),
+                global.pretty,
+            ),
             EnhanceCommand::Gtcrn(args) => crate::enhance::run_gtcrn(
                 args,
                 &global.model_dir()?,
@@ -3231,6 +3609,22 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                 global.json(),
                 global.pretty,
             ),
+            EnhanceCommand::ResembleDenoise(args) => {
+                crate::enhance::run_resemble_denoise(
+                    args,
+                    &global.model_dir()?,
+                    global.json(),
+                    global.pretty,
+                )
+            },
+            EnhanceCommand::ResembleEnhance(args) => {
+                crate::enhance::run_resemble_enhance(
+                    args,
+                    &global.model_dir()?,
+                    global.json(),
+                    global.pretty,
+                )
+            },
         },
 
         Command::Skill { command } => match command {

@@ -24,14 +24,14 @@ const DESCRIPTION_MAX: usize = 1024;
 const STUB_DESCRIPTION: &str =
     "Use {name}, a predictable, automation-friendly CLI toolbox for coding \
      agents. Documents: a PDF made from layout goes straight to Markdown, no \
-     OCR, and it names the pages that need it. Feeds: discover a page's \
+     OCR; it names the pages that need it. Feeds: discover a page's \
      RSS/Atom/JSON feeds, read unread entries, track read state. Speech: \
      transcribe audio with a local Whisper, GigaAM or Vosk model, or \
      translate to English; read text or Markdown aloud, Russian too, in a \
      preset or cloned voice; clean up a damaged recording (noise, reverb, \
-     lost packets). Audio: by voice-activity detection, cut silence, split, \
-     or report the speech timeline. Images: read text off scans, screenshots \
-     and photos in a dozen scripts, or with a document model that reads \
+     lost packets), 16 kHz or full-band. Audio: by voice-activity detection, \
+     cut silence, split, or report the speech timeline. Images: read text off \
+     scans, screenshots and photos, or with a document model that reads \
      tables, formulas and any script; label page blocks; straighten a skewed \
      photo. Text: restore punctuation and casing, split paragraphs, mark \
      Russian stress — offline. Reach for it whenever a task involves a PDF, a \

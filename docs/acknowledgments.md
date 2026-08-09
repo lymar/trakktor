@@ -127,6 +127,22 @@ Apache-licensed:
   > Enhancement Model Requiring Ultralow Computational Resources," *ICASSP
   > 2024*, pp. 971-975.
 
+- [**`enhance mpsenet`**](features/enhance/README.md) —
+  [MP-SENet](https://github.com/yxlu-0102/MP-SENet) (MIT) by Ye-Xin Lu, Yang Ai
+  and Zhen-Hua Ling: the magnitude-and-phase enhancer — the only engine here
+  that estimates phase as its own output — ported to the same candle runtime
+  with the same optional burn runtime. Both published checkpoints (MIT, carried
+  in the project's own repository) are downloaded at runtime. Papers:
+  [arXiv:2305.13686](https://arxiv.org/abs/2305.13686) (Interspeech 2023),
+  [arXiv:2308.08926](https://arxiv.org/abs/2308.08926) (the extended version,
+  *Neural Networks* 2025).
+
+  If you use this engine, please cite:
+
+  > Y.-X. Lu, Y. Ai and Z.-H. Ling, "MP-SENet: A Speech Enhancement Model with
+  > Parallel Denoising of Magnitude and Phase Spectra," *Proc. Interspeech
+  > 2023*, pp. 3834-3838.
+
 - [**`enhance unipase`**](features/enhance/README.md) —
   [UniPASE](https://github.com/Xiaobin-Rong/unipase) (MIT) by Xiaobin Rong,
   Zheng Wang, Yushi Wang, Jun Gao and Jing Lu: the generative
@@ -149,6 +165,24 @@ Apache-licensed:
   > for Universal Speech Enhancement With High Fidelity and Low
   > Hallucinations," *IEEE Transactions on Audio, Speech and Language
   > Processing*, vol. 34, pp. 3901-3915, 2026.
+
+- [**`enhance resemble-denoise`** and
+  **`enhance resemble-enhance`**](features/enhance/README.md) —
+  [resemble-enhance](https://github.com/resemble-ai/resemble-enhance) (MIT) by
+  Resemble AI: both networks the project publishes, and the only two engines
+  here that work at 44.1 kHz. The denoiser is a UNet over the spectrum that
+  predicts a gain and a rotation of the phase; the enhancer is a generative
+  pipeline — a latent autoencoder over the mel, a conditional-flow-matching
+  velocity field, and a UnivNet vocoder that builds the waveform out of noise.
+  The vocoder's anti-aliased activation comes from
+  [BigVGAN](https://github.com/NVIDIA/BigVGAN) (MIT, NVIDIA) with the half-band
+  filters of [alias-free-torch](https://github.com/junjun3518/alias-free-torch)
+  (Apache-2.0, Junhyeok Lee), and its location-variable convolutions follow
+  [LVCNet](https://github.com/zceng/LVCNet). Both are ported to the same candle
+  runtime with the same optional burn runtime. The published checkpoint
+  ([`ResembleAI/resemble-enhance`](https://huggingface.co/ResembleAI/resemble-enhance),
+  MIT), which carries both networks, is downloaded at runtime.
+
 - [**`vad`**](features/vad/README.md), and
   [**`asr --vad`**](features/asr/whisper.md#voice-activity-detection-vad) —
   [Silero-VAD](https://github.com/snakers4/silero-vad)
