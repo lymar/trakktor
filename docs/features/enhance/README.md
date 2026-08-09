@@ -13,27 +13,50 @@ recording, and this turns a recording into a better recording.
 trakktor enhance gtcrn call.m4a                    # → call.enhanced.wav
 trakktor enhance gtcrn call.m4a -o clean.wav       # pick the output
 trakktor enhance unipase call.m4a --device metal   # the generative engine
+trakktor enhance mpsenet talk.mp3 --runtime burn --device metal   # phase too
 ```
 
 ## Which engine
 
-**`gtcrn`, unless you know the recording lost packets.**
+**`gtcrn`, unless you have a reason not to.**
 
-| | `gtcrn` (the first choice) | `unipase` |
-|---|---|---|
-| what it is | a masking network on the spectrum | a generative pipeline on a speech encoder's representation |
-| parameters | **48 thousand** | 546 million |
-| weights | 580 KB | 2.17 GB |
-| speed | **about a sixtieth of real time, one CPU core** | about half of real time, on a GPU |
-| can put back what is not there | **no** | yes |
+| | `gtcrn` (the first choice) | `mpsenet` | `unipase` |
+|---|---|---|---|
+| what it is | a masking network on the spectrum | a transformer on the spectrum with separate magnitude and phase heads | a generative pipeline on a speech encoder's representation |
+| parameters | **48 thousand** | 2.3 million | 546 million |
+| weights | **580 KB** | 9 MB | 2.17 GB |
+| speed | **about a sixtieth of real time, one CPU core** | about four tenths of real time, on a GPU | about half of real time, on a GPU |
+| estimates phase | no | **yes, as its own output** | it does not estimate one — it synthesises the wave |
+| can put back what is not there | **no** | **no** | yes |
+| measured against speech recognisers | yes | **not yet** | yes |
 
-The rule has one clause, and it is about packet loss. A masking network predicts
-what to attenuate and multiplies — which is a hard limit, not a tuning choice:
-any mask times digital silence is silence, so it cannot fill the hole a dropped
-packet left. Measured, that is the one degradation where `unipase` is better.
-Everywhere else `gtcrn` is as good or better — at about a thirtieth of the
-wall clock, on one CPU core against a GPU — and it is the gentler of the two
-on a recording that did not need enhancing.
+Three clauses, in the order you should ask them.
+
+**Did the recording lose packets?** Then `unipase`, always. A masking network
+predicts what to attenuate and multiplies — a hard limit, not a tuning choice:
+any mask times digital silence is silence, so neither of the other two can fill
+the hole a dropped packet left. Measured, that is the one degradation where
+`unipase` is better.
+
+**Is the result going to a speech recogniser, or do you just want it cheap?**
+Then `gtcrn`. It costs about a twenty-fifth of the next one up, and of the two
+engines the measurement below covers it is both the more helpful where
+enhancement helps at all and the gentler on a recording that did not need it.
+
+**Is a person going to listen, and has noise wrecked the recording?** Then
+`mpsenet` is worth the cost. It is the only one of the three that estimates
+**phase** as a separate output instead of carrying the input's phase over —
+which is exactly what a mask cannot do at any size, because multiplying a
+spectrum by one number moves magnitude and phase together, and noise damages
+phase first.
+
+**Send its output to a person, though, not to a recogniser.** It has not been
+through the measurement below, and the spot checks that do exist carry a
+warning: on a recording where hiss dominates the top of the band — an archival
+transfer, say — it takes the hiss and the band with it, dropping everything
+above 2.5 kHz by twenty decibels and more. The fricatives go with it, and a
+recogniser lost a third of its words. On two ordinary room recordings the
+transcript came through untouched. For a transcript, use `gtcrn`.
 
 ## Read this before you use it
 
@@ -52,14 +75,21 @@ enhancement and not of one recogniser:
 | heavy broadband noise (around 0 dB SNR) | about the same | **much worse** — it starts inventing words |
 | nothing — the recording is fine | **worse** | **worse**, by more |
 
-The reason is what the model is: a *generative* model that rebuilds speech from
-what a speech encoder understood of it, rather than a filter that subtracts
-noise. When there is enough signal to understand, that is exactly why it can put
-back a band or a lost packet. When there is not, it confabulates — and a made-up
-word comes out of the recogniser looking as confident as a real one. One more
-caution: the measurements above are on Russian, which is not among the
-languages UniPASE's authors list for it (English, Chinese, Spanish, French,
-German) — on a covered language the confabulation line may sit elsewhere.
+`mpsenet` has **no column here**, and that is a statement rather than an
+omission: it has not been run on this bench. What spot checks there are say it
+leaves an ordinary room recording's transcript alone but can cost a third of the
+words on a hissy archival one, by removing the band the hiss lives in. Use it
+for listening.
+
+The reason for the column that is there is what the model is: a *generative*
+model that rebuilds speech from what a speech encoder understood of it, rather
+than a filter that subtracts noise. When there is enough signal to understand,
+that is exactly why it can put back a band or a lost packet. When there is not,
+it confabulates — and a made-up word comes out of the recogniser looking as
+confident as a real one. One more caution: the measurements above are on
+Russian, which is not among the languages UniPASE's authors list for it
+(English, Chinese, Spanish, French, German) — on a covered language the
+confabulation line may sit elsewhere.
 
 So: run it because you know the recording is damaged, not as a matter of course.
 It is deliberately not wired into `asr` as an automatic preprocessing step.
@@ -83,6 +113,38 @@ processed in chunks that **continue** one another: the state carries across, and
 where the boundaries fall is not visible in the result. A test asserts that, bit
 for bit.
 
+## What `mpsenet` does
+
+It has **two output heads instead of one**, and that is the whole point. The
+input is not a complex spectrum but a pair of planes — a magnitude raised to the
+power 0.3, and a phase. A shared trunk reads both, and then one head predicts a
+gain per frequency bin (a learned sigmoid, which can amplify a bin up to twice
+as well as attenuate it) while the other predicts **two components** whose
+arctangent is the output phase. The phase that comes out is not the phase that
+went in.
+
+A mask cannot do that at any size. Multiplying a spectrum by a complex number
+moves magnitude and phase together, so attenuating a bin necessarily rotates it,
+and a phase that noise has scrambled can never be put back. This is the one
+operation neither of the other two engines has.
+
+The trunk is a dense convolutional encoder and four two-stage blocks. Each block
+runs one transformer along **frequency** and one along **time**, and each of
+those replaces the usual feed-forward layer with a bidirectional recurrence. Two
+million parameters, but they are applied to every point of the
+time-by-frequency grid eight times over — which is where the cost comes from.
+
+Because the attention spans the whole window along both axes, this network
+cannot stream and a long recording has to be cut. Upstream never had to answer
+how: it runs one utterance in one pass. So the windows here were **chosen by
+measurement** — a second of speech was run many times with the window placed
+differently around it. The result turned out to depend on *which* window a
+moment falls in (by 1 % to 25 %, because the network's normalizations take their
+statistics from the whole window) and hardly at all on *where in the window* it
+falls, past the first quarter-second. So the overlap is only as long as it needs
+to be to hide the seam: eight-second windows sharing one second, cross-faded,
+and the recording is processed 1.14 times rather than twice.
+
 ## What `unipase` does
 
 Four networks, of which three run:
@@ -98,8 +160,8 @@ Because the repair happens in the encoder's representation rather than on the
 spectrum, it can put back what is missing and not only take away what is not
 wanted.
 
-**Packet loss** needs no fourth network — and it is the one thing `gtcrn` cannot
-do at all. The encoder was pre-trained with spans
+**Packet loss** needs no fourth network — and it is the one thing neither
+masking engine can do at all. The encoder was pre-trained with spans
 of its input masked out, so a hole in a call — the digital silence a dropped
 packet leaves — is handed to it as a mask and filled in from the words on either
 side. A packet is 20 ms, which at 16 kHz is exactly one frame of the encoder.
@@ -109,7 +171,7 @@ one that changed nothing.
 
 ## Sample rate
 
-The pipeline works at 16 kHz, which is all the bandwidth speech needs and
+All three engines work at 16 kHz, which is all the bandwidth speech needs and
 exactly what a speech recogniser wants. `--sample-rate` (default: the
 recording's own rate) **resamples** the result — it does not invent a wider
 band. A 44.1 kHz file therefore comes back at 44.1 kHz, carrying 16 kHz worth of
@@ -145,8 +207,8 @@ through an installed `ffmpeg` (`--bitrate` applies there).
 
 **A note on FLAC.** The built-in FLAC encoder codes loud, noise-like 24-bit
 material catastrophically badly — hundreds of bytes per sample where three is
-the ceiling — and what a generative model produces is noise-like in its low bits
-by construction. A size guard catches that and refuses to write the file rather
+the ceiling — and enhanced speech is noise-like in its low bits by
+construction. A size guard catches that and refuses to write the file rather
 than leave a valid one two orders of magnitude too big, so `-o out.flac` will
 often fail here with `unsupported_encoding`. Write WAV, or go through `ffmpeg`
 with a different extension.
@@ -159,6 +221,16 @@ not work a GPU can help with, and a second tensor backend would be a second
 implementation of the same thing. `--model` names the checkpoint (default
 `dns3`) or takes a directory of converted weights.
 
+`mpsenet` downloads **9 MB** once — `--model dns` (the default, trained on the
+DNS Challenge data) or `--model vb` (VoiceBank+DEMAND). It is small but does a
+great deal of arithmetic per second of audio, so it wants a GPU, and there it is
+the one engine in trakktor where **the burn runtime is markedly faster than the
+default**: `--runtime burn --device metal` runs at about four tenths of real
+time, roughly three times `--runtime candle --device metal`. On the CPU the
+order reverses and burn is much the slower, so the pairing matters. `f32` is the
+default and the only verified mode; `--precision f16` works here and buys no
+speed at all.
+
 `unipase` downloads **2.17 GB** once, converted into a single file in the model
 directory (`~/.trakktor` by default); its `--model` likewise names the
 checkpoint (default `unipase`) or a local directory. Running it is half a
@@ -170,12 +242,14 @@ with each other to within arithmetic noise. Precision is `f32` by default and
 is the only mode the port is verified in; `--precision f16` is a candle-only
 speed option and is a different computation of the same model.
 
-Both engines are checked against their reference implementations stage by stage:
-`gtcrn`'s waveform lands within 4e-7 of it, `unipase`'s within about 2e-5.
+All three engines are checked against their reference implementations stage by
+stage: `gtcrn`'s waveform lands within 4e-7 of it, `mpsenet`'s within 5e-7 (and
+its two runtimes agree with each other to 6e-6), `unipase`'s within about 2e-5.
 
 ## Credits
 
-Ported from [GTCRN](https://github.com/Xiaobin-Rong/gtcrn) (MIT), and from
+Ported from [GTCRN](https://github.com/Xiaobin-Rong/gtcrn) (MIT), from
+[MP-SENet](https://github.com/yxlu-0102/MP-SENet) (MIT), and from
 [UniPASE](https://github.com/Xiaobin-Rong/unipase) (MIT), which
 builds on [WavLM](https://github.com/microsoft/unilm/tree/master/wavlm) (MIT),
 the Vocos backbone by way of

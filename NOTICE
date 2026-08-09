@@ -323,6 +323,17 @@ GTCRN — MIT License
   checkpoint is downloaded from the project's own repository at runtime and is
   not redistributed here.
 
+MP-SENet — MIT License
+  Copyright (c) 2023 Yexin Lu
+  https://github.com/yxlu-0102/MP-SENet
+  The `enhance mpsenet` engine ports the MP-SENet speech-enhancement network:
+  its power-law-compressed magnitude and phase front end, the dense encoder,
+  the two-stage blocks that attend along frequency and then along time with a
+  bidirectional recurrence in place of a feed-forward layer, and the two
+  decoders it ends in — a learned-sigmoid magnitude mask and a phase estimated
+  outright from two components. The published checkpoints are downloaded from
+  the project's own repository at runtime and are not redistributed here.
+
 UniPASE — MIT License
   Copyright (c) 2026 Rong Xiaobin
   https://github.com/Xiaobin-Rong/unipase
@@ -406,5 +417,5 @@ https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode
 Apache License 2.0 (applies to the Apache-licensed works listed in section 1 —
 Vosk/icefall/sherpa-onnx, the 1-800-BAD-CODE punctuation model, Qwen3-TTS,
 ESpeech-TTS-1, PaddleOCR, DBNet/DB, PaddleOCR-VL, ERNIE-4.5, Transformers,
-oar-ocr, and, at your option, candle and burn): see
+oar-ocr, PASE, and, at your option, candle and burn): see
 https://www.apache.org/licenses/LICENSE-2.0

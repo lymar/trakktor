@@ -127,6 +127,22 @@ Apache-licensed:
   > Enhancement Model Requiring Ultralow Computational Resources," *ICASSP
   > 2024*, pp. 971-975.
 
+- [**`enhance mpsenet`**](features/enhance/README.md) —
+  [MP-SENet](https://github.com/yxlu-0102/MP-SENet) (MIT) by Ye-Xin Lu, Yang Ai
+  and Zhen-Hua Ling: the magnitude-and-phase enhancer — the only engine here
+  that estimates phase as its own output — ported to the same candle runtime
+  with the same optional burn runtime. Both published checkpoints (MIT, carried
+  in the project's own repository) are downloaded at runtime. Papers:
+  [arXiv:2305.13686](https://arxiv.org/abs/2305.13686) (Interspeech 2023),
+  [arXiv:2308.08926](https://arxiv.org/abs/2308.08926) (the extended version,
+  *Neural Networks* 2025).
+
+  If you use this engine, please cite:
+
+  > Y.-X. Lu, Y. Ai and Z.-H. Ling, "MP-SENet: A Speech Enhancement Model with
+  > Parallel Denoising of Magnitude and Phase Spectra," *Proc. Interspeech
+  > 2023*, pp. 3834-3838.
+
 - [**`enhance unipase`**](features/enhance/README.md) —
   [UniPASE](https://github.com/Xiaobin-Rong/unipase) (MIT) by Xiaobin Rong,
   Zheng Wang, Yushi Wang, Jun Gao and Jing Lu: the generative

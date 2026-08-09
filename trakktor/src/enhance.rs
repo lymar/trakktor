@@ -11,15 +11,15 @@ use trakktor_core::{
     audio::encode::Format,
     enhance::{
         EnhanceModel, EnhanceOptions, EnhanceProgress, Enhanced, Precision,
-        gtcrn, unipase,
+        gtcrn, mpsenet, unipase,
     },
 };
 
 use crate::{
     asr::progress,
     cli::{
-        DeviceArg, EnhanceGtcrnArgs, EnhanceUnipaseArgs, PrecisionArg,
-        RuntimeArg,
+        DeviceArg, EnhanceGtcrnArgs, EnhanceMpsenetArgs, EnhanceUnipaseArgs,
+        PrecisionArg, RuntimeArg,
     },
     error::CliError,
     output,
@@ -209,6 +209,119 @@ fn write(
         _ => enhanced.write_ffmpeg(path, bitrate)?,
     }
     Ok(())
+}
+
+/// Runs `enhance mpsenet`.
+pub(crate) fn run_mpsenet(
+    args: &EnhanceMpsenetArgs,
+    models_dir: &std::path::Path,
+    json: bool,
+    pretty: bool,
+) -> Result<(), CliError> {
+    let precision = match args.precision {
+        PrecisionArg::F16 => Precision::F16,
+        PrecisionArg::F32 => Precision::F32,
+    };
+    let metal = matches!(args.device, DeviceArg::Metal);
+    let burn = matches!(args.runtime, RuntimeArg::Burn);
+
+    let path = output_path(&args.audio, args.output.as_ref());
+    prepare_output(&path)?;
+
+    let cold = !mpsenet::model_dir(models_dir, &args.model)
+        .join("model.safetensors")
+        .is_file();
+    if cold && !std::path::Path::new(&args.model).is_dir() {
+        let size = mpsenet::download_size(&args.model);
+        if size > 0 {
+            eprintln!(
+                "downloading the network ({} MB) — this happens once",
+                size / 1_000_000
+            );
+        }
+    }
+    let mut reporter = progress::download_progress();
+    let resolved =
+        mpsenet::resolve_model(models_dir, &args.model, &mut reporter)?;
+    let label = resolved
+        .name
+        .clone()
+        .unwrap_or_else(|| resolved.dir.display().to_string());
+
+    eprintln!("loading the model...");
+    let mut model = load_mpsenet(&resolved, burn, metal, precision)?;
+
+    // Nothing to conceal: this engine ends in a mask, and a mask times
+    // silence is silence.
+    let options = EnhanceOptions {
+        sample_rate: args.sample_rate,
+        plc: false,
+    };
+
+    let started = Instant::now();
+    let mut reporter = progress::live_reporter_for(VERB, started);
+    let enhanced = mpsenet::enhance_file(
+        &args.audio,
+        model.as_mut(),
+        &options,
+        &mut |p: EnhanceProgress| {
+            reporter(p.done_seconds, Some(p.total_seconds));
+        },
+    )?;
+    progress::finish_line_for(VERB, started, enhanced.duration());
+
+    write(&enhanced, &path, args.bitrate.as_deref())?;
+    output::print_enhance(
+        &enhanced,
+        &path,
+        format_name(&path),
+        "mpsenet",
+        &label,
+        if burn { "burn" } else { "candle" },
+        if metal { "metal" } else { "cpu" },
+        false,
+        json,
+        pretty,
+    );
+    Ok(())
+}
+
+/// Loads MP-SENet on the runtime and device asked for.
+fn load_mpsenet(
+    resolved: &mpsenet::ResolvedModel,
+    burn: bool,
+    metal: bool,
+    precision: Precision,
+) -> Result<Box<dyn EnhanceModel>, CliError> {
+    if burn {
+        #[cfg(feature = "burn")]
+        {
+            if metal {
+                crate::burn_notice::announce_cold_gpu_start();
+                return Ok(mpsenet::runtime_burn::load_metal(
+                    &resolved.dir,
+                    precision,
+                )?);
+            }
+            return Ok(mpsenet::runtime_burn::load_cpu(
+                &resolved.dir,
+                precision,
+            )?);
+        }
+        #[cfg(not(feature = "burn"))]
+        return Err(trakktor_core::enhance::EnhanceError::InvalidOptions(
+            "this build has no burn runtime; rebuild with the `burn` feature, \
+             or use `--runtime candle`"
+                .into(),
+        )
+        .into());
+    }
+    let device = mpsenet::runtime::device(metal)?;
+    Ok(Box::new(mpsenet::CandleModel::load(
+        &resolved.dir,
+        device,
+        precision,
+    )?))
 }
 
 /// Runs `enhance gtcrn`.

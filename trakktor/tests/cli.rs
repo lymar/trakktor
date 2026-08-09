@@ -473,6 +473,8 @@ fn no_internal_doc_references_leak_into_user_facing_text() {
         &["text", "--help"],
         &["text", "stress", "--help"],
         &["tts", "espeech", "--help"],
+        &["enhance", "--help"],
+        &["enhance", "mpsenet", "--help"],
     ];
     let needles = [
         "ADR-",

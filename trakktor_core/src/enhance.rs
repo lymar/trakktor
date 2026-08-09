@@ -17,8 +17,11 @@
 //!
 //! - [`gtcrn`] — an ultra-light masking network: 48 K parameters, a hundredth
 //!   of real time on one CPU core;
+//! - [`mpsenet`] — a transformer over the spectrum that decodes magnitude and
+//!   phase apart: 2.3 M parameters, and the only masking engine of the three
+//!   that can repair a phase rather than only attenuate a magnitude;
 //! - [`unipase`] — a four-network generative pipeline around a fine-tuned WavLM
-//!   encoder: 546 M parameters, and the only one of the two that can put back
+//!   encoder: 546 M parameters, and the only one of the three that can put back
 //!   what is not there.
 //!
 //! What is shared sits here rather than in either of them: the failures
@@ -29,6 +32,7 @@ pub mod error;
 pub mod gtcrn;
 #[cfg(feature = "enhance-runtime")]
 pub mod model;
+pub mod mpsenet;
 pub mod unipase;
 
 pub use error::EnhanceError;

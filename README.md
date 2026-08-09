@@ -67,13 +67,15 @@ Each command is documented in full on its own page under
 - [**`enhance` — clean up a speech recording**](docs/features/enhance/README.md):
   a damaged recording in, a repaired one out — room noise and hiss removed,
   reverberation reduced, and, with the right engine, the holes a dropped packet
-  leaves in a call filled in from the words on either side. Two engines.
+  leaves in a call filled in from the words on either side. Three engines.
   `gtcrn` is the one to reach for: a masking network of
   **forty-eight thousand** parameters, 580 KB of weights, about a sixtieth of
   real time on one CPU core. `unipase` is generative — five hundred and forty-six
   million parameters — and earns its keep on exactly one thing a mask cannot do,
-  filling a hole. Either way this repairs damage and does **not** improve a
-  recording that is already good: the page says where each helps and where it
+  filling a hole. `mpsenet` sits between them and does the other thing a mask
+  cannot: it estimates **phase** as its own output instead of carrying the
+  input's over. Whichever you pick, this repairs damage and does **not** improve
+  a recording that is already good: the page says where each helps and where it
   hurts, measured against two independent recognisers.
 - [**`vad` — voice-activity audio editing**](docs/features/vad/README.md):
   find the speech in an audio file and report it, cut the silence out, or
@@ -179,9 +181,9 @@ Apache-licensed — Whisper, GigaAM, Vosk, Qwen3-TTS, F5-TTS and the ESpeech
 checkpoints, Vocos, Silero-VAD, Silero TTS, Silero Stress, SaT / wtpsplit,
 the 1-800-BAD-CODE punctuation model, PaddleOCR (with DB, the detection
 algorithm it builds on), PaddleOCR-VL (with the ERNIE-4.5 decoder it is built
-on) and UVDoc for straightening photographed pages, GTCRN and UniPASE (with
-WavLM and PASE behind them) for speech enhancement, on the candle and burn
-runtimes. The full credits — with licenses, upstream links, and papers — live
+on) and UVDoc for straightening photographed pages, GTCRN, MP-SENet and UniPASE
+(with WavLM and PASE behind the last) for speech enhancement, on the candle and
+burn runtimes. The full credits — with licenses, upstream links, and papers — live
 in [`docs/acknowledgments.md`](docs/acknowledgments.md); see
 [`NOTICE`](NOTICE) for the complete third-party attributions and license
 notices.
