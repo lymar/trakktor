@@ -175,5 +175,17 @@ Apache-licensed:
   [punctuators](https://github.com/1-800-BAD-CODE/punctuators) package (MIT), on
   the same candle runtime with the same optional burn runtime.
 
+- [**`convert pdf`**](features/convert/README.md) —
+  [pdf-inspector](https://github.com/firecrawl/pdf-inspector) (MIT) by
+  Firecrawl: PDF classification and Markdown extraction, pure Rust with no C
+  dependency. Unlike everything above it, this one is **not a port** — the crate
+  is a dependency and its code runs as published. What trakktor adds around it
+  is the repair of an encoding case the crate does not handle and two checks on
+  the quality of what comes out. It bundles the
+  [Adobe Glyph List](https://github.com/adobe-type-tools/agl-aglfn) and the
+  Adobe CMap resources (BSD-3-Clause), and parses PDFs with
+  [lopdf](https://github.com/J-F-Liu/lopdf) (MIT), which trakktor also uses
+  directly for the repair.
+
 See [`NOTICE`](../NOTICE) for the full third-party attributions and license
 notices.

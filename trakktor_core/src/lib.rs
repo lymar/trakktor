@@ -7,6 +7,7 @@
 pub mod asr;
 #[cfg(feature = "audio")]
 pub mod audio;
+pub mod convert;
 pub mod download;
 #[cfg(feature = "enhance-runtime")]
 pub mod enhance;

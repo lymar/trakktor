@@ -13,6 +13,7 @@ use trakktor_core::{
         gigaam, vosk,
         whisper::{Segment, Transcription, Word},
     },
+    convert::pdf::Converted,
     enhance::Enhanced,
     feed::{
         Author, ContentBlock, DiscoveredFeed, Field, MarkReadSummary,
@@ -990,6 +991,176 @@ pub fn print_enhance(
         if enhanced.windows == 1 { "" } else { "s" },
         enhanced.concealed_seconds,
     );
+}
+
+// ---------------------------------------------------------------------------
+// convert pdf
+// ---------------------------------------------------------------------------
+
+/// Prints the result of a PDF conversion. JSON: one object for the document,
+/// holding every page asked for — its Markdown, or why there was none — the
+/// assembled Markdown, the pages that need recognizing instead, and any warning
+/// about the text that did convert. Text: the Markdown itself.
+///
+/// Under `--text` the warnings go to `stderr`, as diagnostics: a document with
+/// half its pages missing must still pipe as a document.
+pub fn print_convert_pdf(
+    converted: &Converted,
+    source: &str,
+    out: Option<&Path>,
+    json: bool,
+    pretty: bool,
+) -> Result<(), trakktor_core::convert::ConvertError> {
+    let markdown = converted.markdown();
+    if let Some(path) = out {
+        crate::convert::write_out(path, &markdown)?;
+    }
+
+    let needing_ocr = converted.pages_needing_ocr();
+
+    if json {
+        let mut object = Map::new();
+        object.insert("source".into(), Value::String(source.to_string()));
+        object.insert(
+            "kind".into(),
+            Value::String(converted.kind.as_str().to_string()),
+        );
+        object.insert("page_count".into(), json!(converted.page_count));
+        object.insert(
+            "pages".into(),
+            Value::Array(
+                converted
+                    .pages
+                    .iter()
+                    .map(|page| {
+                        let mut item = Map::new();
+                        item.insert("number".into(), json!(page.number));
+                        match &page.markdown {
+                            Some(markdown) => {
+                                item.insert(
+                                    "markdown".into(),
+                                    Value::String(markdown.clone()),
+                                );
+                            },
+                            None => {
+                                item.insert("needs_ocr".into(), json!(true));
+                                if let Some(reason) = page.reason {
+                                    item.insert(
+                                        "reason".into(),
+                                        Value::String(
+                                            reason.as_str().to_string(),
+                                        ),
+                                    );
+                                }
+                            },
+                        }
+                        Value::Object(item)
+                    })
+                    .collect(),
+            ),
+        );
+        object.insert("markdown".into(), Value::String(markdown));
+        if !needing_ocr.is_empty() {
+            object.insert("pages_needing_ocr".into(), json!(needing_ocr));
+        }
+        if !converted.issues.is_empty() {
+            object.insert(
+                "issues".into(),
+                Value::Array(
+                    converted
+                        .issues
+                        .iter()
+                        .map(|issue| {
+                            let mut item = Map::new();
+                            item.insert(
+                                "code".into(),
+                                Value::String(issue.code.to_string()),
+                            );
+                            if !issue.pages.is_empty() {
+                                item.insert("pages".into(), json!(issue.pages));
+                            }
+                            item.insert(
+                                "message".into(),
+                                Value::String(issue.message.clone()),
+                            );
+                            Value::Object(item)
+                        })
+                        .collect(),
+                ),
+            );
+        }
+        // Only when it happened: a document whose fonts were all in order
+        // should not carry a field about repairing fonts.
+        if converted.fonts_repaired > 0 {
+            object.insert(
+                "fonts_repaired".into(),
+                json!(converted.fonts_repaired),
+            );
+        }
+        if let Some(path) = out {
+            object.insert(
+                "out".into(),
+                Value::String(path.display().to_string()),
+            );
+        }
+        print_json(&Value::Object(object), pretty);
+        return Ok(());
+    }
+
+    print!("{markdown}");
+    if !needing_ocr.is_empty() {
+        eprintln!(
+            "{} of {} page{} had no text layer: {}. Read them with `trakktor \
+             ocr`",
+            needing_ocr.len(),
+            converted.pages.len(),
+            if converted.pages.len() == 1 { "" } else { "s" },
+            page_list(&needing_ocr),
+        );
+    }
+    for issue in &converted.issues {
+        if issue.pages.is_empty() {
+            eprintln!("{}: {}", issue.code, issue.message);
+        } else {
+            eprintln!(
+                "{} on {} page{} ({}): {}",
+                issue.code,
+                issue.pages.len(),
+                if issue.pages.len() == 1 { "" } else { "s" },
+                page_list(&issue.pages),
+                issue.message,
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Page numbers as ranges, so that a hundred consecutive pages read as
+/// `1-100` rather than as a hundred numbers, and truncated when even that is
+/// too long to be a diagnostic.
+fn page_list(pages: &[u32]) -> String {
+    let mut ranges: Vec<String> = Vec::new();
+    let mut at = 0;
+    while at < pages.len() {
+        let mut end = at;
+        while end + 1 < pages.len() && pages[end + 1] == pages[end] + 1 {
+            end += 1;
+        }
+        ranges.push(if end == at {
+            pages[at].to_string()
+        } else {
+            format!("{}-{}", pages[at], pages[end])
+        });
+        at = end + 1;
+    }
+    const MAX_RANGES: usize = 8;
+    if ranges.len() > MAX_RANGES {
+        let rest = ranges.len() - MAX_RANGES;
+        ranges.truncate(MAX_RANGES);
+        format!("{}, and {rest} more", ranges.join(", "))
+    } else {
+        ranges.join(", ")
+    }
 }
 
 /// Prints the voices a model speaks with (`--voice list`).

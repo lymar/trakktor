@@ -57,6 +57,15 @@ imageproc = { version = "0.27", default-features = false }
 # weights for `text punctuate`.
 tar = "0.4"
 md-5 = "0.10"
+# Reading and rewriting the PDF `convert pdf` is about to hand to
+# `pdf-inspector`: the same parser that crate uses, so the document is parsed by
+# one implementation rather than two. Only the encoding repair needs it — the
+# text extraction itself is the crate's job.
+lopdf = "0.41"
+# The engine of `convert pdf`: PDF classification (text-based vs scanned) and
+# Markdown extraction, pure Rust with no C dependency. Default features are
+# empty; the optional `python` one would pull pyo3.
+pdf-inspector = { version = "0.1.7", default-features = false }
 rand = "0.9"
 realfft = "3"
 reqwest = { version = "0.13", features = [

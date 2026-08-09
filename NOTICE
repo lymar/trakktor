@@ -369,7 +369,31 @@ remains under its own license; Cargo.lock is the authoritative list of the
 exact versions in use. Two of them are not MIT/Apache-2.0 and are called out
 here: `clipper2-rust` (polygon offsetting for the OCR detector) is under the
 Boost Software License 1.0, and `nalgebra`/`simba`, reached through
-`imageproc`, are Apache-2.0 only rather than dual-licensed. When distributing compiled binaries, generate the full
+`imageproc`, are Apache-2.0 only rather than dual-licensed.
+
+One crate is called out for a different reason — it is the whole engine of a
+command rather than a component of one, and it carries third-party data of its
+own:
+
+  pdf-inspector — MIT License
+    Copyright (c) 2026 Firecrawl
+    https://github.com/firecrawl/pdf-inspector
+    `convert pdf` classifies PDFs (text-based, scanned, image, mixed) and
+    extracts their text as Markdown with this crate. It is used as a library —
+    no code is vendored or ported. trakktor supplies the Type 1 built-in
+    encodings the crate does not read, by rewriting them into the document as
+    /Encoding /Differences before handing it over, and parses the document for
+    that with `lopdf` (MIT), the same parser the crate itself uses.
+    The crate embeds data derived from Adobe sources, redistributed with it
+    under the terms below:
+      - The Adobe Glyph List (glyph name to Unicode), and CID-to-Unicode tables
+        generated from adobe-type-tools/cmap-resources.
+      - The binary CMap resources under its `external/bcmaps/`.
+        Copyright 1990-2009 Adobe Systems Incorporated. Licensed under
+        BSD-3-Clause terms; see the crate's `external/bcmaps/LICENSE`.
+    trakktor neither redistributes nor relies on those CMap files at run time:
+    the code path that reads them is unreachable in the pinned version, and
+    removing the directory leaves trakktor's output byte for byte the same. When distributing compiled binaries, generate the full
 set of dependency license texts with a tool such as `cargo about` or
 `cargo bundle-licenses`.
 

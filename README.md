@@ -3,8 +3,8 @@
 `trakktor` is a predictable, automation-friendly Rust CLI toolbox for coding
 agents such as Claude Code and OpenCode (humans are welcome to use it too):
 speech-to-text and text-to-speech, speech enhancement, voice-activity audio
-editing, feeds, text structuring, and more — machine-readable output, stable
-flags, and meaningful exit codes. No Python, no virtual environments, no
+editing, text off page images, PDF to Markdown, feeds, text structuring, and
+more — machine-readable output, stable flags, and meaningful exit codes. No Python, no virtual environments, no
 drawn-out setup: a single binary that takes care of everything itself,
 downloading and caching the models it needs on first use.
 
@@ -64,6 +64,18 @@ Each command is documented in full on its own page under
   one page, that takes a sideways or curled shot from unreadable to reading
   exactly as well as a 300 dpi scan of the same page. Boxes still come back on
   the photograph you passed in.
+- [**`convert` — a document to Markdown**](docs/features/convert/README.md):
+  `convert pdf` reads the text a PDF already carries and writes it out as
+  Markdown — headings, tables and reading order included. A document made from
+  a layout program needs no recognizing at all: the text comes out letter for
+  letter, in a fraction of a second for a hundred pages, with nothing
+  downloaded and no model run. A PDF from a *scanner* belongs to `ocr` instead,
+  and you do not have to know which one you have: every page is classified
+  first, the ones with text are converted, and the ones without are named. It
+  also repairs a defect that costs around 2.5 % of the words of a typeset
+  paper — fonts that keep their encoding inside the font program, which is what
+  turns `first` into `rst` and `≤` into `6` — and reports the two kinds of
+  damage that cannot be repaired.
 - [**`enhance` — clean up a speech recording**](docs/features/enhance/README.md):
   a damaged recording in, a repaired one out — room noise and hiss removed,
   reverberation reduced, and, with the right engine, the holes a dropped packet
@@ -181,7 +193,8 @@ the 1-800-BAD-CODE punctuation model, PaddleOCR (with DB, the detection
 algorithm it builds on), PaddleOCR-VL (with the ERNIE-4.5 decoder it is built
 on) and UVDoc for straightening photographed pages, GTCRN and UniPASE (with
 WavLM and PASE behind them) for speech enhancement, on the candle and burn
-runtimes. The full credits — with licenses, upstream links, and papers — live
+runtimes — and, as a library rather than a port, Firecrawl's pdf-inspector
+behind `convert pdf`. The full credits — with licenses, upstream links, and papers — live
 in [`docs/acknowledgments.md`](docs/acknowledgments.md); see
 [`NOTICE`](NOTICE) for the complete third-party attributions and license
 notices.

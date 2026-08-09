@@ -8,6 +8,7 @@
 use trakktor_core::{
     asr::{gigaam::GigaamError, vosk::VoskError, whisper::WhisperError},
     audio::AudioError,
+    convert::ConvertError,
     enhance::EnhanceError,
     feed::FeedError,
     http::HttpError,
@@ -55,6 +56,8 @@ pub enum CliError {
     Silero(SileroError),
     /// An error from the speech-enhancement domain.
     Enhance(EnhanceError),
+    /// An error from the document-conversion domain.
+    Convert(ConvertError),
 }
 
 impl CliError {
@@ -77,6 +80,7 @@ impl CliError {
             CliError::Espeech(err) => espeech_code(err),
             CliError::Silero(err) => silero_code(err),
             CliError::Enhance(err) => enhance_code(err),
+            CliError::Convert(err) => convert_code(err),
         }
     }
 }
@@ -99,6 +103,7 @@ impl std::fmt::Display for CliError {
             CliError::Espeech(err) => write!(f, "{err}"),
             CliError::Silero(err) => write!(f, "{err}"),
             CliError::Enhance(err) => write!(f, "{err}"),
+            CliError::Convert(err) => write!(f, "{err}"),
         }
     }
 }
@@ -161,6 +166,10 @@ impl From<EnhanceError> for CliError {
 
 impl From<Qwen3TtsError> for CliError {
     fn from(err: Qwen3TtsError) -> Self { CliError::Qwen3Tts(err) }
+}
+
+impl From<ConvertError> for CliError {
+    fn from(err: ConvertError) -> Self { CliError::Convert(err) }
 }
 
 /// Maps a [`WhisperError`] to its stable `code`.
@@ -344,6 +353,18 @@ fn qwen3_tts_code(err: &Qwen3TtsError) -> &'static str {
         Qwen3TtsError::InvalidOptions(_) => "invalid_options",
         Qwen3TtsError::Io(_) => "io_error",
         Qwen3TtsError::HomeDirUnknown => "no_home_dir",
+    }
+}
+
+/// Maps a [`ConvertError`] to its stable `code`.
+fn convert_code(err: &ConvertError) -> &'static str {
+    match err {
+        ConvertError::InvalidInput(_) => "invalid_input",
+        ConvertError::ParseFailed(_) => "parse_failed",
+        ConvertError::Encrypted => "encrypted",
+        ConvertError::NoTextLayer { .. } => "no_text_layer",
+        ConvertError::InvalidOptions(_) => "invalid_options",
+        ConvertError::Io { .. } => "io_error",
     }
 }
 

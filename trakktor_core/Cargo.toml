@@ -188,9 +188,11 @@ flate2.workspace = true
 hound = { workspace = true, optional = true }
 image = { workspace = true, optional = true }
 imageproc = { workspace = true, optional = true }
+lopdf.workspace = true
 # One of the two digests the shared downloader verifies models against (blake3
 # is the other): which one to expect is the publisher's choice, not a feature.
 md-5.workspace = true
+pdf-inspector.workspace = true
 rand.workspace = true
 realfft.workspace = true
 reqwest.workspace = true

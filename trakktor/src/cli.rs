@@ -27,14 +27,17 @@ const DEFAULT_MODEL_DIR_NAME: &str = ".trakktor";
 /// A predictable, automation-friendly CLI toolbox for coding agents (Claude
 /// Code, OpenCode, etc.): speech-to-text and text-to-speech, speech
 /// enhancement, voice-activity audio editing, text recognition on page images,
-/// feeds, text structuring, punctuation and Russian stress marking, and more —
+/// PDF to Markdown, feeds, text structuring, punctuation and Russian stress
+/// marking, and more —
 /// machine-readable output, stable flags, and meaningful exit codes. Reach for
 /// it when a task needs one of these helpers, such as fetching a feed's unread
 /// items, transcribing an audio file to timestamped text, reading a text or
 /// Markdown file aloud into an audio file — in a preset voice or in one cloned
 /// from a sample recording — cutting the silence out of a recording, cleaning
 /// up a damaged one (room noise, reverberation, a telephone-narrow band, the
-/// gaps a dropped packet leaves in a call), reading the text off a scan, a
+/// gaps a dropped packet leaves in a call), turning a PDF made from layout
+/// into Markdown without recognizing anything,
+/// reading the text off a scan, a
 /// screenshot or a photograph of a page, page by page, straightening the
 /// photograph first, marking a page up into labelled blocks (title, heading,
 /// paragraph, footnote, table, formula, picture), restoring
@@ -195,6 +198,12 @@ enum Command {
     /// `--format md` assembles them into Markdown instead, with paragraphs and
     /// a reading order worked out from the geometry.
     ///
+    /// **A PDF made from a layout program does not belong here** — its text is
+    /// already in the file, and `convert pdf` gets it out exactly and about a
+    /// thousand times faster. This command is for a page that only exists as a
+    /// picture. If you are unsure which kind of PDF you have, run
+    /// `convert pdf`: it says so, and names the pages that do need recognizing.
+    ///
     /// Which engine: `paddle` for a page in one writing system it covers —
     /// about 139 MB and some ten seconds a page, less of both with
     /// `--quality fast`, and the right default. `vl` for a page whose script
@@ -232,6 +241,23 @@ enum Command {
     Ocr {
         #[command(subcommand)]
         command: OcrCommand,
+    },
+
+    /// Convert a document to Markdown.
+    ///
+    /// A PDF made from a layout program already carries its text: every
+    /// character is in the file, with the font code that draws it. Nothing has
+    /// to be recognized — the text comes out letter for letter, and a
+    /// hundred-page document takes a fraction of a second rather than the ten
+    /// seconds a page `ocr` spends looking at the picture.
+    ///
+    /// So the rule is: **a PDF from a layout program is `convert pdf`, a PDF
+    /// from a scanner is `ocr`.** You do not have to know which one you have —
+    /// `convert pdf` works it out, converts what it can, and names the pages
+    /// that have to be recognized instead.
+    Convert {
+        #[command(subcommand)]
+        command: ConvertCommand,
     },
 
     /// Clean up a speech recording (speech enhancement).
@@ -291,6 +317,50 @@ enum Command {
         #[command(subcommand)]
         command: SkillCommand,
     },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ConvertCommand {
+    /// Read the text layer of a PDF and write it out as Markdown.
+    ///
+    /// Headings, paragraphs, lists, tables and the reading order of a
+    /// multi-column page are worked out from the document's own structure, and
+    /// the running heads and page numbers are dropped. Nothing is downloaded
+    /// and no model runs: this is reading a file, not recognizing a picture.
+    ///
+    /// Every page is classified before it is read, and a page with nothing to
+    /// read — a scan, a blank, or text drawn as vector outlines — is reported
+    /// rather than converted: it appears in `pages_needing_ocr`, and the
+    /// Markdown carries a comment where it would have been. If that is every
+    /// page, the run fails and says to use `ocr` instead. A page that did
+    /// convert can still carry a warning: text mapped into a private use area
+    /// of Unicode is text this file cannot spell out, however confident it
+    /// looks, and only recognizing the page will recover it.
+    Pdf(ConvertPdfArgs),
+}
+
+#[derive(Args)]
+pub(crate) struct ConvertPdfArgs {
+    /// The PDF to convert. One document per run: the result is that document,
+    /// not a sequence of pages gathered from several files.
+    #[arg(value_name = "file")]
+    pub(crate) file: PathBuf,
+
+    /// Which pages to convert, counting from 1 as the document does: `3`,
+    /// `1-5`, or a list like `1-5,12,40-`. A range left open at the end runs
+    /// to the last page. All of them by default.
+    #[arg(long, value_name = "spec")]
+    pub(crate) pages: Option<String>,
+
+    /// Write the Markdown to this file as well as reporting it.
+    #[arg(short, long, value_name = "path")]
+    pub(crate) out: Option<PathBuf>,
+
+    /// The password of an encrypted document. This is the *user* password, the
+    /// one that unlocks the content; an owner password — the one that only
+    /// restricts printing and copying — buys nothing here.
+    #[arg(long, value_name = "password")]
+    pub(crate) password: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -3142,6 +3212,12 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                 Ok(())
             },
         },
+        Command::Convert { command } => match command {
+            ConvertCommand::Pdf(args) => {
+                crate::convert::run_pdf(args, global.json(), global.pretty)
+            },
+        },
+
         Command::Enhance { command } => match command {
             EnhanceCommand::Gtcrn(args) => crate::enhance::run_gtcrn(
                 args,
