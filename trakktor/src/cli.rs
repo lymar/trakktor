@@ -25,17 +25,19 @@ const DEFAULT_WORK_DIR: &str = ".trakktor";
 const DEFAULT_MODEL_DIR_NAME: &str = ".trakktor";
 
 /// A predictable, automation-friendly CLI toolbox for coding agents (Claude
-/// Code, OpenCode, etc.): speech-to-text and text-to-speech, voice-activity
-/// audio editing, text recognition on page images, feeds, text structuring,
-/// punctuation and Russian stress marking, and more — machine-readable output,
-/// stable flags, and meaningful exit codes. Reach for it when a task needs one
-/// of these helpers, such as fetching a feed's unread items, transcribing an
-/// audio file to timestamped text, reading a text or Markdown file aloud into
-/// an audio file — in a preset voice or in one cloned from a sample
-/// recording — cutting the silence out of a recording, reading the text off a
-/// scan, a screenshot or a photograph of a page, page by page, straightening
-/// the photograph first, marking a page up into labelled blocks
-/// (title, heading, paragraph, footnote, table, formula, picture), restoring
+/// Code, OpenCode, etc.): speech-to-text and text-to-speech, speech
+/// enhancement, voice-activity audio editing, text recognition on page images,
+/// feeds, text structuring, punctuation and Russian stress marking, and more —
+/// machine-readable output, stable flags, and meaningful exit codes. Reach for
+/// it when a task needs one of these helpers, such as fetching a feed's unread
+/// items, transcribing an audio file to timestamped text, reading a text or
+/// Markdown file aloud into an audio file — in a preset voice or in one cloned
+/// from a sample recording — cutting the silence out of a recording, cleaning
+/// up a damaged one (room noise, reverberation, a telephone-narrow band, the
+/// gaps a dropped packet leaves in a call), reading the text off a scan, a
+/// screenshot or a photograph of a page, page by page, straightening the
+/// photograph first, marking a page up into labelled blocks (title, heading,
+/// paragraph, footnote, table, formula, picture), restoring
 /// punctuation to a raw transcript, splitting a transcript into readable
 /// paragraphs, or marking where the stress falls in Russian text.
 ///
@@ -214,6 +216,37 @@ enum Command {
         command: OcrCommand,
     },
 
+    /// Clean up a speech recording (speech enhancement).
+    ///
+    /// A recording goes in and a cleaner one comes out: room noise and hiss
+    /// removed, reverberation reduced, a telephone-narrow band widened back to
+    /// speech bandwidth, and the holes a dropped packet leaves in a call filled
+    /// in from the words on either side. Enhancement is organized as a set of
+    /// engines; pick one as the subcommand. The result on stdout is JSON with
+    /// the path, the duration, and what concealment did.
+    ///
+    /// Which engine: `gtcrn` unless you know the recording lost packets.
+    /// It is forty-eight thousand parameters against five hundred and
+    /// forty-six million, runs at a hundredth of real time on a CPU, and
+    /// measures at least as well everywhere except concealment — which it
+    /// cannot do at all, because a mask can only attenuate what is there.
+    /// `unipase` is the generative one, and the only one that can put back a
+    /// band that was never carried or the sixty milliseconds a dropped packet
+    /// took.
+    ///
+    /// This repairs damage; it does not improve a recording that is already
+    /// good. Measured against two independent speech recognisers, the one
+    /// reliable win is a recording damaged the way a phone call is — a narrow
+    /// band and noise and dropped packets together — with a reverberant room a
+    /// distant second. Both engines *hurt* on a clean recording, and hurt badly
+    /// on one buried in noise. Everything in between depends on which
+    /// recogniser reads the result. Run this because the recording is damaged,
+    /// not as a matter of course.
+    Enhance {
+        #[command(subcommand)]
+        command: EnhanceCommand,
+    },
+
     /// Work with RSS/Atom/JSON feeds: discover, read, and track read state.
     ///
     /// Typical workflow: `trakktor feed discover <page-url>` finds the feeds a
@@ -239,6 +272,148 @@ enum Command {
         #[command(subcommand)]
         command: SkillCommand,
     },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum EnhanceCommand {
+    /// Enhance a recording with the GTCRN network — the one to reach for.
+    ///
+    /// Forty-eight thousand parameters, a hundredth of real time on one CPU
+    /// core, and 580 KB of weights. Measured against two independent speech
+    /// recognisers it matches the generative engine where enhancement helps at
+    /// all — a recording damaged the way a phone call is, and a reverberant
+    /// room — for a hundred and fiftieth of the cost, and it is the less
+    /// harmful of the two everywhere else.
+    ///
+    /// It is a masking network: it predicts what to attenuate and multiplies.
+    /// That is a hard limit, not a tuning choice — it cannot fill the hole a
+    /// dropped packet left, because any mask times silence is silence. For a
+    /// call with dropped packets, use `unipase`.
+    #[command(name = "gtcrn")]
+    Gtcrn(EnhanceGtcrnArgs),
+
+    /// Enhance a recording with the UniPASE pipeline — the generative engine.
+    ///
+    /// Four networks in a row, of which three run: a speech encoder reads the
+    /// recording and is tapped at two depths — one layer that still carries
+    /// what the room and the microphone did, and one that carries what is
+    /// being said — an adapter works out what the first should have been if
+    /// the recording had been clean, and a vocoder turns that back into sound.
+    /// Because the repair happens in the encoder's representation rather than
+    /// on the spectrum, it can put back what is missing (a band, a lost packet)
+    /// and not only take away what is not wanted.
+    ///
+    /// That is also the only reason to prefer it over `gtcrn`, which is
+    /// smaller by four orders of magnitude and measures at least as well
+    /// everywhere else. Reach for this one when the recording lost packets.
+    ///
+    /// The pipeline works at 16 kHz, which is what a speech recognizer wants
+    /// and all the bandwidth speech needs; `--sample-rate` resamples the result
+    /// rather than inventing a wider band. The models are 2.17 GB, downloaded
+    /// and converted once into the model directory (~/.trakktor by default).
+    #[command(name = "unipase")]
+    Unipase(EnhanceUnipaseArgs),
+}
+
+#[derive(Args)]
+pub(crate) struct EnhanceGtcrnArgs {
+    /// Path to the recording to enhance.
+    pub(crate) audio: PathBuf,
+
+    /// Where to write the result. The container follows the extension — wav
+    /// and flac are written directly, anything else through ffmpeg. Defaults
+    /// to the input's name with `.enhanced.wav` in its place, next to it.
+    /// Prefer wav: the built-in FLAC encoder codes enhanced audio very badly,
+    /// and a size guard will refuse to write the result rather than leave a
+    /// file many times larger than the audio.
+    #[arg(short, long, value_name = "path")]
+    pub(crate) output: Option<PathBuf>,
+
+    /// Model: the published name, downloaded on first use, or a path to a
+    /// directory holding converted weights.
+    #[arg(long, default_value = "dns3", value_name = "name|dir")]
+    pub(crate) model: String,
+
+    /// Sample rate to write at. Defaults to the recording's own. The network
+    /// works at 16 kHz whatever this is, so a higher rate matches the source's
+    /// container rather than adding bandwidth.
+    #[arg(long, value_name = "hz")]
+    pub(crate) sample_rate: Option<u32>,
+
+    /// Bitrate for a lossy output format written through ffmpeg, for example
+    /// `192k`. Ignored for wav and flac.
+    #[arg(long, value_name = "rate")]
+    pub(crate) bitrate: Option<String>,
+}
+
+#[derive(Args)]
+pub(crate) struct EnhanceUnipaseArgs {
+    /// Path to the recording to enhance.
+    pub(crate) audio: PathBuf,
+
+    /// Where to write the result. The container follows the extension — wav
+    /// and flac are written directly, anything else through ffmpeg. Defaults
+    /// to the input's name with `.enhanced.wav` in its place, next to it.
+    /// Prefer wav: the built-in FLAC encoder codes this model's output very
+    /// badly, and a size guard will refuse to write the result rather than
+    /// leave a file many times larger than the audio.
+    #[arg(short, long, value_name = "path")]
+    pub(crate) output: Option<PathBuf>,
+
+    /// Model: the published name, downloaded on first use, or a path to a
+    /// directory holding converted weights.
+    #[arg(long, default_value = "unipase", value_name = "name|dir")]
+    pub(crate) model: String,
+
+    /// Sample rate to write at. Defaults to the recording's own. The pipeline
+    /// works at 16 kHz whatever this is, so a higher rate matches the source's
+    /// container rather than adding bandwidth.
+    #[arg(long, value_name = "hz")]
+    pub(crate) sample_rate: Option<u32>,
+
+    /// Do not conceal lost packets: leave the digital silence a dropped packet
+    /// left behind as it is, instead of letting the encoder fill it in.
+    #[arg(long)]
+    pub(crate) no_plc: bool,
+
+    /// Inference runtime executing the model. Both produce the same result;
+    /// `burn` needs a build with the `burn` feature enabled and computes in
+    /// f32 only.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = RuntimeArg::Candle,
+        value_name = "runtime"
+    )]
+    pub(crate) runtime: RuntimeArg,
+
+    /// Compute device. `metal` needs a build with the `metal` feature (for the
+    /// candle runtime) or the `burn` feature (for the burn runtime), and is
+    /// only available on macOS. This is half a billion parameters over every
+    /// eight seconds of audio, so a GPU is worth having.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = DeviceArg::Cpu,
+        value_name = "device"
+    )]
+    pub(crate) device: DeviceArg,
+
+    /// Compute precision. The published checkpoints are f32 throughout and the
+    /// reference offers no half-precision path, so f32 is the default and the
+    /// only mode the port is verified in; f16 is a candle-only speed option.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = PrecisionArg::F32,
+        value_name = "precision"
+    )]
+    pub(crate) precision: PrecisionArg,
+
+    /// Bitrate for a lossy output format written through ffmpeg, for example
+    /// `192k`. Ignored for wav and flac.
+    #[arg(long, value_name = "rate")]
+    pub(crate) bitrate: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -2940,6 +3115,21 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                 Ok(())
             },
         },
+        Command::Enhance { command } => match command {
+            EnhanceCommand::Gtcrn(args) => crate::enhance::run_gtcrn(
+                args,
+                &global.model_dir()?,
+                global.json(),
+                global.pretty,
+            ),
+            EnhanceCommand::Unipase(args) => crate::enhance::run_unipase(
+                args,
+                &global.model_dir()?,
+                global.json(),
+                global.pretty,
+            ),
+        },
+
         Command::Skill { command } => match command {
             SkillCommand::Show { full } => {
                 crate::skill::show(*full, global.json(), global.pretty)

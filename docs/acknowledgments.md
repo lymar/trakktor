@@ -114,6 +114,41 @@ Apache-licensed:
   is applied, and inverted for reporting boxes, by trakktor itself. Weights
   are downloaded at runtime. Please cite the UVDoc paper if you use this
   model.
+- [**`enhance gtcrn`**](features/enhance/README.md) —
+  [GTCRN](https://github.com/Xiaobin-Rong/gtcrn) (MIT) by Xiaobin Rong, Jing Lu
+  and co-authors: the ultra-lightweight masking enhancer — 48 K parameters —
+  ported to the same candle runtime. Its checkpoint (MIT, carried in the
+  project's own repository) is downloaded at runtime. Paper:
+  [ICASSP 2024](https://ieeexplore.ieee.org/document/10448310).
+
+  If you use this engine, please cite:
+
+  > X. Rong, T. Sun, X. Zhang, Y. Hu, C. Zhu and J. Lu, "GTCRN: A Speech
+  > Enhancement Model Requiring Ultralow Computational Resources," *ICASSP
+  > 2024*, pp. 971-975.
+
+- [**`enhance unipase`**](features/enhance/README.md) —
+  [UniPASE](https://github.com/Xiaobin-Rong/unipase) (MIT) by Xiaobin Rong,
+  Zheng Wang, Yushi Wang, Jun Gao and Jing Lu: the generative
+  speech-enhancement pipeline — the two-tap read of its fine-tuned
+  [WavLM](https://github.com/microsoft/unilm/tree/master/wavlm) encoder (MIT,
+  Microsoft), the Vocos adapter and vocoder around it in the variant published
+  by [WavTokenizer](https://github.com/jishengpeng/WavTokenizer) (MIT), and the
+  packet-loss concealment that rides on the encoder's masking — ported to the
+  same candle runtime with the same optional burn runtime. The pipeline
+  assembly and its long-form inference are adapted from
+  [PASE](https://github.com/cisco-open/pase) (Apache-2.0, Cisco Systems).
+  Weights ([`Xiaobin-Rong/unipase`](https://huggingface.co/Xiaobin-Rong/unipase),
+  Apache-2.0) are downloaded at runtime. Papers:
+  [arXiv:2604.14606](https://arxiv.org/abs/2604.14606) (UniPASE, *IEEE TASLP*
+  2026), [arXiv:2110.13900](https://arxiv.org/abs/2110.13900) (WavLM).
+
+  If you use this engine, please cite:
+
+  > X. Rong, Z. Wang, Y. Wang, J. Gao and J. Lu, "UniPASE: A Generative Model
+  > for Universal Speech Enhancement With High Fidelity and Low
+  > Hallucinations," *IEEE Transactions on Audio, Speech and Language
+  > Processing*, vol. 34, pp. 3901-3915, 2026.
 - [**`vad`**](features/vad/README.md), and
   [**`asr --vad`**](features/asr/whisper.md#voice-activity-detection-vad) —
   [Silero-VAD](https://github.com/snakers4/silero-vad)

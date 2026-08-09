@@ -52,3 +52,60 @@ fn flac_rejects_float_sources_pointing_at_wav() {
         .unwrap_err();
     assert!(matches!(err, AudioError::UnsupportedEncoding(_)));
 }
+
+/// The encoder in use codes loud, noise-like 24-bit material as hundreds of
+/// bytes per sample (its Rice parameter is capped at 14, and it prefers that
+/// over storing the samples verbatim). The guard has to catch it.
+#[test]
+fn flac_refuses_output_larger_than_the_pcm_it_encodes() {
+    let mut state = 1u64;
+    let peak = f64::from((1u32 << 23) - 1);
+    let samples: Vec<i32> = (0..200_000)
+        .map(|_| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            let noise = ((state >> 33) as f64 / f64::from(1u32 << 31)) - 1.0;
+            ((0.3 * noise * peak).round() as i32) << 8
+        })
+        .collect();
+    let audio = DecodedAudio::from_parts(
+        16_000,
+        None,
+        Some(24),
+        NativeBuf::S32(vec![samples]),
+    );
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("noise.flac");
+    let err = write(&path, &audio, Format::Flac).unwrap_err();
+    let message = err.to_string();
+    assert!(
+        matches!(err, AudioError::UnsupportedEncoding(_)),
+        "{message}"
+    );
+    assert!(message.contains("Write WAV instead"), "{message}");
+    // Nothing half-written is left behind.
+    assert!(!path.exists());
+}
+
+/// The same guard must not stand in the way of audio that simply does not
+/// compress much: sixteen-bit noise encodes correctly, at a shade under the
+/// raw size, and has to be written.
+#[test]
+fn flac_still_writes_audio_that_barely_compresses() {
+    let mut state = 7u64;
+    let samples: Vec<i16> = (0..200_000)
+        .map(|_| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            let noise = ((state >> 33) as f64 / f64::from(1u32 << 31)) - 1.0;
+            (0.3 * noise * 32_767.0) as i16
+        })
+        .collect();
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("noise16.flac");
+    write(&path, &mono_s16(samples), Format::Flac).unwrap();
+    let size = std::fs::metadata(&path).unwrap().len();
+    assert!(size > 0 && size < 200_000 * 2, "{size} bytes");
+}

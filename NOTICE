@@ -313,6 +313,51 @@ oar-ocr — Apache-2.0 License
   rotary sections in `ocr vl` follow it. No code is vendored — the crate is
   not a dependency of trakktor.
 
+GTCRN — MIT License
+  Copyright (c) 2024 Xiaobin Rong
+  https://github.com/Xiaobin-Rong/gtcrn
+  The `enhance gtcrn` engine ports the GTCRN speech-enhancement network: its
+  equivalent-rectangular band folding, subband feature extraction, grouped
+  temporal convolution blocks with their recurrent attention, the dual-path
+  grouped recurrent core, and the complex ratio mask it ends in. The published
+  checkpoint is downloaded from the project's own repository at runtime and is
+  not redistributed here.
+
+UniPASE — MIT License
+  Copyright (c) 2026 Rong Xiaobin
+  https://github.com/Xiaobin-Rong/unipase
+  The `enhance unipase` engine ports the UniPASE speech-enhancement pipeline:
+  the two-tap read of its fine-tuned WavLM encoder, the Vocos adapter and
+  vocoder around it, the packet-loss detector that drives concealment, and the
+  windowing and normalization of its long-form inference. Model checkpoints are
+  downloaded from Hugging Face (huggingface.co/Xiaobin-Rong/unipase) at runtime
+  and are not redistributed in this repository.
+
+WavLM / Microsoft unilm — MIT License
+  Copyright (c) 2021 Microsoft
+  https://github.com/microsoft/unilm/tree/master/wavlm
+  The encoder ported by `enhance unipase` is a fine-tune of WavLM-Large, and
+  the port reimplements the WavLM architecture: the convolutional feature
+  extractor in layer-norm mode, the weight-normalized convolutional positional
+  embedding, and the transformer with its bucketed relative position bias and
+  the query-driven gate over it.
+
+WavTokenizer — MIT License
+  Copyright (c) 2024 jishengpeng
+  https://github.com/jishengpeng/WavTokenizer
+  The Vocos backbone the adapter and the vocoder of `enhance unipase` are built
+  from — ConvNeXt blocks over a residual/attention positional network, and the
+  inverse-STFT head — is this project's variant of Vocos, which is the form
+  UniPASE uses.
+
+PASE / cisco-open — Apache-2.0 License
+  Copyright 2025 Cisco Systems, Inc. and its affiliates
+  https://github.com/cisco-open/pase
+  UniPASE's pipeline assembly and its long-form inference are adapted from
+  PASE, and the structure ported here — how the four networks are chained, and
+  how a recording is cut into overlapping windows and stitched back — follows
+  it.
+
 
 -------------------------------------------------------------------------------
 2. Rust crate dependencies

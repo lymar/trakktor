@@ -23,20 +23,20 @@ const DESCRIPTION_MAX: usize = 1024;
 /// so a new feature does not reach skill discovery on its own.
 const STUB_DESCRIPTION: &str =
     "Use {name}, a predictable, automation-friendly CLI toolbox for coding \
-     agents. Feeds: discover the RSS/Atom/JSON feeds a page declares, read \
-     unread entries, track read state. Speech: transcribe audio with a local \
+     agents. Feeds: discover a page's RSS/Atom/JSON feeds, read unread \
+     entries, track read state. Speech: transcribe audio with a local \
      Whisper, GigaAM or Vosk model, or translate it to English; read text or \
-     Markdown aloud in a preset or cloned voice. Audio: by voice-activity \
-     detection, report a speech/silence timeline, cut silence, or split it. \
-     Images: read text off scans, screenshots and phone photos of pages, page \
-     by page, in a dozen scripts — or with a document model that finds the \
-     script itself and reads tables and formulas; mark a page up into \
-     labelled blocks (heading, paragraph, footnote); straighten a photo shot \
-     at an angle, curved or sideways. Text: restore punctuation and casing, \
-     split into paragraphs, mark Russian stress — offline. Reach for it \
-     whenever a task involves a feed URL, audio to transcript, text aloud, a \
-     cloned voice, dead air, text out of a scan, page photo or PDF page, \
-     punctuation, or Russian stress.";
+     Markdown aloud, Russian too, in a preset or cloned voice; clean up a \
+     damaged recording (noise, reverb, dropped packets). Audio: by \
+     voice-activity detection, cut silence, split, or report the speech \
+     timeline. Images: read text off scans, screenshots and phone photos, in \
+     a dozen scripts — or with a document model that reads tables, formulas \
+     and any script; label page blocks (heading, paragraph, footnote); \
+     straighten an angled, curved or sideways photo. Text: restore \
+     punctuation and casing, split paragraphs, mark Russian stress — offline. \
+     Reach for it whenever a task involves a feed URL, audio to transcribe, \
+     text aloud, a cloned voice, a noisy recording, dead air, text out of a \
+     scan, photo or PDF page, punctuation, or Russian stress.";
 
 /// Renders the agent-facing guide (`trakktor skill show`).
 ///

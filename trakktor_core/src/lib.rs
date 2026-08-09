@@ -8,6 +8,8 @@ pub mod asr;
 #[cfg(feature = "audio")]
 pub mod audio;
 pub mod download;
+#[cfg(feature = "enhance-runtime")]
+pub mod enhance;
 pub mod feed;
 pub mod http;
 #[cfg(feature = "ocr-runtime")]

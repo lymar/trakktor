@@ -17,7 +17,7 @@ pub mod encode;
 mod error;
 pub(crate) mod pipeline;
 mod rematrix;
-mod resample;
+pub(crate) mod resample;
 
 pub use decode::{
     DecodedAudio, MonoS16Stream, decode_file, decode_to_mono_f32,

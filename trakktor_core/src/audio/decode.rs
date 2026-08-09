@@ -188,6 +188,10 @@ impl MonoS16Stream {
     /// for progress reporting only — streams may misdeclare or omit it.
     pub fn duration_hint(&self) -> Option<f64> { self.stream.duration_hint }
 
+    /// The rate the file itself is at, before this stream reshapes it — what a
+    /// caller needs to write its result back at the rate it came in at.
+    pub fn source_sample_rate(&self) -> u32 { self.stream.rate }
+
     /// The next non-empty block of shaped samples, or `None` at the end
     /// (after the final resampler flush).
     pub fn next_block(&mut self) -> Result<Option<Vec<i16>>, AudioError> {
