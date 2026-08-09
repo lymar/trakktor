@@ -80,7 +80,7 @@ Each command is documented in full on its own page under
 
 ## Install
 
-Requires a stable Rust toolchain **≥ 1.88** (edition 2024; nightly is only
+Requires a stable Rust toolchain **≥ 1.92** (edition 2024; nightly is only
 needed for `cargo fmt`, not to build). The binary installs into `~/.cargo/bin`,
 which must be on your `PATH`.
 
