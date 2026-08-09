@@ -41,7 +41,8 @@ use crate::{
         layout::Region,
         paddle::{
             artifact::Artifact,
-            db::{self, Params},
+            config::{ModelConfig as PaddleConfig, PostProcess as PaddlePost},
+            db::{self, Params, Thresholds},
             det::Detector,
             download as paddle_download,
             image::{self as raw, LimitType, Page as RawPage},
@@ -62,8 +63,9 @@ pub struct Options {
     pub detection: String,
     /// Longest side the page is resized to before detection.
     pub limit_side_len: usize,
-    /// Detection post-processing thresholds.
-    pub params: Params,
+    /// Detection post-processing thresholds the run names; the rest come from
+    /// the detector's own description.
+    pub thresholds: Thresholds,
     /// What to ask the model for.
     pub task: Task,
     /// When to stop generating.
@@ -86,7 +88,7 @@ impl Default for Options {
             model: model::DEFAULT_MODEL.to_string(),
             detection: DEFAULT_DETECTION.to_string(),
             limit_side_len: DEFAULT_LIMIT_SIDE_LEN,
-            params: Params::default(),
+            thresholds: Thresholds::default(),
             task: Task::Ocr,
             limits: Limits::default(),
             blocks: BlockSettings::default(),
@@ -132,6 +134,8 @@ pub enum Runtime {
 /// A loaded engine.
 pub struct Engine {
     detector: Detector,
+    /// The detector's declared thresholds with the run's own laid over them.
+    params: Params,
     /// The device the detector computes on. The reader's own device lives
     /// behind its runtime seam and need not be the same one.
     device: CandleDevice,
@@ -162,9 +166,19 @@ impl Engine {
         let checkpoint =
             download::resolve(models_dir, &options.model, progress)?;
 
-        let detector = {
+        let (detector, params) = {
             let artifact = Artifact::load(&detection.dir)?;
-            Detector::load(&Loader::new(&artifact, &device))?
+            let described = PaddleConfig::load(&detection.dir)?;
+            // As in the classic engine: the thresholds a run does not name are
+            // the detector's own, not this engine's guess.
+            let PaddlePost::Db(published) = &described.post else {
+                return Err(OcrError::Artifact(format!(
+                    "`{}` is not a text detector",
+                    options.detection
+                )));
+            };
+            let params = Params::resolved(published, options.thresholds);
+            (Detector::load(&Loader::new(&artifact, &device))?, params)
         };
 
         let cfg = ModelConfig::load(&checkpoint.dir)?;
@@ -203,6 +217,7 @@ impl Engine {
 
         Ok(Self {
             detector,
+            params,
             device,
             reader,
             detection_name: detection
@@ -405,7 +420,7 @@ impl Engine {
             input.height,
             (page.width, page.height),
             (input.ratio_height as f32, input.ratio_width as f32),
-            &self.options.params,
+            &self.params,
         );
         sort_boxes(&mut boxes);
         Ok(boxes.into_iter().map(|(quad, _)| quad).collect())

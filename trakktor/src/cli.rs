@@ -224,21 +224,22 @@ enum Command {
 
 #[derive(Subcommand)]
 pub(crate) enum OcrCommand {
-    /// Read pages with the PaddleOCR PP-OCRv5 pipeline.
+    /// Read pages with PaddleOCR's classic detect-then-recognize pipeline.
     ///
     /// A detector finds the text lines on the page, each line is straightened
-    /// out of it, and a recognizer reads the line. Thirteen recognizers cover
+    /// out of it, and a recognizer reads the line. Fourteen recognizers cover
     /// the scripts between them and `--lang` picks one; the models download on
     /// first use into the model directory (~/.trakktor by default) and later
     /// runs reuse them.
     ///
     /// The models are the best ones available for the language rather than the
-    /// cheapest, which is about 96 MB for the reading — 173 MB for Chinese and
-    /// Japanese, the two languages with a large recognizer as well — and,
-    /// unless `--no-layout` turns it off, 130 MB more for the markup.
-    /// `--quality fast` reads with small models instead: 13 MB, and a quarter
-    /// to a third off the time a page takes. Either way the run says what it
-    /// downloads before it starts.
+    /// cheapest, and they are not all of one generation: the newest carries no
+    /// Cyrillic, so a Russian page is found by the newest detector and read by
+    /// an older recognizer. That is about 139 MB for a page in English or
+    /// Latin script, 70 MB for one in Cyrillic, and, unless `--no-layout`
+    /// turns it off, 130 MB more for the markup. `--quality fast` reads with
+    /// small models instead: 13 MB, and a quarter to a third off the time a
+    /// page takes. Either way the run says what it downloads before it starts.
     Paddle(Box<OcrPaddleArgs>),
 
     /// Read pages with the PaddleOCR-VL document model.
@@ -293,19 +294,20 @@ pub(crate) struct OcrPaddleArgs {
     /// `best` takes the strongest models trakktor has for the language, and is
     /// the default: an OCR run is wanted for its accuracy, and a page that
     /// reads badly is worth less than a page that reads slowly. It always
-    /// means the large text detector — 88 MB against 4.7 — which finds the
-    /// short line that closes a paragraph and the superscript marker of a
-    /// footnote, and takes a line whole where the small one breaks it into
-    /// pieces.
+    /// means the newest text detector — 62 MB against 4.7 — which on a
+    /// photographed book page found 62 lines where a small one found 40.
     ///
     /// `fast` takes the small models and cuts a quarter to a third off the
     /// time a page takes, more at a raised `--limit-side-len`. On a page of
-    /// clean, ordinary type the two read the same text; the difference
-    /// shows on scans, on dense pages and in small print.
+    /// clean, ordinary type the two read nearly the same text; the difference
+    /// shows on photographs, on poor scans, in small print, and at the edge of
+    /// a model's dictionary — `1841-1868` keeps its dash under `best` and
+    /// loses it under `fast`, because the small English model has no en dash.
     ///
-    /// For most languages this moves the detector only, because their
-    /// recognizer is published in one size; Chinese and Japanese also get a
-    /// large recognizer (84 MB against 17). Which models ran is in the result
+    /// For English, Latin script, Chinese and Japanese it also moves the
+    /// recognizer (77 MB against 8 to 17). Cyrillic, Arabic, Devanagari,
+    /// Korean, Thai, Greek, Tamil and Telugu have one recognizer each, so
+    /// there it moves the detector alone. Which models ran is in the result
     /// either way, and `--det-model` and `--rec-model` override the choice one
     /// model at a time.
     #[arg(
@@ -365,9 +367,9 @@ pub(crate) struct OcrPaddleArgs {
     pub(crate) limit_side_len: usize,
 
     /// Text detection model, overriding the one `--quality` would choose.
-    /// `PP-OCRv5_server_det` is the large one (88 MB) and
-    /// `PP-OCRv5_mobile_det` the small one (4.7 MB); a path to a directory
-    /// of artifacts also works.
+    /// `PP-OCRv6_medium_det` is the default (62 MB), `PP-OCRv5_mobile_det`
+    /// the small one (4.7 MB), and `PP-OCRv5_server_det` the older large one
+    /// (88 MB); a path to a directory of artifacts also works.
     #[arg(long, value_name = "name|dir")]
     pub(crate) det_model: Option<String>,
 
@@ -378,24 +380,28 @@ pub(crate) struct OcrPaddleArgs {
     pub(crate) rec_model: Option<String>,
 
     /// Probability above which a pixel counts as text when the detector's map
-    /// is thresholded.
-    #[arg(long, default_value_t = 0.3, value_name = "p")]
-    pub(crate) thresh: f32,
+    /// is thresholded. Left unset, each detector's own calibration is used —
+    /// 0.2 for `PP-OCRv6_medium_det`, 0.3 for the two PP-OCRv5 ones. A
+    /// generation calibrates its map together with the thresholds that read
+    /// it, so these are the model's numbers rather than one set for all.
+    #[arg(long, value_name = "p")]
+    pub(crate) thresh: Option<f32>,
 
-    /// Mean probability a detected box must reach to be kept. Lower it to
-    /// recover faint lines, at the price of boxes over background. Worth
-    /// trying at 0.4 with `--det-model PP-OCRv5_server_det`: that model's map
-    /// is sharper, so an ordinary line can score just under the default with
-    /// it and go missing.
-    #[arg(long, default_value_t = 0.6, value_name = "p")]
-    pub(crate) box_thresh: f32,
+    /// Mean probability a detected box must reach to be kept. Left unset, the
+    /// detector's own: 0.45 for `PP-OCRv6_medium_det`, 0.6 for the two
+    /// PP-OCRv5 ones. Lower it to recover faint lines, at the price of boxes
+    /// over background — worth trying a tenth below the default when a line is
+    /// missing.
+    #[arg(long, value_name = "p")]
+    pub(crate) box_thresh: Option<f32>,
 
     /// How far a detected box is expanded before the line is cut out. The
     /// detector marks a shrunken core of each line, so some expansion is
     /// always needed; more of it captures tall letters and accents, and
-    /// eventually the neighbouring line.
-    #[arg(long, default_value_t = 1.5, value_name = "ratio")]
-    pub(crate) unclip_ratio: f32,
+    /// eventually the neighbouring line. Left unset, the detector's own: 1.4
+    /// for `PP-OCRv6_medium_det`, 1.5 for the two PP-OCRv5 ones.
+    #[arg(long, value_name = "ratio")]
+    pub(crate) unclip_ratio: Option<f32>,
 
     /// Lines the recognizer read with less confidence than this are dropped.
     /// Zero keeps everything, which is what to use when a line is missing and
@@ -558,22 +564,24 @@ pub(crate) struct OcrVlArgs {
     pub(crate) det_model: Option<String>,
 
     /// Probability above which a pixel counts as text when the detector's map
-    /// is thresholded.
-    #[arg(long, default_value_t = 0.3, value_name = "p")]
-    pub(crate) thresh: f32,
+    /// is thresholded. Left unset, the detector's own calibration is used.
+    #[arg(long, value_name = "p")]
+    pub(crate) thresh: Option<f32>,
 
-    /// Mean probability a detected box must reach to be kept. Worth trying at
-    /// 0.4 when a line is missing: the detector this engine defaults to has a
-    /// sharper map, so an ordinary line can score just under the default —
-    /// and a line missing at this stage also changes how the rest are grouped
-    /// into blocks. The price of 0.4 is boxes over decorative ink, which can
-    /// pull hallucinated lines into the blocks around them.
-    #[arg(long, default_value_t = 0.6, value_name = "p")]
-    pub(crate) box_thresh: f32,
+    /// Mean probability a detected box must reach to be kept. Left unset, the
+    /// detector's own. Worth trying a tenth lower when a line is missing: the
+    /// detector this engine defaults to has a sharp map, so an ordinary line
+    /// can score just under — and a line missing at this stage also changes
+    /// how the rest are grouped into blocks. The price is boxes over
+    /// decorative ink, which can pull hallucinated lines into the blocks
+    /// around them.
+    #[arg(long, value_name = "p")]
+    pub(crate) box_thresh: Option<f32>,
 
-    /// How far a detected box is expanded before the block is cut out.
-    #[arg(long, default_value_t = 1.5, value_name = "ratio")]
-    pub(crate) unclip_ratio: f32,
+    /// How far a detected box is expanded before the block is cut out. Left
+    /// unset, the detector's own.
+    #[arg(long, value_name = "ratio")]
+    pub(crate) unclip_ratio: Option<f32>,
 
     /// Widest horizontal gap, in line heights, that still joins two detected
     /// boxes into one line of text. The detector returns a line with wide word

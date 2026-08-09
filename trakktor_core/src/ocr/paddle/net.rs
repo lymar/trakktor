@@ -158,6 +158,72 @@ impl<'a> Loader<'a> {
     }
 }
 
+/// Weights taken in the order the graph reads them rather than by name.
+///
+/// A reparameterized model numbers its fused layers out of any order a port
+/// could reconstruct, so its networks walk this instead: each layer asks for
+/// the next weight and states the shape it expects, and the shape check turns
+/// the walk into its own verification. See
+/// [`Artifact::parameter_order`](super::artifact::Artifact::parameter_order).
+pub struct Order<'a> {
+    names: &'a [String],
+    at: usize,
+}
+
+impl<'a> Order<'a> {
+    pub fn new(loader: &'a Loader<'a>) -> Self {
+        Self {
+            names: loader.artifact().parameter_order(),
+            at: 0,
+        }
+    }
+
+    /// The base name of the next layer — `conv2d_171` for a run of
+    /// `conv2d_171.w_0`, `conv2d_171.b_0` — with the whole run consumed.
+    pub fn take(&mut self) -> Result<&'a str, OcrError> {
+        let name = self.names.get(self.at).ok_or_else(|| {
+            OcrError::Artifact(format!(
+                "the network wants more weights than the graph reads ({})",
+                self.names.len()
+            ))
+        })?;
+        let base = base_of(name);
+        while self
+            .names
+            .get(self.at)
+            .is_some_and(|next| base_of(next) == base)
+        {
+            self.at += 1;
+        }
+        Ok(base)
+    }
+
+    /// How many layers have been taken.
+    pub fn taken(&self) -> usize { self.at }
+
+    /// Fails unless every weight the graph reads has been claimed — the check
+    /// that a network walked the whole artifact and not a prefix of it.
+    pub fn finish(self) -> Result<(), OcrError> {
+        if self.at != self.names.len() {
+            return Err(OcrError::Artifact(format!(
+                "the network claimed {} of the {} weights the graph reads",
+                self.at,
+                self.names.len()
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// A published name without its parameter suffix (`conv2d_0.w_0` →
+/// `conv2d_0`).
+fn base_of(name: &str) -> &str {
+    match name.rsplit_once('.') {
+        Some((base, _)) => base,
+        None => name,
+    }
+}
+
 /// A published name with every `_deepcopy_<n>` the exporter appended stripped
 /// off.
 fn base_name(name: &str) -> &str {
@@ -611,6 +677,86 @@ impl SqueezeExcite {
         let gate = self.up.forward(&gate)?;
         let gate = hardsigmoid(&gate, self.slope)?;
         Ok(x.broadcast_mul(&gate)?)
+    }
+}
+
+/// A convolution run in horizontal bands.
+///
+/// The banding is not an optimization; without it this network does not run on
+/// a GPU at all. candle's Metal backend convolves by materializing the im2col
+/// matrix — one row per output pixel, `channels · kernel²` wide — which for the
+/// neck's 9×9 over 256 channels is 83 KB of scratch **per output pixel**. Past
+/// some size that matrix stops being computed correctly and says nothing about
+/// it: an A4 page at `--limit-side-len 1280` came back with 182 lines instead
+/// of 46, and at 1920 the allocation failed outright.
+///
+/// So the input is padded once and then convolved a band of rows at a time,
+/// each band overlapping its neighbours by half a kernel. Every output pixel is
+/// computed from exactly the inputs the whole-image convolution would use, so
+/// this is the same result by the same arithmetic — the CPU run is unchanged by
+/// it, which the parity tests hold to, and Metal now agrees with it, which the
+/// device-agreement test holds to. That test is the guard here: the failure
+/// has no other symptom.
+#[derive(Debug)]
+pub struct Banded {
+    conv: Conv,
+    kernel: (usize, usize),
+    /// How much of the padded input one band consumes per output row.
+    per_row: usize,
+}
+
+/// Elements of im2col scratch a single band may ask for — 256 MB at `f32`.
+///
+/// Bisected rather than guessed, because both ends of the range cost
+/// something. Twice this still gives the right answer and three times it does
+/// not (the same page came back with nothing on it), so the ceiling is between
+/// the two; this sits an octave below the last size that worked. Downwards the
+/// price is time and only on the CPU, which convolves a page in one pass
+/// anyway: a quarter of this costs it a third more, an eighth costs it twice
+/// over, while the Metal run barely moves.
+const BAND_BUDGET: usize = 64 << 20;
+
+impl Banded {
+    /// Loads a stride-one convolution. A band boundary would otherwise have to
+    /// land on the stride's own grid, and no network here needs that.
+    pub fn load(
+        loader: &Loader,
+        name: &str,
+        dims: [usize; 4],
+        groups: usize,
+    ) -> Result<Self, OcrError> {
+        let (kh, kw) = (dims[2], dims[3]);
+        Ok(Self {
+            // The padding is done by hand below, band by band, so the
+            // convolution itself pads by nothing.
+            conv: Conv::load(loader, name, dims, 1, 0, groups)?,
+            kernel: (kh, kw),
+            per_row: dims[1] * kh * kw,
+        })
+    }
+
+    pub fn forward(&self, x: &Tensor) -> Result<Tensor, OcrError> {
+        let (kh, kw) = self.kernel;
+        let (pad_h, pad_w) = (kh / 2, kw / 2);
+        let (_, _, height, width) = x.dims4()?;
+        let padded = x
+            .pad_with_zeros(2, pad_h, pad_h)?
+            .pad_with_zeros(3, pad_w, pad_w)?;
+
+        let rows = (BAND_BUDGET / (self.per_row * width.max(1))).max(1);
+        if rows >= height {
+            return self.conv.forward(&padded.contiguous()?);
+        }
+
+        let mut bands = Vec::with_capacity(height.div_ceil(rows));
+        let mut at = 0;
+        while at < height {
+            let take = rows.min(height - at);
+            let band = padded.narrow(2, at, take + 2 * pad_h)?.contiguous()?;
+            bands.push(self.conv.forward(&band)?);
+            at += take;
+        }
+        Ok(Tensor::cat(&bands, 2)?)
     }
 }
 

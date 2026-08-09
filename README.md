@@ -33,14 +33,15 @@ Each command is documented in full on its own page under
 - [**`ocr` — read text off images**](docs/features/ocr/README.md): scans,
   photographs of pages and screenshots in, text out — page by page, so a
   document is read by passing its pages in order. Two engines.
-  [`paddle`](docs/features/ocr/paddle.md) is a port of the PP-OCRv5 pipeline
-  (detection, then recognition) reading PaddleOCR's published models directly:
-  thirteen recognizers covering Cyrillic, Latin, Arabic, Devanagari, Korean,
-  Thai, Greek, Tamil, Telugu and Chinese/Japanese. It reads with the best
-  models it has for the language — about 96 MB and some ten seconds a page,
-  which is what finds the short lines and superscript footnote markers a small
-  detector drops; `--quality fast` trades that back for 13 MB and a quarter to a
-  third off the time.
+  [`paddle`](docs/features/ocr/paddle.md) is a port of PaddleOCR's classic
+  pipeline (detection, then recognition) reading its published models directly,
+  both live generations of them: fourteen recognizers covering Cyrillic, Latin,
+  Arabic, Devanagari, Korean, Thai, Greek, Tamil, Telugu and Chinese/Japanese.
+  It reads with the best models it has for the language, which is not one
+  generation for all of them — the newest carries no Cyrillic at all, so a
+  Russian page is found by the new detector and read by the older recognizer.
+  About 139 MB for an English page and some ten seconds; `--quality fast` trades
+  that back for 13 MB and a quarter to a third off the time.
   [`vl`](docs/features/ocr/vl.md) is a port of the
   PaddleOCR-VL document model, which **writes out** what it sees instead of
   picking characters from a dictionary: it works out the writing system by

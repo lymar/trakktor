@@ -1,4 +1,4 @@
-# `ocr paddle` — the PP-OCRv5 pipeline
+# `ocr paddle` — PaddleOCR's classic pipeline
 
 > Part of [`ocr`](README.md); the shared page model, output shape and language
 > rules are described there.
@@ -24,51 +24,59 @@ how much, before the first byte moves.
 ```
 
 A detector serves every language: it looks for text as such and does not care
-what script it is. Thirteen recognizers cover the scripts between them — Eastern
+what script it is. Fourteen recognizers cover the scripts between them — Eastern
 Slavic, wider Cyrillic, Latin, English, Arabic, Devanagari, Korean, Thai, Greek,
-Telugu, Tamil, and Chinese/Japanese, which has two. Eleven of them share an
-architecture and differ only in the alphabet they were trained on.
+Telugu, Tamil, and Chinese/Japanese. Eleven of them share an architecture and
+differ only in the alphabet they were trained on; the other three are larger
+models of their own.
 
 **`--quality` is not a pair of model names but a rule**: for the language asked
 for, take the model that reads its alphabet best, or the one that reads it
 cheapest. It has to be a rule because the two ends are not the same models for
-every language — the newest and largest generation PaddleOCR publishes carries
-no Cyrillic at all, so "newest and largest" and "best for this page" are
-different answers. Which models actually ran is in the result, under `models`.
+every language — the newest generation PaddleOCR publishes carries no Cyrillic
+at all, so "newest" and "best for this page" are different answers. Which models
+actually ran is in the result, under `models`.
 
 The default is `best`: an OCR run is wanted for its accuracy, and a page that
-reads badly is worth less than a page that reads slowly. The rule always moves
-the detector, of which there are two:
+reads badly is worth less than a page that reads slowly.
+
+It always moves the detector:
 
 | detector | download | what it changes |
 |---|---:|---|
-| `PP-OCRv5_server_det` | 88 MB | `--quality best` — finds the short line that closes a paragraph and the superscript marker of a footnote, and keeps a line whole where the small one splits it into pieces |
+| `PP-OCRv6_medium_det` | 62 MB | `--quality best` — on a photographed book page it found 62 lines where the older large one found 40 |
 | `PP-OCRv5_mobile_det` | 4.7 MB | `--quality fast` — a quarter to a third off the time a page takes |
 
-It moves the recognizer only for Chinese and Japanese, the one alphabet
-PaddleOCR publishes in two sizes:
+And it moves the recognizer for English, every Latin-script language, and
+Chinese/Japanese — the alphabets the newest generation covers:
 
 | recognizer | download | what it changes |
 |---|---:|---|
-| `PP-OCRv5_server_rec` | 84 MB | `--quality best` for `zh`, `ja` and `chinese_cht` |
-| `PP-OCRv5_mobile_rec` | 17 MB | `--quality fast` for the same three |
+| `PP-OCRv6_medium_rec` | 77 MB | `--quality best` for `en`, Latin script, `zh`, `ja`, `chinese_cht` |
+| `en_`/`latin_PP-OCRv5_mobile_rec` | 8 MB | `--quality fast` for English and Latin script |
+| `PP-OCRv5_mobile_rec` | 17 MB | `--quality fast` for the three Han codes |
 
-Every other language has one recognizer, and `--quality` leaves it alone;
-`--lang list` prints the model each code resolves to under the quality given.
+Cyrillic, Arabic, Devanagari, Korean, Thai, Greek, Tamil and Telugu have one
+recognizer each and `--quality` leaves it alone — so a Russian page is **found**
+by the newest detector and **read** by an older recognizer. `--lang list` prints
+the model each code resolves to under the quality given.
 
-Measured on an A4 page at 300 dpi, on a GPU, whole run including the layout
-stage — a page of ordinary prose reads the same text either way, and the
-difference is on dense pages, small print and scans:
+What the newest generation buys, measured here rather than taken from upstream's
+own figures — the detector and the recognizer changed one at a time:
 
-| | `--quality fast` | `--quality best` |
-|---|---:|---:|
-| page of 47 lines, footnotes | 12 s, 44 lines found | 17 s, 47 lines found |
-| dense page of 108 lines | 16 s, 101 found | 22 s, 107 found |
+| | older | newest |
+|---|---|---|
+| clean English page, 300 dpi | 0.15 % of characters wrong | 0.075 % |
+| photographed book page | 40 lines, 983 characters | 62 lines, 1372 |
+| the en dash in `1841–1868` | dropped outright, or replaced by a hyphen — the small English model has no en dash | in its dictionary, and read correctly at footnote size |
+| Chinese table, boarding pass, Japanese display type | 32 lines read differently | the newer model is right in 26 of them |
 
-The large detector is also, on one measured page, slightly more likely to lose
-an ordinary line of body text to `--box-thresh`: its probability map is sharper,
-so a box score can land just under the default 0.6. If a line goes missing, try
-`--box-thresh 0.4`.
+On a clean page the difference is a character or two either way; it shows on
+photographs, on poor scans and at the edges of a dictionary.
+
+An older, larger detector (`PP-OCRv5_server_det`, 88 MB) and recognizer
+(`PP-OCRv5_server_rec`, 84 MB) are still in the catalog and can be asked for by
+name.
 
 `--det-model` and `--rec-model` also take a **path** to a directory holding a
 model's `inference.json`, `inference.pdiparams` and `config.json`, which is how
@@ -77,11 +85,12 @@ to run a model that is not in the catalog.
 ### The dictionary is the ceiling
 
 A recognizer can only emit characters from its own dictionary, and the
-dictionaries are not supersets of one another. The English one has no en dash,
-so `pp. 358–359` comes back as `pp. 358359`; the Latin one has none either, but
-does have `ß` and `ā`; the Eastern Slavic one has the dash. A character outside
-the dictionary is simply missing from the output, which reads like a recognition
-failure and is not one.
+dictionaries are not supersets of one another. The small English one has no en
+dash, so `pp. 358–359` comes back as `pp. 358359` under `--quality fast`; the
+small Latin one has none either, but does have `ß` and `ā`; the Eastern Slavic
+one has the dash, and so does the newest model, which is what the default reads
+English and Latin script with. A character outside the dictionary is simply
+missing from the output, which reads like a recognition failure and is not one.
 
 ## Finding small type
 
@@ -96,26 +105,36 @@ silently: the lines are absent from the result rather than wrong in it.
 
 **How much this matters depends on the detector.** With `--quality fast` it is
 the single most consequential setting: on a dense page the small detector found
-101 lines at 960 and 108 at 1920. The large one is far less sensitive — 107 at
+101 lines at 960 and 108 at 1920. The large ones are far less sensitive — 107 at
 960 and 108 at 1920 on the same page — so under the default quality this is a
 flag to reach for when a line is missing, not one to raise routinely. Raising it
 is also more expensive there: the cost rises roughly with the area, and the
-large detector is the slower network to begin with.
+default detector is the slower network to begin with.
 
 ## Tuning the detector
 
 ```
---thresh <p>               # default: 0.3   pixel is text above this probability
---box-thresh <p>           # default: 0.6   mean probability a box must reach
---unclip-ratio <ratio>     # default: 1.5   how far a box is expanded
+--thresh <p>               # pixel is text above this probability
+--box-thresh <p>           # mean probability a box must reach
+--unclip-ratio <ratio>     # how far a box is expanded
 --drop-score <p>           # default: 0.5   drop lines read with less confidence
 ```
 
-The detector marks a shrunken core of each line rather than its full extent, so
-some expansion is always needed; more of it captures tall letters and accents,
-and eventually the neighbouring line. `--drop-score 0` keeps everything, which
-is the setting to use when a line is missing and the question is whether it was
-found at all.
+**The first three have no fixed default: each detector brings its own.** A
+generation calibrates its probability map together with the thresholds that read
+it, and running one generation's map through another's finds a different set of
+lines without saying so.
+
+| | `--thresh` | `--box-thresh` | `--unclip-ratio` |
+|---|---:|---:|---:|
+| `PP-OCRv6_medium_det` | 0.2 | 0.45 | 1.4 |
+| both PP-OCRv5 detectors | 0.3 | 0.6 | 1.5 |
+
+Naming a flag overrides that model's value. The detector marks a shrunken core
+of each line rather than its full extent, so some expansion is always needed;
+more of it captures tall letters and accents, and eventually the neighbouring
+line. `--drop-score 0` keeps everything, which is the setting to use when a line
+is missing and the question is whether it was found at all.
 
 ```
 --textline-orientation     # off by default

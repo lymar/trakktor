@@ -55,6 +55,7 @@ impl RawTensor {
 pub struct Artifact {
     tensors: HashMap<String, RawTensor>,
     modules: Vec<String>,
+    order: Vec<String>,
     pub input_dims: Vec<i64>,
     pub output_dims: Vec<i64>,
 }
@@ -122,6 +123,7 @@ impl Artifact {
         Ok(Self {
             tensors,
             modules,
+            order: consumption_order(&graph)?,
             input_dims,
             output_dims,
         })
@@ -173,6 +175,23 @@ impl Artifact {
     pub fn has_module(&self, name: &str) -> bool {
         self.modules.iter().any(|module| module == name)
     }
+
+    /// The parameter names in the order the graph's operations consume them.
+    ///
+    /// For most published models the numbers in the names already run in
+    /// execution order, and a port can walk its own structure with a counter.
+    /// A **reparameterized** model cannot be read that way: its convolutions
+    /// were rebuilt after training, when the branches they fold together were
+    /// collapsed, so the fused layer got a fresh number at the end of the range
+    /// while its squeeze-and-excitation neighbour kept an early one. The
+    /// numbering interleaves, and nothing about it can be derived — but the
+    /// order the operations consume the weights in is exactly the order a
+    /// forward pass needs them, and the graph states it.
+    ///
+    /// Each name appears once. Together with the shape check every load does,
+    /// walking this list is self-verifying: a port whose structure has drifted
+    /// from the artifact's asks for a weight of the wrong shape and is told so.
+    pub fn parameter_order(&self) -> &[String] { &self.order }
 
     /// Number of weights read.
     pub fn len(&self) -> usize { self.tensors.len() }
@@ -321,6 +340,63 @@ fn result_dims(
                 .ok_or_else(|| artifact("a dim is not an integer".into()))
         })
         .collect()
+}
+
+/// The parameter names in the order the computed operations read them.
+///
+/// A parameter op declares a value; every other op names the values it reads.
+/// Walking the ops in order and collecting the parameters among their operands
+/// therefore gives the order a forward pass wants them in. A weight read twice
+/// is kept at its first use, which is the one a structure walking in step with
+/// the graph will ask for.
+fn consumption_order(
+    graph: &serde_json::Value,
+) -> Result<Vec<String>, OcrError> {
+    let ops = ops(graph)?;
+    let mut declared: HashMap<u64, &str> = HashMap::new();
+    for op in ops {
+        if op.get("#").and_then(|n| n.as_str()) != Some("p") {
+            continue;
+        }
+        let Some(name) = op
+            .get("A")
+            .and_then(|a| a.as_array())
+            .and_then(|a| a.iter().find_map(|v| v.as_str()))
+        else {
+            continue;
+        };
+        let result = match op.get("O") {
+            Some(serde_json::Value::Array(items)) => items.first(),
+            other => other,
+        };
+        if let Some(id) =
+            result.and_then(|r| r.get("%")).and_then(|v| v.as_u64())
+        {
+            declared.insert(id, name);
+        }
+    }
+
+    let mut order = Vec::with_capacity(declared.len());
+    let mut seen = std::collections::HashSet::with_capacity(declared.len());
+    for op in ops {
+        if op.get("#").and_then(|n| n.as_str()) == Some("p") {
+            continue;
+        }
+        let Some(inputs) = op.get("I").and_then(|i| i.as_array()) else {
+            continue;
+        };
+        for input in inputs {
+            let Some(id) = input.get("%").and_then(|v| v.as_u64()) else {
+                continue;
+            };
+            if let Some(name) = declared.get(&id) {
+                if seen.insert(*name) {
+                    order.push((*name).to_string());
+                }
+            }
+        }
+    }
+    Ok(order)
 }
 
 /// The top-level module of every op that names one, deduplicated and kept in

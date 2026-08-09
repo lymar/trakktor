@@ -35,19 +35,21 @@
 //!   ruin every confidence the pipeline reports.
 
 pub mod head;
+pub mod lightsvtr;
+pub mod medium;
 pub mod mobile;
 pub mod server;
+pub mod svtr;
 #[cfg(test)]
 mod tests;
 
 use candle_core::{Device, Tensor};
 
-use self::head::Head;
 use super::{
     artifact::Artifact,
     crop::Crop,
     image::{CHANNELS, resize_linear},
-    net::Loader,
+    net::{Loader, Order},
 };
 use crate::ocr::error::OcrError;
 
@@ -77,31 +79,44 @@ const MIN_WIDTH: usize = 8;
 /// The backbone each network declares itself with.
 const MOBILE_BACKBONE: &str = "PPLCNetV3";
 const SERVER_BACKBONE: &str = "PPHGNetV2";
+const MEDIUM_BACKBONE: &str = "PPLCNetV4";
 
-/// A loaded recognizer. Both backbones are boxed: a network holds its own
-/// weights, so the two differ in size by more than an enum should carry.
+/// A loaded recognizer: a backbone and the head that reads its output as a
+/// sequence.
+///
+/// The two are one choice, not two: the classic backbones carry the classic
+/// head and the newest one carries the light head, and no artifact mixes them.
+/// Every variant is boxed — a network holds its own weights, so they differ in
+/// size by more than an enum should carry.
 #[derive(Debug)]
-enum Backbone {
-    Mobile(Box<mobile::Net>),
-    Server(Box<server::Net>),
+enum Network {
+    Mobile(Box<mobile::Net>, Box<head::Head>),
+    Server(Box<server::Net>, Box<head::Head>),
+    Medium(Box<medium::Net>, Box<lightsvtr::Head>),
 }
 
-impl Backbone {
+impl Network {
     fn forward(&self, x: &Tensor) -> Result<Tensor, OcrError> {
         match self {
-            Self::Mobile(net) => net.forward(x),
-            Self::Server(net) => net.forward(x),
+            Self::Mobile(net, head) => head.forward(&net.forward(x)?),
+            Self::Server(net, head) => head.forward(&net.forward(x)?),
+            Self::Medium(net, head) => head.forward(&net.forward(x)?),
+        }
+    }
+
+    fn classes(&self) -> usize {
+        match self {
+            Self::Mobile(_, head) | Self::Server(_, head) => head.classes(),
+            Self::Medium(_, head) => head.classes(),
         }
     }
 }
 
-/// The recognizer: a backbone, the head that reads its output as a sequence,
-/// and the device they live on.
+/// The recognizer: a network and the device it lives on.
 #[derive(Debug)]
 pub struct Recognizer {
     device: Device,
-    backbone: Backbone,
-    head: Head,
+    network: Network,
 }
 
 impl Recognizer {
@@ -115,29 +130,41 @@ impl Recognizer {
             )
         })?;
 
-        let (backbone, naming) = if artifact.has_module(MOBILE_BACKBONE) {
-            (
-                Backbone::Mobile(Box::new(mobile::Net::load(loader)?)),
-                mobile::NAMING,
+        let network = if artifact.has_module(MOBILE_BACKBONE) {
+            Network::Mobile(
+                Box::new(mobile::Net::load(loader)?),
+                Box::new(head::Head::load(loader, mobile::NAMING, classes)?),
             )
         } else if artifact.has_module(SERVER_BACKBONE) {
-            (
-                Backbone::Server(Box::new(server::Net::load(loader)?)),
-                server::NAMING,
+            Network::Server(
+                Box::new(server::Net::load(loader)?),
+                Box::new(head::Head::load(loader, server::NAMING, classes)?),
             )
+        } else if artifact.has_module(MEDIUM_BACKBONE) {
+            // This one is numbered by nothing a port can reconstruct, so its
+            // backbone and its head share one walk over the graph's own order.
+            let mut order = Order::new(loader);
+            let net = medium::Net::load(loader, &mut order)?;
+            let head = lightsvtr::Head::load(
+                loader,
+                &mut order,
+                medium::WIDTH,
+                classes,
+            )?;
+            order.finish()?;
+            Network::Medium(Box::new(net), Box::new(head))
         } else {
             return Err(unknown_backbone(artifact));
         };
 
         Ok(Self {
             device: loader.device().clone(),
-            backbone,
-            head: Head::load(loader, naming, classes)?,
+            network,
         })
     }
 
     /// How many classes the head reads, the blank and the space included.
-    pub fn classes(&self) -> usize { self.head.classes() }
+    pub fn classes(&self) -> usize { self.network.classes() }
 
     /// The device the weights live on.
     pub fn device(&self) -> &Device { &self.device }
@@ -161,8 +188,7 @@ impl Recognizer {
             )));
         }
 
-        let pooled = self.backbone.forward(x)?;
-        let logits = self.head.forward(&pooled)?;
+        let logits = self.network.forward(x)?;
         Ok(candle_nn::ops::softmax_last_dim(&logits)?)
     }
 
@@ -219,8 +245,8 @@ impl Recognizer {
 /// in the family.
 fn unknown_backbone(artifact: &Artifact) -> OcrError {
     OcrError::Artifact(format!(
-        "this recognizer is built on {}, and trakktor runs {MOBILE_BACKBONE} \
-         and {SERVER_BACKBONE}",
+        "this recognizer is built on {}, and trakktor runs {MOBILE_BACKBONE}, \
+         {SERVER_BACKBONE} and {MEDIUM_BACKBONE}",
         artifact
             .modules()
             .first()

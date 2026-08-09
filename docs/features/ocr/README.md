@@ -7,9 +7,9 @@
 Text recognition over page images: scans, photographs of pages, screenshots.
 Two engines, both fully offline once their models are downloaded.
 
-- [**`paddle`**](paddle.md) — a port of the PP-OCRv5 pipeline: a detector finds
-  the lines, a recognizer reads each one. It reads with the best models it has
-  for the language: about 96 MB and some ten seconds a page, or 13 MB and a
+- [**`paddle`**](paddle.md) — a port of PaddleOCR's classic pipeline: a detector
+  finds the lines, a recognizer reads each one. It reads with the best models it
+  has for the language: about 139 MB and some ten seconds a page, or 13 MB and a
   quarter to a third less time under `--quality fast`. **The default choice.**
 - [**`vl`**](vl.md) — a port of the PaddleOCR-VL document model, which writes
   out what it sees rather than picking characters from a dictionary. It works
@@ -74,7 +74,7 @@ JSON (the default) is one object for the run:
   ],
   "language": "ru",
   "models": {
-    "detection": "PP-OCRv5_mobile_det",
+    "detection": "PP-OCRv6_medium_det",
     "recognition": "eslav_PP-OCRv5_mobile_rec"
   }
 }
@@ -85,9 +85,10 @@ JSON (the default) is one object for the run:
   than a rectangle.
 - `score` is the mean probability of the characters that were kept.
 - `lines` are in reading order, not in the order the detector found them.
-- `models` names what actually ran. The two engines default to **different
-  detectors** — `paddle` to the small one, `vl` to the large one — so this field
-  is how to tell which reading a result came from.
+- `models` names what actually ran, and the two are picked separately: a Russian
+  page is found by the newest detector and read by an older recognizer, because
+  the newest generation carries no Cyrillic. `--quality` and `--lang` move them,
+  so this field is how to tell which reading a result came from.
 
 `--text` prints the lines, with the pages separated by a marker that is part of
 the data (`=== page 2 · scan-02.png ===`) — without it the text of a multi-page

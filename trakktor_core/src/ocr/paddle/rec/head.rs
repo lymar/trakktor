@@ -16,14 +16,15 @@
 //!   not by shape.** The reducing convolution squeezes it to an eighth before
 //!   the transformer sees it, and the fusing one reads *twice* that width
 //!   because the backbone's own output is laid beside the transformer's.
-//! - **Two epsilons.** The normalizations inside the blocks carry `1e-5`; the
-//!   one that closes the encoder carries `1e-6`. Unifying them changes the
-//!   output without changing a shape.
+//! - **The closing normalization does not share the blocks' epsilon.** Theirs
+//!   is `1e-5` and this one is `1e-6`; unifying them changes the output without
+//!   changing a shape.
 //! - **The activation is the smooth one.** The neck uses `x * sigmoid(x)` where
 //!   the backbones around it use the piecewise-linear hard swish.
 
-use candle_core::{D, Tensor};
+use candle_core::Tensor;
 
+use super::svtr::{self, Width};
 use crate::ocr::{
     error::OcrError,
     paddle::net::{BatchNorm, Conv, LayerNorm, Linear, Loader, swish},
@@ -31,18 +32,14 @@ use crate::ocr::{
 
 /// The width the transformer works in, which is also what the projection reads.
 const NECK: usize = 120;
-/// Attention heads and the width of each.
-const HEADS: usize = 8;
-const HEAD_WIDTH: usize = NECK / HEADS;
 /// The hidden width of a block's feed-forward part.
 const HIDDEN: usize = 240;
+const WIDTH: Width = Width {
+    dim: NECK,
+    hidden: HIDDEN,
+};
 /// Transformer blocks.
 const DEPTH: usize = 2;
-/// The epsilon the four normalizations inside the blocks carry, and the
-/// different one the closing normalization carries. One constant, two values,
-/// and a silently wrong output if they are unified.
-const BLOCK_EPS: f64 = 1e-5;
-const FINAL_EPS: f64 = 1e-6;
 /// How much of the backbone's width reaches the transformer.
 const SQUEEZE: usize = 8;
 
@@ -123,100 +120,13 @@ impl ConvNorm {
     }
 }
 
-/// Global self-attention over the sequence: no mask, no positional encoding.
-#[derive(Debug)]
-struct Attention {
-    qkv: Linear,
-    proj: Linear,
-}
-
-impl Attention {
-    fn load(loader: &Loader, qkv: &str, proj: &str) -> Result<Self, OcrError> {
-        Ok(Self {
-            qkv: Linear::load(loader, qkv, NECK, 3 * NECK)?,
-            proj: Linear::load(loader, proj, NECK, NECK)?,
-        })
-    }
-
-    fn forward(&self, x: &Tensor) -> Result<Tensor, OcrError> {
-        let (batch, steps, _) = x.dims3()?;
-        // One projection produces all three sequences at once, so splitting it
-        // means reading the heads out of the middle of the width.
-        let qkv = self
-            .qkv
-            .forward(x)?
-            .reshape((batch, steps, 3, HEADS, HEAD_WIDTH))?
-            .permute((2, 0, 3, 1, 4))?;
-        // The query is scaled before the product, not the product after it.
-        let scale = (HEAD_WIDTH as f64).powf(-0.5);
-        let q = qkv.get(0)?.contiguous()?.affine(scale, 0.0)?;
-        let k = qkv.get(1)?.contiguous()?;
-        let v = qkv.get(2)?.contiguous()?;
-        let across = k.transpose(D::Minus2, D::Minus1)?.contiguous()?;
-        let weights = candle_nn::ops::softmax_last_dim(&q.matmul(&across)?)?;
-        let y = weights
-            .matmul(&v)?
-            .transpose(1, 2)?
-            .reshape((batch, steps, NECK))?;
-        self.proj.forward(&y)
-    }
-}
-
-/// One transformer block: attention and a feed-forward part, each normalized
-/// before it runs and added back to what went into it.
-#[derive(Debug)]
-struct EncoderBlock {
-    norm1: LayerNorm,
-    attn: Attention,
-    norm2: LayerNorm,
-    fc1: Linear,
-    fc2: Linear,
-}
-
-impl EncoderBlock {
-    /// The block at `index` owns normalizations `2i` and `2i + 1` and the four
-    /// projections that follow the ones the blocks before it took.
-    fn load(
-        loader: &Loader,
-        index: usize,
-        naming: Naming,
-    ) -> Result<Self, OcrError> {
-        let norm = |offset: usize| {
-            LayerNorm::load(
-                loader,
-                &format!("layer_norm_{}", 2 * index + offset),
-                NECK,
-                BLOCK_EPS,
-            )
-        };
-        let name = |offset: usize| {
-            format!("linear_{}", naming.linear + 4 * index + offset)
-        };
-        Ok(Self {
-            norm1: norm(0)?,
-            attn: Attention::load(loader, &name(0), &name(1))?,
-            norm2: norm(1)?,
-            fc1: Linear::load(loader, &name(2), NECK, HIDDEN)?,
-            fc2: Linear::load(loader, &name(3), HIDDEN, NECK)?,
-        })
-    }
-
-    fn forward(&self, x: &Tensor) -> Result<Tensor, OcrError> {
-        let y = self.attn.forward(&self.norm1.forward(x)?)?;
-        let x = (x + y)?;
-        let y = self.fc1.forward(&self.norm2.forward(&x)?)?;
-        let y = self.fc2.forward(&swish(&y)?)?;
-        Ok((&x + &y)?)
-    }
-}
-
 /// The sequence encoder and the projection that reads it.
 #[derive(Debug)]
 pub struct Head {
     /// The neck narrows the backbone's width to the one the transformer works
     /// in,
     reduce: [ConvNorm; 2],
-    encoder: Vec<EncoderBlock>,
+    encoder: Vec<svtr::Block>,
     norm: LayerNorm,
     /// widens what the transformer made of it back to the backbone's width so
     /// that the two can be laid side by side,
@@ -236,9 +146,21 @@ impl Head {
         classes: usize,
     ) -> Result<Self, OcrError> {
         let squeezed = naming.squeezed();
+        // The block at `index` owns normalizations `2i` and `2i + 1` and the
+        // four projections that follow the ones the blocks before it took.
         let mut encoder = Vec::with_capacity(DEPTH);
         for index in 0..DEPTH {
-            encoder.push(EncoderBlock::load(loader, index, naming)?);
+            let norm =
+                |offset: usize| format!("layer_norm_{}", 2 * index + offset);
+            let name = |offset: usize| {
+                format!("linear_{}", naming.linear + 4 * index + offset)
+            };
+            encoder.push(svtr::Block::load(
+                loader,
+                (&norm(0), &norm(1)),
+                (&name(0), &name(1), &name(2), &name(3)),
+                WIDTH,
+            )?);
         }
         Ok(Self {
             reduce: [
@@ -251,7 +173,12 @@ impl Head {
                 ConvNorm::load(loader, 1, naming, [NECK, squeezed, 1, 1])?,
             ],
             encoder,
-            norm: LayerNorm::load(loader, "layer_norm_4", NECK, FINAL_EPS)?,
+            norm: LayerNorm::load(
+                loader,
+                "layer_norm_4",
+                NECK,
+                svtr::FINAL_EPS,
+            )?,
             restore: ConvNorm::load(
                 loader,
                 2,

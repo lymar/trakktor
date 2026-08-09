@@ -108,14 +108,31 @@ fn probability_map_matches(run: &str, model: &str) {
     assert!(worst < 1e-3, "worst probability differs by {worst}");
 
     let threshold = trace["det_thresh"].as_f64().unwrap() as f32;
-    let disagreements = ours
-        .iter()
-        .zip(&reference)
-        .filter(|(a, b)| (**a >= threshold) != (**b >= threshold))
-        .count();
-    assert_eq!(
-        disagreements, 0,
-        "pixels that cross the threshold differently"
+    // A pixel may only land on the other side of the threshold if it was
+    // sitting on the line to begin with — inside the arithmetic noise the two
+    // implementations differ by. Further out than that is a real disagreement,
+    // however small the count.
+    let mut on_the_line = 0usize;
+    for (ours, reference) in ours.iter().zip(&reference) {
+        if (*ours >= threshold) == (*reference >= threshold) {
+            continue;
+        }
+        assert!(
+            (reference - threshold).abs() <= worst,
+            "a pixel {} from the threshold reads {ours} against {reference}",
+            (reference - threshold).abs()
+        );
+        on_the_line += 1;
+    }
+    let above = reference.iter().filter(|p| **p >= threshold).count();
+    eprintln!(
+        "{model}: {on_the_line} of {above} pixels above the threshold sit on \
+         the line"
+    );
+    assert!(
+        on_the_line * 1000 <= above,
+        "{on_the_line} of {above} pixels are on the line, which is not a \
+         handful"
     );
 }
 
@@ -163,6 +180,12 @@ fn the_probability_map_matches_the_reference() {
 #[ignore = "needs tmp/ocr/golden and ~/.trakktor/ocr/paddle"]
 fn the_server_probability_map_matches_the_reference() {
     probability_map_matches("server_eslav", "PP-OCRv5_server_det");
+}
+
+#[test]
+#[ignore = "needs tmp/ocr/golden and ~/.trakktor/ocr/paddle"]
+fn the_medium_probability_map_matches_the_reference() {
+    probability_map_matches("medium_v6", "PP-OCRv6_medium_det");
 }
 
 /// The large detector on a page-sized input, on both devices.
@@ -231,6 +254,12 @@ fn the_server_boxes_match_the_reference_by_overlap() {
     boxes_match("server_eslav");
 }
 
+#[test]
+#[ignore = "needs tmp/ocr/golden"]
+fn the_medium_boxes_match_the_reference_by_overlap() {
+    boxes_match("medium_v6");
+}
+
 /// Turns one reference run's probability map into boxes and compares them with
 /// the boxes that run recorded.
 fn boxes_match(run: &str) {
@@ -245,6 +274,18 @@ fn boxes_match(run: &str) {
         trace["page_size"][1].as_u64().unwrap() as u32,
     );
 
+    // The thresholds the run was taken at, which are the model's own: the
+    // newest detector's map is calibrated differently from the older ones'.
+    let number = |key: &str, fallback: f32| {
+        trace[key].as_f64().map_or(fallback, |v| v as f32)
+    };
+    let params = Params {
+        thresh: number("det_thresh", 0.3),
+        box_thresh: number("det_box_thresh", 0.6),
+        unclip_ratio: number("det_unclip_ratio", 1.5),
+        ..Params::default()
+    };
+
     let prob = read_f32(&golden(run).join("det_prob.bin"));
     let boxes = db::boxes_from_bitmap(
         &prob,
@@ -252,7 +293,7 @@ fn boxes_match(run: &str) {
         height,
         source,
         (1.0, 1.0),
-        &Params::default(),
+        &params,
     );
 
     let golden: Vec<(f32, f32, f32, f32)> = trace["boxes"]

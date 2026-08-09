@@ -1,9 +1,11 @@
 //! The pre/post-processing description shipped with each PaddleOCR model.
 //!
-//! Every published model directory carries the same description twice:
-//! `inference.yml` and `config.json`, key for key. trakktor reads the JSON —
-//! it is the same contract without a YAML parser in the dependency tree — and
-//! downloads only that half of the pair.
+//! A published model directory carries its description as `config.json`, as
+//! `inference.yml`, or — for everything up to the newest generation — as both,
+//! key for key. The catalog says which of the two a model publishes and the
+//! downloader fetches that one; either is read into the same shape here, the
+//! JSON directly and the YAML through [a reader for the corner of the language
+//! these files use](super::yaml).
 //!
 //! The description is a *description*, not the runtime's configuration: the
 //! reference pipeline takes its thresholds from its own defaults and reads
@@ -28,8 +30,9 @@ use serde_json::Value;
 
 use crate::ocr::error::OcrError;
 
-/// The file name every published model directory carries.
+/// The two names a description is published under.
 pub const CONFIG_FILE: &str = "config.json";
+pub const CONFIG_FILE_YAML: &str = "inference.yml";
 
 /// What the model directory says about the model.
 #[derive(Debug, Clone)]
@@ -74,20 +77,35 @@ pub struct DbParams {
 }
 
 impl ModelConfig {
-    /// Reads `config.json` from a model directory.
+    /// Reads whichever of the two descriptions a model directory carries,
+    /// preferring the JSON where both are present.
     pub fn load(dir: &Path) -> Result<Self, OcrError> {
-        let path = dir.join(CONFIG_FILE);
+        let json = dir.join(CONFIG_FILE);
+        let path = if json.is_file() {
+            json
+        } else {
+            dir.join(CONFIG_FILE_YAML)
+        };
         let bytes =
             std::fs::read(&path).map_err(|source| OcrError::ModelFile {
                 path: path.display().to_string(),
                 source,
             })?;
-        let value: Value = serde_json::from_slice(&bytes).map_err(|e| {
-            OcrError::Artifact(format!(
-                "{} is not valid JSON: {e}",
-                path.display()
-            ))
-        })?;
+        let value = if path.extension().is_some_and(|e| e == "json") {
+            serde_json::from_slice(&bytes).map_err(|e| {
+                OcrError::Artifact(format!(
+                    "{} is not valid JSON: {e}",
+                    path.display()
+                ))
+            })?
+        } else {
+            let text = String::from_utf8(bytes).map_err(|_| {
+                OcrError::Artifact(format!("{} is not UTF-8", path.display()))
+            })?;
+            super::yaml::parse(&text).map_err(|e| {
+                OcrError::Artifact(format!("{}: {e}", path.display()))
+            })?
+        };
         Self::parse(&value)
     }
 

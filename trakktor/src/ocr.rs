@@ -19,7 +19,7 @@ use trakktor_core::ocr::{
     overlay::{self, Shape, Weight},
     paddle::{
         crop::{self, Crop},
-        db::Params,
+        db::Thresholds,
         download as paddle_download,
         image::Page as RawPage,
         model::{self, Quality},
@@ -84,11 +84,10 @@ pub(crate) fn run_paddle(
         recognition: args.rec_model.clone(),
         orientation: args.textline_orientation,
         limit_side_len: args.limit_side_len,
-        params: Params {
+        thresholds: Thresholds {
             thresh: args.thresh,
             box_thresh: args.box_thresh,
             unclip_ratio: args.unclip_ratio,
-            ..Params::default()
         },
         drop_score: args.drop_score,
         // Illustrations are only worth looking for when there is somewhere to
@@ -273,11 +272,10 @@ pub(crate) fn run_vl(
             .clone()
             .unwrap_or_else(|| vl::pipeline::DEFAULT_DETECTION.to_string()),
         limit_side_len: args.limit_side_len,
-        params: Params {
+        thresholds: Thresholds {
             thresh: args.thresh,
             box_thresh: args.box_thresh,
             unclip_ratio: args.unclip_ratio,
-            ..Params::default()
         },
         task: match args.task {
             OcrTaskArg::Ocr => vl::Task::Ocr,

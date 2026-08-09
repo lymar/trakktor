@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use super::{
     artifact::{GRAPH_FILE, WEIGHTS_FILE},
-    config::CONFIG_FILE,
+    config::{CONFIG_FILE, CONFIG_FILE_YAML},
     model::{self, Model},
     pipeline::Options,
 };
@@ -37,11 +37,13 @@ pub struct Resolved {
     pub name: Option<&'static str>,
 }
 
-/// Whether a directory looks like an unpacked model.
+/// Whether a directory looks like an unpacked model: the graph, the weights,
+/// and a description under either of the two names one is published as.
 fn is_model_dir(dir: &Path) -> bool {
     dir.join(GRAPH_FILE).is_file() &&
         dir.join(WEIGHTS_FILE).is_file() &&
-        dir.join(CONFIG_FILE).is_file()
+        (dir.join(CONFIG_FILE).is_file() ||
+            dir.join(CONFIG_FILE_YAML).is_file())
 }
 
 /// Resolves a model name — or a path to a directory of artifacts — to a local
@@ -198,8 +200,8 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                model::SERVER_DETECTION,
-                "en_PP-OCRv5_mobile_rec",
+                model::MEDIUM_DETECTION,
+                model::MEDIUM_RECOGNITION,
                 model::DEFAULT_ORIENTATION,
             ]
         );
@@ -208,8 +210,8 @@ mod tests {
         assert_eq!(
             total,
             [
-                model::SERVER_DETECTION,
-                "en_PP-OCRv5_mobile_rec",
+                model::MEDIUM_DETECTION,
+                model::MEDIUM_RECOGNITION,
                 model::DEFAULT_ORIENTATION
             ]
             .iter()
@@ -221,7 +223,7 @@ mod tests {
     #[test]
     fn a_model_already_on_disk_is_not_announced() {
         let dir = tempfile::tempdir().unwrap();
-        let detector = model::model(model::SERVER_DETECTION).unwrap();
+        let detector = model::model(model::MEDIUM_DETECTION).unwrap();
         let on_disk = engine_dir(dir.path()).join(detector.name);
         std::fs::create_dir_all(&on_disk).unwrap();
         for file in detector.files {

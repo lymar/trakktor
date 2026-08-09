@@ -23,7 +23,7 @@ use super::{
     cls::{self, Classifier},
     config::{ModelConfig, PostProcess},
     crop::{self, Crop},
-    db::{self, Params, ScoreMode},
+    db::{self, Params, ScoreMode, Thresholds},
     det::Detector,
     download::{self, Resolved},
     image::{self, LimitType, Page as RawPage},
@@ -85,8 +85,9 @@ pub struct Options {
     pub orientation: bool,
     /// Longest side the page is resized to before detection.
     pub limit_side_len: usize,
-    /// Post-processing thresholds.
-    pub params: Params,
+    /// Post-processing thresholds the run names. What it does not name comes
+    /// from the detector's own description — see [`Thresholds`].
+    pub thresholds: Thresholds,
     /// Lines below this confidence are dropped from the result.
     pub drop_score: f32,
     /// Also look for illustrations: regions of ink that no text box covers.
@@ -104,7 +105,7 @@ impl Default for Options {
             recognition: None,
             orientation: false,
             limit_side_len: DEFAULT_LIMIT_SIDE_LEN,
-            params: Params::default(),
+            thresholds: Thresholds::default(),
             drop_score: DEFAULT_DROP_SCORE,
             figures: false,
         }
@@ -152,6 +153,8 @@ pub const DEFAULT_DROP_SCORE: f32 = 0.5;
 /// A loaded engine.
 pub struct Engine {
     detector: Detector,
+    /// The detector's declared thresholds with the run's own laid over them.
+    params: Params,
     recognizer: Recognizer,
     labels: Labels,
     classifier: Option<Classifier>,
@@ -187,19 +190,19 @@ impl Engine {
             None
         };
 
-        let detector = {
+        let (detector, params) = {
             let artifact = Artifact::load(&detection_dir.dir)?;
             let config = ModelConfig::load(&detection_dir.dir)?;
             // The detector's own description carries the thresholds it was
-            // exported with; a caller that did not override them gets those
-            // rather than this port's guess.
-            if let PostProcess::Db(published) = &config.post {
-                // Only the ratio is taken: the two probability thresholds are
-                // the same in every published detector, and the candidate cap
-                // is a safety valve rather than a tuning knob.
-                let _ = published;
-            }
-            Detector::load(&Loader::new(&artifact, device))?
+            // calibrated with; a caller that named none gets those rather
+            // than another generation's.
+            let PostProcess::Db(published) = &config.post else {
+                return Err(OcrError::Artifact(format!(
+                    "`{detection}` is not a text detector"
+                )));
+            };
+            let params = Params::resolved(published, options.thresholds);
+            (Detector::load(&Loader::new(&artifact, device))?, params)
         };
 
         let (recognizer, labels) = {
@@ -225,6 +228,7 @@ impl Engine {
 
         Ok(Self {
             detector,
+            params,
             recognizer,
             labels,
             classifier,
@@ -243,6 +247,10 @@ impl Engine {
     }
 
     pub fn options(&self) -> &Options { &self.options }
+
+    /// The post-processing thresholds this engine resolved: the detector's own
+    /// unless the run named otherwise.
+    pub fn params(&self) -> &Params { &self.params }
 
     /// Reads one page image.
     ///
@@ -294,7 +302,7 @@ impl Engine {
             input.height,
             (page.width, page.height),
             (input.ratio_height as f32, input.ratio_width as f32),
-            &self.options.params,
+            &self.params,
         );
         sort_boxes(&mut boxes);
         let cuts = straddling(&mut boxes, marked);

@@ -19,6 +19,7 @@
 #[cfg(test)]
 mod tests;
 
+pub mod medium;
 pub mod mobile;
 pub mod server;
 
@@ -34,6 +35,7 @@ pub const SIZE_MULTIPLE: usize = hgnet::SIZE_MULTIPLE;
 /// The backbone each network declares itself with.
 const MOBILE_BACKBONE: &str = "PPLCNetV3";
 const SERVER_BACKBONE: &str = "PPHGNetV2";
+const MEDIUM_BACKBONE: &str = "PPLCNetV4";
 
 /// A loaded detector. Both variants are boxed: a network holds its own weights,
 /// so the two differ in size by more than an enum should carry.
@@ -41,6 +43,7 @@ const SERVER_BACKBONE: &str = "PPHGNetV2";
 pub enum Detector {
     Mobile(Box<mobile::Net>),
     Server(Box<server::Net>),
+    Medium(Box<medium::Net>),
 }
 
 impl Detector {
@@ -51,6 +54,8 @@ impl Detector {
             Ok(Self::Mobile(Box::new(mobile::Net::load(loader)?)))
         } else if artifact.has_module(SERVER_BACKBONE) {
             Ok(Self::Server(Box::new(server::Net::load(loader)?)))
+        } else if artifact.has_module(MEDIUM_BACKBONE) {
+            Ok(Self::Medium(Box::new(medium::Net::load(loader)?)))
         } else {
             Err(unknown_backbone(artifact))
         }
@@ -69,6 +74,7 @@ impl Detector {
         match self {
             Self::Mobile(net) => net.forward(x),
             Self::Server(net) => net.forward(x),
+            Self::Medium(net) => net.forward(x),
         }
     }
 }
@@ -78,8 +84,8 @@ impl Detector {
 /// family.
 fn unknown_backbone(artifact: &Artifact) -> OcrError {
     OcrError::Artifact(format!(
-        "this detector is built on {}, and trakktor runs {MOBILE_BACKBONE} \
-         and {SERVER_BACKBONE}",
+        "this detector is built on {}, and trakktor runs {MOBILE_BACKBONE}, \
+         {SERVER_BACKBONE} and {MEDIUM_BACKBONE}",
         artifact
             .modules()
             .first()

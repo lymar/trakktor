@@ -402,31 +402,6 @@ fn a_server_batch_reads_each_crop_as_it_would_alone() {
     assert!((mine - 0.929_732_56).abs() < SERVER_TOLERANCE, "{mine}");
 }
 
-/// Both networks answer the same contract, so the pipeline can hold either
-/// without knowing which: the same crop shape gives the same sequence length,
-/// and the class count is the artifact's own.
-#[test]
-#[ignore = "needs both recognizers in ~/.trakktor/ocr/paddle"]
-fn the_two_recognizers_read_a_crop_into_the_same_number_of_steps() {
-    let device = Device::Cpu;
-    let mut steps = Vec::new();
-    for name in ["eslav_PP-OCRv5_mobile_rec", "PP-OCRv5_server_rec"] {
-        let dir = model_dir(name);
-        let artifact = Artifact::load(&dir).unwrap();
-        let recognizer =
-            Recognizer::load(&Loader::new(&artifact, &device)).unwrap();
-        let input = Tensor::from_vec(
-            synthetic(CHANNELS, HEIGHT, WIDTH),
-            (1, CHANNELS, HEIGHT, WIDTH),
-            &device,
-        )
-        .unwrap();
-        let out = recognizer.forward(&input).unwrap();
-        steps.push(out.dims()[1]);
-    }
-    assert_eq!(steps[0], steps[1], "{steps:?}");
-}
-
 #[test]
 #[ignore = "needs ~/.trakktor/ocr/paddle/eslav_PP-OCRv5_mobile_rec"]
 fn the_models_own_dictionary_fits_its_head() {
@@ -472,4 +447,98 @@ fn reading_scatters_the_batches_back_into_page_order() {
     for reading in &readings {
         assert!((0.0..=1.0).contains(&reading.score), "{reading:?}");
     }
+}
+
+/// The class count of the newest recognizer, and its dictionary's length.
+const MEDIUM_CLASSES: usize = 18_710;
+
+/// The newest recognizer, which is a different network from either of the
+/// others at every level: a reparameterized backbone whose weights are taken
+/// in the order the graph reads them rather than by name, under a lighter
+/// sequence encoder.
+///
+/// Because the weights are claimed in order, a wrong load is not a missing
+/// name but a *shifted* one, and the shapes that follow usually still fit.
+/// This test is what catches that: the numbers come from the same reference
+/// stand, on the same synthetic input, as the other two recognizers'.
+#[test]
+#[ignore = "needs ~/.trakktor/ocr/paddle/PP-OCRv6_medium_rec"]
+fn the_published_medium_recognizer_reproduces_its_reference_output() {
+    let dir = model_dir("PP-OCRv6_medium_rec");
+    let artifact = Artifact::load(&dir).unwrap();
+    let device = Device::Cpu;
+    let recognizer =
+        Recognizer::load(&Loader::new(&artifact, &device)).unwrap();
+    assert_eq!(recognizer.classes(), MEDIUM_CLASSES);
+
+    let data = synthetic(CHANNELS, HEIGHT, WIDTH);
+    let input =
+        Tensor::from_vec(data, (1, CHANNELS, HEIGHT, WIDTH), &device).unwrap();
+    let out = recognizer.forward(&input).unwrap();
+    // The same sequence length as the older two, which is what lets the
+    // pipeline hold any of them without knowing which.
+    assert_eq!(out.dims(), &[1, 40, MEDIUM_CLASSES]);
+
+    let values = out.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+    let total: f64 = values.iter().map(|v| f64::from(*v)).sum();
+    assert!((total - 40.0).abs() < 1e-2, "{total}");
+    assert!(
+        (values[0] - 0.968_619_29).abs() < SERVER_TOLERANCE,
+        "{}",
+        values[0]
+    );
+    assert!((values[1] - 3.356_355_8e-6).abs() < 1e-7, "{}", values[1]);
+    let late = values[19 * MEDIUM_CLASSES];
+    assert!((late - 0.825_065_85).abs() < SERVER_TOLERANCE, "{late}");
+
+    // The pattern is not text, and this model says so too.
+    let characters = vec![String::new(); MEDIUM_CLASSES - 2];
+    let labels = Labels::new(&characters, recognizer.classes()).unwrap();
+    assert_eq!(decode(&values, MEDIUM_CLASSES, &labels), Reading::default());
+}
+
+/// The dictionary the newest recognizer carries is read out of the only
+/// description it publishes, which is YAML rather than JSON, and it is a
+/// third longer than the older generation's.
+#[test]
+#[ignore = "needs ~/.trakktor/ocr/paddle/PP-OCRv6_medium_rec"]
+fn the_medium_dictionary_fits_its_head() {
+    let dir = model_dir("PP-OCRv6_medium_rec");
+    let artifact = Artifact::load(&dir).unwrap();
+    let config = ModelConfig::load(&dir).unwrap();
+    let characters = config.characters().expect("a recognizer's dictionary");
+    let labels =
+        Labels::new(characters, artifact.output_classes().unwrap()).unwrap();
+    assert_eq!(labels.len(), MEDIUM_CLASSES);
+    assert_eq!(labels.text(BLANK), "");
+    assert_eq!(labels.text(labels.len() - 1), " ");
+    // The en dash is in this dictionary and in neither of the alphabet-bound
+    // ones, which is the one difference a reader of English notices.
+    assert!(characters.iter().any(|c| c == "\u{2013}"));
+}
+
+/// All three recognizers read a crop into the same number of steps, so the
+/// pipeline can hold any of them without knowing which.
+#[test]
+#[ignore = "needs every recognizer in ~/.trakktor/ocr/paddle"]
+fn every_recognizer_reads_a_crop_into_the_same_number_of_steps() {
+    let device = Device::Cpu;
+    let mut steps = Vec::new();
+    for name in [
+        "eslav_PP-OCRv5_mobile_rec",
+        "PP-OCRv5_server_rec",
+        "PP-OCRv6_medium_rec",
+    ] {
+        let artifact = Artifact::load(&model_dir(name)).unwrap();
+        let recognizer =
+            Recognizer::load(&Loader::new(&artifact, &device)).unwrap();
+        let input = Tensor::from_vec(
+            synthetic(CHANNELS, HEIGHT, WIDTH),
+            (1, CHANNELS, HEIGHT, WIDTH),
+            &device,
+        )
+        .unwrap();
+        steps.push(recognizer.forward(&input).unwrap().dims()[1]);
+    }
+    assert_eq!(steps, vec![40, 40, 40], "{steps:?}");
 }

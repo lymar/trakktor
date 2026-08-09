@@ -29,7 +29,7 @@ use crate::ocr::{
     error::OcrError,
     paddle::{
         hgnet,
-        net::{BatchNorm, Conv, ConvTranspose, Loader, relu, upsample},
+        net::{Banded, BatchNorm, Conv, ConvTranspose, Loader, relu, upsample},
     },
 };
 
@@ -99,90 +99,13 @@ const RUNGS: [RungConvs; 4] = [
     },
 ];
 
-/// A plain convolution loaded by its published number, run in horizontal bands.
-///
-/// The banding is not an optimization; without it this network does not run on
-/// a GPU at all. candle's Metal backend convolves by materializing the im2col
-/// matrix — one row per output pixel, `channels · kernel²` wide — which for the
-/// neck's 9×9 over 256 channels is 83 KB of scratch **per output pixel**. Past
-/// some size that matrix stops being computed correctly and says nothing about
-/// it: an A4 page at `--limit-side-len 1280` came back with 182 lines instead
-/// of 46, and at 1920 the allocation failed outright.
-///
-/// So the input is padded once and then convolved a band of rows at a time,
-/// each band overlapping its neighbours by half a kernel. Every output pixel is
-/// computed from exactly the inputs the whole-image convolution would use, so
-/// this is the same result by the same arithmetic — the CPU run is unchanged by
-/// it, which the parity tests hold to, and Metal now agrees with it, which
-/// [`super::tests`] holds to. That test is the guard here: the failure has no
-/// other symptom.
-#[derive(Debug)]
-struct Banded {
-    conv: Conv,
-    kernel: (usize, usize),
-    /// How much of the padded input one band consumes per output row.
-    per_row: usize,
-}
-
-/// Elements of im2col scratch a single band may ask for — 256 MB at `f32`.
-///
-/// Bisected rather than guessed, because both ends of the range cost
-/// something. Twice this still gives the right answer and three times it does
-/// not (the same page came back with nothing on it), so the ceiling is between
-/// the two; this sits an octave below the last size that worked. Downwards the
-/// price is time and only on the CPU, which convolves a page in one pass
-/// anyway: a quarter of this costs it a third more, an eighth costs it twice
-/// over, while the Metal run barely moves.
-const BAND_BUDGET: usize = 64 << 20;
-
-impl Banded {
-    /// Loads a stride-one convolution. A band boundary would otherwise have to
-    /// land on the stride's own grid, and nothing in this network needs that.
-    fn load(
-        loader: &Loader,
-        index: usize,
-        dims: [usize; 4],
-    ) -> Result<Self, OcrError> {
-        let (kh, kw) = (dims[2], dims[3]);
-        Ok(Self {
-            // The padding is done by hand below, band by band, so the
-            // convolution itself pads by nothing.
-            conv: Conv::load(
-                loader,
-                &format!("conv2d_{index}"),
-                dims,
-                1,
-                0,
-                1,
-            )?,
-            kernel: (kh, kw),
-            per_row: dims[1] * kh * kw,
-        })
-    }
-
-    fn forward(&self, x: &Tensor) -> Result<Tensor, OcrError> {
-        let (kh, kw) = self.kernel;
-        let (pad_h, pad_w) = (kh / 2, kw / 2);
-        let (_, _, height, width) = x.dims4()?;
-        let padded = x
-            .pad_with_zeros(2, pad_h, pad_h)?
-            .pad_with_zeros(3, pad_w, pad_w)?;
-
-        let rows = (BAND_BUDGET / (self.per_row * width.max(1))).max(1);
-        if rows >= height {
-            return self.conv.forward(&padded.contiguous()?);
-        }
-
-        let mut bands = Vec::with_capacity(height.div_ceil(rows));
-        let mut at = 0;
-        while at < height {
-            let take = rows.min(height - at);
-            let band = padded.narrow(2, at, take + 2 * pad_h)?.contiguous()?;
-            bands.push(self.conv.forward(&band)?);
-            at += take;
-        }
-        Ok(Tensor::cat(&bands, 2)?)
-    }
+/// A banded convolution, loaded by its published number.
+fn banded(
+    loader: &Loader,
+    index: usize,
+    dims: [usize; 4],
+) -> Result<Banded, OcrError> {
+    Banded::load(loader, &format!("conv2d_{index}"), dims, 1)
 }
 
 /// A plain convolution with no bias, loaded by its published number.
@@ -213,12 +136,12 @@ impl Rung {
     ) -> Result<Self, OcrError> {
         Ok(Self {
             lateral: conv(loader, spec.lateral, [NECK, from, 1, 1], 1, 0)?,
-            out: Banded::load(loader, spec.out, [BRANCH, NECK, LARGE, LARGE])?,
+            out: banded(loader, spec.out, [BRANCH, NECK, LARGE, LARGE])?,
             down: spec
                 .down
                 .map(|index| conv(loader, index, [BRANCH, BRANCH, 3, 3], 2, 1))
                 .transpose()?,
-            lateral_out: Banded::load(
+            lateral_out: banded(
                 loader,
                 spec.lateral_out,
                 [BRANCH, BRANCH, LARGE, LARGE],
@@ -279,17 +202,17 @@ impl IntraCl {
             // along the width only, which a single padding argument cannot
             // say; padding by hand is what [`Banded`] does anyway.
             steps.push(Step {
-                square: Banded::load(
+                square: banded(
                     loader,
                     first + 8 + at,
                     [inner, inner, kernel, kernel],
                 )?,
-                vertical: Banded::load(
+                vertical: banded(
                     loader,
                     first + 2 + at,
                     [inner, inner, kernel, 1],
                 )?,
-                horizontal: Banded::load(
+                horizontal: banded(
                     loader,
                     first + 5 + at,
                     [inner, inner, 1, kernel],
@@ -343,7 +266,7 @@ const LOCAL_NORM: usize = 4;
 impl Head {
     fn load(loader: &Loader) -> Result<Self, OcrError> {
         Ok(Self {
-            conv: Banded::load(loader, HEAD_CONV, [BRANCH, NECK, 3, 3])?,
+            conv: banded(loader, HEAD_CONV, [BRANCH, NECK, 3, 3])?,
             norm: BatchNorm::load(loader, "batch_norm_0", BRANCH)?,
             up1: ConvTranspose::load(
                 loader,
@@ -358,11 +281,7 @@ impl Head {
                 [BRANCH, 1, 2, 2],
                 2,
             )?,
-            local: Banded::load(
-                loader,
-                LOCAL_CONV,
-                [BRANCH, BRANCH + 1, 3, 3],
-            )?,
+            local: banded(loader, LOCAL_CONV, [BRANCH, BRANCH + 1, 3, 3])?,
             local_norm: BatchNorm::load(
                 loader,
                 &format!("batch_norm_{LOCAL_NORM}"),

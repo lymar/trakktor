@@ -47,7 +47,7 @@ use clipper2_rust::{
 };
 
 use self::contour::{find_contours, mini_box};
-use crate::ocr::page::Quad;
+use crate::ocr::{paddle::config::DbParams, page::Quad};
 
 /// How a candidate is scored against the probability map.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,6 +97,37 @@ impl Default for Params {
             unclip_ratio: 1.5,
             use_dilation: false,
             score_mode: ScoreMode::Fast,
+        }
+    }
+}
+
+/// The thresholds a run names, if it names any.
+///
+/// What is left unset comes from **the detector's own description**, not from
+/// the values above. That is not a nicety: a generation calibrates its
+/// probability map with its post-processing, and the newest one asks for 0.2
+/// where the older ones ask for 0.3 and for a smaller expansion of the box it
+/// fits. Running one generation's map through another's thresholds finds a
+/// different set of lines and says nothing about it. Upstream's own runtime
+/// does the same thing — its thresholds default to nothing and are filled in
+/// from the model.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Thresholds {
+    pub thresh: Option<f32>,
+    pub box_thresh: Option<f32>,
+    pub unclip_ratio: Option<f32>,
+}
+
+impl Params {
+    /// The parameters a run works with: the detector's declared ones, with
+    /// whatever the caller named laid over them.
+    pub fn resolved(published: &DbParams, named: Thresholds) -> Self {
+        Self {
+            thresh: named.thresh.unwrap_or(published.thresh),
+            box_thresh: named.box_thresh.unwrap_or(published.box_thresh),
+            max_candidates: published.max_candidates,
+            unclip_ratio: named.unclip_ratio.unwrap_or(published.unclip_ratio),
+            ..Self::default()
         }
     }
 }

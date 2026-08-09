@@ -86,21 +86,32 @@ impl Model {
 /// scripts no recognizer in the catalog can read.
 pub const MOBILE_DETECTION: &str = "PP-OCRv5_mobile_det";
 
-/// The large detector: the same job at nineteen times the size, and slower by
-/// about as much.
+/// The large detector of the older generation: the same job at nineteen times
+/// the size.
 ///
-/// What it buys is the class of line the small one drops — short lines closing
-/// a paragraph, and lines carrying a superscript — and whole lines where the
-/// small one breaks one line into pieces. Upstream makes it the default for
-/// every language it still serves from this generation, and so does trakktor.
+/// What it buys over the small one is the class of line that one drops — short
+/// lines closing a paragraph, and lines carrying a superscript — and whole
+/// lines where the small one breaks one into pieces.
 pub const SERVER_DETECTION: &str = "PP-OCRv5_server_det";
+
+/// The newest detector, and the strongest: on a photographed page it found
+/// half again as many lines as the one above, and on clean pages the two agree
+/// character for character. It is also the smaller of the two.
+pub const MEDIUM_DETECTION: &str = "PP-OCRv6_medium_det";
 
 /// The detectors, **strongest first**.
 ///
-/// Both are indifferent to the writing system, so which one a run gets is a
-/// question of quality and time only, never of language — unlike the
-/// recognizers, where the two questions are the same one.
-pub const DETECTORS: &[&str] = &[SERVER_DETECTION, MOBILE_DETECTION];
+/// All three are indifferent to the writing system, so which one a run gets is
+/// a question of quality and time only, never of language — unlike the
+/// recognizers, where the two questions are the same one. That is what lets a
+/// Russian page be found by a detector of a generation whose recognizers carry
+/// no Cyrillic at all.
+pub const DETECTORS: &[&str] =
+    &[MEDIUM_DETECTION, SERVER_DETECTION, MOBILE_DETECTION];
+
+/// The newest recognizer. It reads Latin script and Han, and it is the one
+/// model in the catalog whose dictionary carries the en dash.
+pub const MEDIUM_RECOGNITION: &str = "PP-OCRv6_medium_rec";
 
 /// The default text-line orientation classifier.
 pub const DEFAULT_ORIENTATION: &str = "PP-LCNet_x1_0_textline_ori";
@@ -110,6 +121,17 @@ pub const DEFAULT_LANGUAGE: &str = "en";
 
 /// Every model trakktor can run.
 pub const MODELS: &[Model] = &[
+    Model {
+        name: "PP-OCRv6_medium_det",
+        kind: Kind::Detection,
+        revision: "8e0f56fb2ef86b461d99cfc7ac5c137738985f61",
+        // 62.3 MB
+        files: &[
+            File { name: "inference.yml", size: 886, blake3: "053ed6876af0906c21f69396da90d54dc7d78651ac1aa58bae3291e9f4dfc693" },
+            File { name: "inference.json", size: 312150, blake3: "e341aab4eaa88ac4bffb93daf4ab89542cb0cbb1b4e8221f3b7eedd580da5308" },
+            File { name: "inference.pdiparams", size: 61960476, blake3: "b6f74251cce911cc1ef6c9681dfb87e720d8a82c03e96413a2a1297b965f11b3" },
+        ],
+    },
     Model {
         name: "PP-OCRv5_mobile_det",
         kind: Kind::Detection,
@@ -276,6 +298,17 @@ pub const MODELS: &[Model] = &[
         ],
     },
     Model {
+        name: "PP-OCRv6_medium_rec",
+        kind: Kind::Recognition,
+        revision: "e5a92bcbc5cc1b494628e458d267778f0704fd7c",
+        // 76.8 MB
+        files: &[
+            File { name: "inference.yml", size: 150580, blake3: "b3d95381969b6e0115dcb9eb980955edd027bcf1bd817bbcb42667af05ffb53c" },
+            File { name: "inference.json", size: 221814, blake3: "b375899fa37ec3e3bfde6787e2963ae2c0d9198e8a5cd568ac87c3a2f9753bca" },
+            File { name: "inference.pdiparams", size: 76465087, blake3: "44f4bc925f7991a709282ee57c3a92fb0509dbdf972bccce7469cdaba083aab4" },
+        ],
+    },
+    Model {
         name: "PP-OCRv5_server_rec",
         kind: Kind::Recognition,
         revision: "b26c3587fda8da3c8ec0ce357214b4d661ff1558",
@@ -318,11 +351,11 @@ pub const ALPHABETS: &[Alphabet] = &[
     },
     Alphabet {
         name: "en",
-        recognizers: &["en_PP-OCRv5_mobile_rec"],
+        recognizers: &[MEDIUM_RECOGNITION, "en_PP-OCRv5_mobile_rec"],
     },
     Alphabet {
         name: "latin",
-        recognizers: &["latin_PP-OCRv5_mobile_rec"],
+        recognizers: &[MEDIUM_RECOGNITION, "latin_PP-OCRv5_mobile_rec"],
     },
     Alphabet {
         name: "arabic",
@@ -353,10 +386,15 @@ pub const ALPHABETS: &[Alphabet] = &[
         recognizers: &["th_PP-OCRv5_mobile_rec"],
     },
     // Carries the Latin alphabet and digits alongside the Han characters, and
-    // is the one alphabet upstream publishes in two sizes.
+    // is the one alphabet upstream publishes in three sizes. `--quality` reads
+    // the two ends; the middle one is reachable by name.
     Alphabet {
         name: "multilingual",
-        recognizers: &["PP-OCRv5_server_rec", "PP-OCRv5_mobile_rec"],
+        recognizers: &[
+            MEDIUM_RECOGNITION,
+            "PP-OCRv5_server_rec",
+            "PP-OCRv5_mobile_rec",
+        ],
     },
 ];
 
@@ -581,9 +619,28 @@ mod tests {
     }
 
     #[test]
-    fn the_best_detector_is_the_large_one_and_fast_the_small_one() {
-        assert_eq!(detector(Quality::Best), SERVER_DETECTION);
+    fn the_best_detector_is_the_newest_and_fast_the_small_one() {
+        assert_eq!(detector(Quality::Best), MEDIUM_DETECTION);
         assert_eq!(detector(Quality::Fast), MOBILE_DETECTION);
+    }
+
+    /// The generation with no Cyrillic must not reach a Cyrillic language,
+    /// and must reach the Latin ones — the whole reason the default is a rule
+    /// rather than a name.
+    #[test]
+    fn the_newest_recognizer_reaches_latin_and_not_cyrillic() {
+        for code in ["en", "de", "fr", "pl", "vi"] {
+            assert_eq!(
+                recognizer_for(code, Quality::Best).unwrap().name,
+                MEDIUM_RECOGNITION,
+                "{code}"
+            );
+        }
+        for code in ["ru", "uk", "bg", "sr", "kk"] {
+            let picked = recognizer_for(code, Quality::Best).unwrap().name;
+            assert_ne!(picked, MEDIUM_RECOGNITION, "{code}");
+            assert!(picked.contains("PP-OCRv5"), "{code}: {picked}");
+        }
     }
 
     /// The rule the two ends of a strongest-first list are read by, on a list
@@ -625,11 +682,19 @@ mod tests {
         }
     }
 
+    /// Every model is the graph, the weights and a description — the last
+    /// under either of the two names one is published under. The newest
+    /// generation publishes only the YAML, which is why this is a choice.
     #[test]
     fn every_model_carries_the_three_published_files() {
         for model in MODELS {
             let names: Vec<&str> = model.files.iter().map(|f| f.name).collect();
-            assert!(names.contains(&"config.json"), "{}", model.name);
+            assert!(
+                names.contains(&"config.json") ||
+                    names.contains(&"inference.yml"),
+                "{}",
+                model.name
+            );
             assert!(names.contains(&"inference.json"), "{}", model.name);
             assert!(names.contains(&"inference.pdiparams"), "{}", model.name);
             assert_eq!(model.revision.len(), 40, "{}", model.name);
