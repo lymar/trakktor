@@ -11,15 +11,18 @@ use trakktor_core::{
     audio::encode::Format,
     enhance::{
         EnhanceModel, EnhanceOptions, EnhanceProgress, Enhanced, Precision,
-        gtcrn, mpsenet, unipase,
+        gtcrn, mpsenet,
+        resemble::{self, EnhancerSettings, Method},
+        unipase,
     },
 };
 
 use crate::{
     asr::progress,
     cli::{
-        DeviceArg, EnhanceGtcrnArgs, EnhanceMpsenetArgs, EnhanceUnipaseArgs,
-        PrecisionArg, RuntimeArg,
+        DeviceArg, EnhanceGtcrnArgs, EnhanceMpsenetArgs,
+        EnhanceResembleDenoiseArgs, EnhanceResembleEnhanceArgs,
+        EnhanceUnipaseArgs, PrecisionArg, RuntimeArg, SolverArg,
     },
     error::CliError,
     output,
@@ -322,6 +325,277 @@ fn load_mpsenet(
         device,
         precision,
     )?))
+}
+
+/// Runs `enhance resemble-denoise`.
+pub(crate) fn run_resemble_denoise(
+    args: &EnhanceResembleDenoiseArgs,
+    models_dir: &std::path::Path,
+    json: bool,
+    pretty: bool,
+) -> Result<(), CliError> {
+    let precision = match args.precision {
+        PrecisionArg::F16 => Precision::F16,
+        PrecisionArg::F32 => Precision::F32,
+    };
+    let metal = matches!(args.device, DeviceArg::Metal);
+    let burn = matches!(args.runtime, RuntimeArg::Burn);
+
+    let path = output_path(&args.audio, args.output.as_ref());
+    prepare_output(&path)?;
+
+    let resolved = resolve_resemble(
+        models_dir,
+        &args.model,
+        resemble::download::DENOISER_FILE,
+    )?;
+    let label = resolved
+        .name
+        .clone()
+        .unwrap_or_else(|| resolved.dir.display().to_string());
+
+    eprintln!("loading the model...");
+    let mut model = load_resemble_denoiser(&resolved, burn, metal, precision)?;
+
+    // Nothing to conceal: this engine ends in a mask.
+    let options = EnhanceOptions {
+        sample_rate: args.sample_rate,
+        plc: false,
+    };
+
+    let started = Instant::now();
+    let mut reporter = progress::live_reporter_for(VERB, started);
+    let enhanced = resemble::enhance_file(
+        &args.audio,
+        model.as_mut(),
+        &options,
+        &mut |p: EnhanceProgress| {
+            reporter(p.done_seconds, Some(p.total_seconds));
+        },
+    )?;
+    progress::finish_line_for(VERB, started, enhanced.duration());
+
+    write(&enhanced, &path, args.bitrate.as_deref())?;
+    output::print_enhance(
+        &enhanced,
+        &path,
+        format_name(&path),
+        "resemble-denoise",
+        &label,
+        if burn { "burn" } else { "candle" },
+        if metal { "metal" } else { "cpu" },
+        false,
+        json,
+        pretty,
+    );
+    Ok(())
+}
+
+/// Runs `enhance resemble-enhance`.
+pub(crate) fn run_resemble_enhance(
+    args: &EnhanceResembleEnhanceArgs,
+    models_dir: &std::path::Path,
+    json: bool,
+    pretty: bool,
+) -> Result<(), CliError> {
+    let precision = match args.precision {
+        PrecisionArg::F16 => Precision::F16,
+        PrecisionArg::F32 => Precision::F32,
+    };
+    let metal = matches!(args.device, DeviceArg::Metal);
+    let burn = matches!(args.runtime, RuntimeArg::Burn);
+    let settings = resemble_settings(args)?;
+
+    let path = output_path(&args.audio, args.output.as_ref());
+    prepare_output(&path)?;
+
+    let resolved = resolve_resemble(
+        models_dir,
+        &args.model,
+        resemble::download::ENHANCER_FILE,
+    )?;
+    let label = resolved
+        .name
+        .clone()
+        .unwrap_or_else(|| resolved.dir.display().to_string());
+
+    eprintln!("loading the model...");
+    let mut model =
+        load_resemble_enhancer(&resolved, burn, metal, precision, settings)?;
+
+    let options = EnhanceOptions {
+        sample_rate: args.sample_rate,
+        plc: false,
+    };
+
+    let started = Instant::now();
+    let mut reporter = progress::live_reporter_for(VERB, started);
+    let enhanced = resemble::enhance_file(
+        &args.audio,
+        model.as_mut(),
+        &options,
+        &mut |p: EnhanceProgress| {
+            reporter(p.done_seconds, Some(p.total_seconds));
+        },
+    )?;
+    progress::finish_line_for(VERB, started, enhanced.duration());
+
+    write(&enhanced, &path, args.bitrate.as_deref())?;
+    output::print_enhance(
+        &enhanced,
+        &path,
+        format_name(&path),
+        "resemble-enhance",
+        &label,
+        if burn { "burn" } else { "candle" },
+        if metal { "metal" } else { "cpu" },
+        false,
+        json,
+        pretty,
+    );
+    Ok(())
+}
+
+/// Validates the generative engine's knobs and collects them.
+fn resemble_settings(
+    args: &EnhanceResembleEnhanceArgs,
+) -> Result<EnhancerSettings, CliError> {
+    let invalid = |message: String| {
+        CliError::from(trakktor_core::enhance::EnhanceError::InvalidOptions(
+            message,
+        ))
+    };
+    if args.nfe == 0 || args.nfe > 128 {
+        return Err(invalid(format!(
+            "--nfe must be between 1 and 128, got {}",
+            args.nfe
+        )));
+    }
+    for (name, value) in [
+        ("--temperature", args.temperature),
+        ("--denoise", args.denoise),
+    ] {
+        if !(0.0..=1.0).contains(&value) {
+            return Err(invalid(format!(
+                "{name} must be between 0 and 1, got {value}"
+            )));
+        }
+    }
+    Ok(EnhancerSettings {
+        nfe: args.nfe,
+        method: match args.solver {
+            SolverArg::Euler => Method::Euler,
+            SolverArg::Midpoint => Method::Midpoint,
+            SolverArg::Rk4 => Method::Rk4,
+        },
+        lambda: args.denoise,
+        temperature: args.temperature,
+        seed: args.seed,
+    })
+}
+
+/// Resolves the shared checkpoint, announcing a cold install before it starts.
+fn resolve_resemble(
+    models_dir: &std::path::Path,
+    model: &str,
+    wanted: &str,
+) -> Result<resemble::ResolvedModel, CliError> {
+    let cold = !resemble::model_dir(models_dir).join(wanted).is_file();
+    if cold && !std::path::Path::new(model).is_dir() {
+        eprintln!(
+            "downloading and converting the pipeline ({:.2} GB) — this \
+             happens once, and covers both resemble engines",
+            resemble::download_size() as f64 / 1e9
+        );
+    }
+    let mut reporter = progress::download_progress();
+    Ok(resemble::resolve_model(
+        models_dir,
+        model,
+        wanted,
+        &mut reporter,
+    )?)
+}
+
+/// Loads the resemble denoiser on the runtime and device asked for.
+fn load_resemble_denoiser(
+    resolved: &resemble::ResolvedModel,
+    burn: bool,
+    metal: bool,
+    precision: Precision,
+) -> Result<Box<dyn EnhanceModel>, CliError> {
+    if burn {
+        #[cfg(feature = "burn")]
+        {
+            if metal {
+                crate::burn_notice::announce_cold_gpu_start();
+                return Ok(resemble::runtime_burn::load_denoiser_metal(
+                    &resolved.dir,
+                    precision,
+                )?);
+            }
+            return Ok(resemble::runtime_burn::load_denoiser_cpu(
+                &resolved.dir,
+                precision,
+            )?);
+        }
+        #[cfg(not(feature = "burn"))]
+        return Err(no_burn());
+    }
+    let device = resemble::runtime::device(metal)?;
+    Ok(Box::new(resemble::DenoiserModel::load(
+        &resolved.dir,
+        device,
+        precision,
+    )?))
+}
+
+/// Loads the resemble enhancer on the runtime and device asked for.
+fn load_resemble_enhancer(
+    resolved: &resemble::ResolvedModel,
+    burn: bool,
+    metal: bool,
+    precision: Precision,
+    settings: EnhancerSettings,
+) -> Result<Box<dyn EnhanceModel>, CliError> {
+    if burn {
+        #[cfg(feature = "burn")]
+        {
+            if metal {
+                crate::burn_notice::announce_cold_gpu_start();
+                return Ok(resemble::runtime_burn::load_enhancer_metal(
+                    &resolved.dir,
+                    precision,
+                    settings,
+                )?);
+            }
+            return Ok(resemble::runtime_burn::load_enhancer_cpu(
+                &resolved.dir,
+                precision,
+                settings,
+            )?);
+        }
+        #[cfg(not(feature = "burn"))]
+        return Err(no_burn());
+    }
+    let device = resemble::runtime::device(metal)?;
+    Ok(Box::new(resemble::EnhancerModel::load(
+        &resolved.dir,
+        device,
+        precision,
+        settings,
+    )?))
+}
+
+/// The failure a build without the burn runtime reports.
+#[cfg(not(feature = "burn"))]
+fn no_burn() -> CliError {
+    trakktor_core::enhance::EnhanceError::InvalidOptions(
+        "this build has no burn runtime; rebuild with the `burn` feature, or \
+         use `--runtime candle`"
+            .into(),
+    )
+    .into()
 }
 
 /// Runs `enhance gtcrn`.

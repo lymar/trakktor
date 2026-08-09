@@ -165,6 +165,24 @@ Apache-licensed:
   > for Universal Speech Enhancement With High Fidelity and Low
   > Hallucinations," *IEEE Transactions on Audio, Speech and Language
   > Processing*, vol. 34, pp. 3901-3915, 2026.
+
+- [**`enhance resemble-denoise`** and
+  **`enhance resemble-enhance`**](features/enhance/README.md) —
+  [resemble-enhance](https://github.com/resemble-ai/resemble-enhance) (MIT) by
+  Resemble AI: both networks the project publishes, and the only two engines
+  here that work at 44.1 kHz. The denoiser is a UNet over the spectrum that
+  predicts a gain and a rotation of the phase; the enhancer is a generative
+  pipeline — a latent autoencoder over the mel, a conditional-flow-matching
+  velocity field, and a UnivNet vocoder that builds the waveform out of noise.
+  The vocoder's anti-aliased activation comes from
+  [BigVGAN](https://github.com/NVIDIA/BigVGAN) (MIT, NVIDIA) with the half-band
+  filters of [alias-free-torch](https://github.com/junjun3518/alias-free-torch)
+  (Apache-2.0, Junhyeok Lee), and its location-variable convolutions follow
+  [LVCNet](https://github.com/zceng/LVCNet). Both are ported to the same candle
+  runtime with the same optional burn runtime. The published checkpoint
+  ([`ResembleAI/resemble-enhance`](https://huggingface.co/ResembleAI/resemble-enhance),
+  MIT), which carries both networks, is downloaded at runtime.
+
 - [**`vad`**](features/vad/README.md), and
   [**`asr --vad`**](features/asr/whisper.md#voice-activity-detection-vad) —
   [Silero-VAD](https://github.com/snakers4/silero-vad)

@@ -27,16 +27,17 @@ const STUB_DESCRIPTION: &str =
      entries, track read state. Speech: transcribe audio with a local \
      Whisper, GigaAM or Vosk model, or translate it to English; read text or \
      Markdown aloud, Russian too, in a preset or cloned voice; clean up a \
-     damaged recording (noise, reverb, dropped packets). Audio: by \
-     voice-activity detection, cut silence, split, or report the speech \
-     timeline. Images: read text off scans, screenshots and phone photos, in \
-     a dozen scripts — or with a document model that reads tables, formulas \
-     and any script; label page blocks (heading, paragraph, footnote); \
-     straighten an angled, curved or sideways photo. Text: restore \
-     punctuation and casing, split paragraphs, mark Russian stress — offline. \
-     Reach for it whenever a task involves a feed URL, audio to transcribe, \
-     text aloud, a cloned voice, a noisy recording, dead air, text out of a \
-     scan, photo or PDF page, punctuation, or Russian stress.";
+     damaged recording (noise, reverb, dropped packets), keeping the full \
+     44.1 kHz band or rebuilding it outright. Audio: by voice-activity \
+     detection, cut silence, split, or report the speech timeline. Images: \
+     read text off scans, screenshots and phone photos, in a dozen scripts — \
+     or with a document model that reads tables, formulas and any script; \
+     label page blocks (heading, paragraph, footnote); straighten an angled, \
+     curved or sideways photo. Text: restore punctuation and casing, split \
+     paragraphs, mark Russian stress — offline. Reach for it whenever a task \
+     involves a feed URL, audio to transcribe, text aloud, a cloned voice, a \
+     noisy recording, dead air, text out of a scan, photo or PDF page, \
+     punctuation, or Russian stress.";
 
 /// Renders the agent-facing guide (`trakktor skill show`).
 ///

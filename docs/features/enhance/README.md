@@ -14,28 +14,37 @@ trakktor enhance gtcrn call.m4a                    # → call.enhanced.wav
 trakktor enhance gtcrn call.m4a -o clean.wav       # pick the output
 trakktor enhance unipase call.m4a --device metal   # the generative engine
 trakktor enhance mpsenet talk.mp3 --runtime burn --device metal   # phase too
+trakktor enhance resemble-denoise lecture.wav      # 44.1 kHz, band kept
+trakktor enhance resemble-enhance lecture.wav      # rebuilt, not filtered
 ```
 
 ## Which engine
 
 **`gtcrn`, unless you have a reason not to.**
 
-| | `gtcrn` (the first choice) | `mpsenet` | `unipase` |
-|---|---|---|---|
-| what it is | a masking network on the spectrum | a transformer on the spectrum with separate magnitude and phase heads | a generative pipeline on a speech encoder's representation |
-| parameters | **48 thousand** | 2.3 million | 546 million |
-| weights | **580 KB** | 9 MB | 2.17 GB |
-| speed | **about a sixtieth of real time, one CPU core** | about four tenths of real time, on a GPU | about half of real time, on a GPU |
-| estimates phase | no | **yes, as its own output** | it does not estimate one — it synthesises the wave |
-| can put back what is not there | **no** | **no** | yes |
-| measured against speech recognisers | yes | **not yet** | yes |
+| | `gtcrn` (the first choice) | `mpsenet` | `unipase` | `resemble-denoise` | `resemble-enhance` |
+|---|---|---|---|---|---|
+| what it is | a masking network on the spectrum | a transformer on the spectrum with separate magnitude and phase heads | a generative pipeline on a speech encoder's representation | a masking UNet on the spectrum | a generative pipeline: mel → flow → vocoder |
+| parameters | **48 thousand** | 2.3 million | 546 million | 10.8 million | 346 million |
+| download | **580 KB** | 9 MB | 2.17 GB | 713 MB (shared) | 713 MB (shared) |
+| **works at** | 16 kHz | 16 kHz | 16 kHz | **44.1 kHz** | **44.1 kHz** |
+| speed | **about a sixtieth of real time, one CPU core** | about four tenths of real time, on a GPU | about half of real time, on a GPU | **a fifth of real time** on a GPU with the burn runtime | **about three times real time** on a GPU, eight on four CPU cores |
+| what it does to phase | moves it with the magnitude | **estimates it outright** | synthesises the wave | **rotates it, apart from the magnitude** | synthesises the wave |
+| can put back what is not there | **no** | **no** | yes | **no** | yes — including words |
+| measured against speech recognisers | yes | **not yet** | yes | **not yet** | **not yet** |
 
-Three clauses, in the order you should ask them.
+Read the questions in this order.
+
+**Is the recording full-band, and do you want to keep it?** Then one of the
+`resemble` pair, and there is no alternative: the other three work at 16 kHz and
+return 16 kHz whatever rate you ask them to write. A lecture, an interview, a
+podcast, anything a person will listen to end to end loses its top two octaves
+otherwise.
 
 **Did the recording lose packets?** Then `unipase`, always. A masking network
 predicts what to attenuate and multiplies — a hard limit, not a tuning choice:
-any mask times digital silence is silence, so neither of the other two can fill
-the hole a dropped packet left. Measured, that is the one degradation where
+any mask times digital silence is silence, so no other engine here can fill the
+hole a dropped packet left. Measured, that is the one degradation where
 `unipase` is better.
 
 **Is the result going to a speech recogniser, or do you just want it cheap?**
@@ -43,15 +52,25 @@ Then `gtcrn`. It costs about a twenty-fifth of the next one up, and of the two
 engines the measurement below covers it is both the more helpful where
 enhancement helps at all and the gentler on a recording that did not need it.
 
-**Is a person going to listen, and has noise wrecked the recording?** Then
-`mpsenet` is worth the cost. It is the only one of the three that estimates
-**phase** as a separate output instead of carrying the input's phase over —
-which is exactly what a mask cannot do at any size, because multiplying a
-spectrum by one number moves magnitude and phase together, and noise damages
-phase first.
+**Is a person going to listen, and has noise wrecked the recording?** Then three
+engines are worth their cost, for three different reasons:
 
-**Send its output to a person, though, not to a recogniser.** It has not been
-through the measurement below, and the spot checks that do exist carry a
+- **`mpsenet`** if what needs repair is the **phase**. It is the only one that
+  estimates phase as its own output instead of carrying the input's over —
+  exactly what a mask cannot do at any size, because multiplying a spectrum by
+  one number moves magnitude and phase together, and noise damages phase first;
+- **`resemble-denoise`** if the recording is **wide-band**. It also treats phase
+  apart from magnitude, but by **rotating** the phase that came in rather than
+  estimating one from nothing;
+- **`resemble-enhance`** if the recording needs **rebuilding** rather than
+  filtering. It does not filter at all: it reads a mel, walks a flow model from
+  noise to a description of what clean speech would look like, and builds a
+  waveform out of a second lot of noise. Nothing of the input waveform reaches
+  the output — which is why it can widen a band, unpick reverberation and repair
+  a clipped syllable, and why **it can put in a word that was never said**.
+
+**Send all three to a person, not to a recogniser.** None has been through the
+measurement below. For `mpsenet` the spot checks that exist carry a specific
 warning: on a recording where hiss dominates the top of the band — an archival
 transfer, say — it takes the hiss and the band with it, dropping everything
 above 2.5 kHz by twenty decibels and more. The fricatives go with it, and a
@@ -75,11 +94,19 @@ enhancement and not of one recogniser:
 | heavy broadband noise (around 0 dB SNR) | about the same | **much worse** — it starts inventing words |
 | nothing — the recording is fine | **worse** | **worse**, by more |
 
-`mpsenet` has **no column here**, and that is a statement rather than an
-omission: it has not been run on this bench. What spot checks there are say it
-leaves an ordinary room recording's transcript alone but can cost a third of the
-words on a hissy archival one, by removing the band the hiss lives in. Use it
-for listening.
+**Three engines have no column here**, and that is a statement rather than an
+omission: `mpsenet` and the two `resemble` ones have not been run on this bench.
+For `mpsenet` the spot checks that exist say it leaves an ordinary room
+recording's transcript alone but can cost a third of the words on a hissy
+archival one, by removing the band the hiss lives in.
+
+For the `resemble` pair there is a further problem with the bench itself: it
+works at 16 kHz, and running a 44.1 kHz engine through it would measure the
+resampling rather than the engine — everything the engine was taken for gets
+thrown away before the recogniser sees it. And for `resemble-enhance` the
+question is different in kind: it synthesises speech rather than cleaning it, so
+a low error rate there might mean it made up something fluent. All three are for
+listening.
 
 The reason for the column that is there is what the model is: a *generative*
 model that rebuilds speech from what a speech encoder understood of it, rather
@@ -169,13 +196,52 @@ This is on by default; `--no-plc` leaves the holes alone. The result says how
 much was concealed, so a run that filled in half the recording cannot look like
 one that changed nothing.
 
+## What the `resemble` pair does
+
+Two networks from one project, published in one checkpoint — which is why one
+713 MB download covers both, whichever you asked for.
+
+**`resemble-denoise`** is a UNet over the spectrum, treating time and frequency
+alike as an image: four halvings down and four doublings back up, sixteen
+channels at the top and two hundred and fifty-six at the bottom. Three planes in
+(a magnitude and the cosine and sine of its phase) and three out: a gain, and
+**two numbers that name a rotation** of that phase. So it sits exactly between
+the other two masking engines — `gtcrn` moves magnitude and phase together
+because a complex multiply cannot do otherwise, `mpsenet` estimates a phase from
+nothing, and this one turns the phase that came in by an angle it decides
+separately from the gain.
+
+**`resemble-enhance`** has no waveform on its path at all:
+
+1. the recording becomes a mel spectrogram;
+2. an autoencoder turns that into a 64-wide latent, and noise is mixed into it
+   in the proportion `--temperature` names;
+3. a **flow model** is integrated from that starting point to a description of
+   what clean speech would look like — `--nfe` evaluations of it, spent by
+   `--solver`, and the engine's cost is very nearly proportional to that count;
+4. the autoencoder's decoder expands the result, and a vocoder builds a waveform
+   out of **a second lot of noise**, steered by it.
+
+That is why it can do what a filter cannot, and why it can invent. It is also
+why it is not deterministic upstream: the reference draws both lots of noise
+from a generator its command line never seeds, so two runs of it give two
+different files. This port seeds its own, so a run repeats; `--seed` picks a
+different one.
+
 ## Sample rate
 
-All three engines work at 16 kHz, which is all the bandwidth speech needs and
-exactly what a speech recogniser wants. `--sample-rate` (default: the
-recording's own rate) **resamples** the result — it does not invent a wider
-band. A 44.1 kHz file therefore comes back at 44.1 kHz, carrying 16 kHz worth of
-speech.
+**`--sample-rate` means two different things, and which one depends on the
+engine.** `gtcrn`, `mpsenet` and `unipase` work at 16 kHz, which is all the
+bandwidth speech needs and exactly what a speech recogniser wants; for them
+`--sample-rate` (default: the recording's own rate) **resamples** the result and
+does not invent a wider band. A 44.1 kHz file comes back at 44.1 kHz, carrying
+16 kHz worth of speech.
+
+The `resemble` pair works at 44.1 kHz, so up to that rate it is real bandwidth.
+For `resemble-enhance` it is more than that: the vocoder synthesises rather than
+filters, so it will put content above what the recording carried — a 32 kHz
+source comes back with something above 16 kHz. Whether that is welcome is a
+question for the listener, not for the engine.
 
 ## Output
 
@@ -242,17 +308,48 @@ with each other to within arithmetic noise. Precision is `f32` by default and
 is the only mode the port is verified in; `--precision f16` is a candle-only
 speed option and is a different computation of the same model.
 
-All three engines are checked against their reference implementations stage by
-stage: `gtcrn`'s waveform lands within 4e-7 of it, `mpsenet`'s within 5e-7 (and
-its two runtimes agree with each other to 6e-6), `unipase`'s within about 2e-5.
+The `resemble` pair downloads **713 MB** once — one checkpoint holding both
+networks, because that is how upstream publishes them — and converts it into two
+files, so `resemble-denoise` loads ten million parameters rather than three
+hundred and fifty. `--model` names it (default `resemble`) or takes a directory.
+
+`resemble-denoise` runs at about half of real time on four CPU cores or on
+Metal, and at **a fifth** of real time with `--runtime burn --device metal`,
+which is the combination to use if you have it — the second engine in the
+toolbox where burn on a GPU is the fastest thing available. (Measure it on the
+*second* run: wgpu compiles and tunes a kernel for every new shape, and the
+first run of this network paid twelve times the settled cost.)
+
+`resemble-enhance` is the most expensive engine here by a wide margin — the flow
+model alone runs `--nfe` times over every chunk. `--device metal` is about two
+and a half times faster than the CPU and worth having; the default is
+nevertheless `cpu`, because loading three hundred and forty-six million
+parameters into GPU buffers takes about a gigabyte and a half out of memory the
+rest of the machine shares. If the GPU has room, ask for it.
+
+`f32` is the default and the only verified mode.
+
+Every engine is checked against its reference implementation stage by stage:
+`gtcrn`'s waveform lands within 4e-7 of it, `mpsenet`'s within 5e-7 (and its two
+runtimes agree with each other to 6e-6), `unipase`'s within about 2e-5,
+`resemble-denoise`'s within 3e-6. `resemble-enhance` is a special case, because
+the reference cannot repeat its own output: fed the reference's own two draws of
+noise, the port's waveform lands within 4e-3 — and its vocoder alone, given the
+reference's own conditioning, within 2e-6. The gap between those two numbers is
+the vocoder amplifying what it is conditioned on, which it does about twentyfold.
 
 ## Credits
 
 Ported from [GTCRN](https://github.com/Xiaobin-Rong/gtcrn) (MIT), from
-[MP-SENet](https://github.com/yxlu-0102/MP-SENet) (MIT), and from
+[MP-SENet](https://github.com/yxlu-0102/MP-SENet) (MIT), from
 [UniPASE](https://github.com/Xiaobin-Rong/unipase) (MIT), which
 builds on [WavLM](https://github.com/microsoft/unilm/tree/master/wavlm) (MIT),
 the Vocos backbone by way of
 [WavTokenizer](https://github.com/jishengpeng/WavTokenizer) (MIT), and
-[PASE](https://github.com/cisco-open/pase) (Apache-2.0). See
-[`docs/acknowledgments.md`](../../acknowledgments.md) and [`NOTICE`](../../../NOTICE).
+[PASE](https://github.com/cisco-open/pase) (Apache-2.0); and from
+[resemble-enhance](https://github.com/resemble-ai/resemble-enhance) (MIT), whose
+vocoder takes its anti-aliased activation from
+[BigVGAN](https://github.com/NVIDIA/BigVGAN) (MIT) and
+[alias-free-torch](https://github.com/junjun3518/alias-free-torch) (Apache-2.0).
+See [`docs/acknowledgments.md`](../../acknowledgments.md) and
+[`NOTICE`](../../../NOTICE).
