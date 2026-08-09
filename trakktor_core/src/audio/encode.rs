@@ -216,7 +216,43 @@ fn write_flac(path: &Path, audio: &DecodedAudio) -> Result<(), AudioError> {
     stream
         .write(&mut sink)
         .map_err(|e| encode_err(path, format!("{e:?}")))?;
-    std::fs::write(path, sink.as_slice()).map_err(|e| encode_err(path, e))
+    let encoded = sink.as_slice();
+    check_not_larger_than_pcm(path, encoded.len(), frames * ch, bits)?;
+    std::fs::write(path, encoded).map_err(|e| encode_err(path, e))
+}
+
+/// The slack a correct encoding is allowed over the raw samples: the container
+/// and one frame header every few thousand samples, generously rounded up.
+const FLAC_OVERHEAD_ALLOWANCE: usize = 64 * 1024;
+
+/// Refuses a FLAC that came out bigger than the PCM it encodes.
+///
+/// A FLAC can never be meaningfully larger than its input: an encoder that
+/// finds nothing to compress stores the samples verbatim, which costs the raw
+/// bytes plus a frame header every few thousand samples. Anything past that is
+/// the encoder failing rather than the audio being incompressible — and the one
+/// in use fails in exactly that way on loud, noise-like 24-bit material, where
+/// it emits hundreds of bytes per sample. Better a diagnosable error than a
+/// valid file two orders of magnitude too big.
+fn check_not_larger_than_pcm(
+    path: &Path,
+    encoded: usize,
+    samples: usize,
+    bits: u32,
+) -> Result<(), AudioError> {
+    let raw = samples * (bits as usize).div_ceil(8);
+    let ceiling = raw + raw / 32 + FLAC_OVERHEAD_ALLOWANCE;
+    if encoded <= ceiling {
+        return Ok(());
+    }
+    Err(AudioError::UnsupportedEncoding(format!(
+        "the FLAC encoder produced {encoded} bytes for {raw} bytes of \
+         {bits}-bit audio, which means it failed to code it rather than that \
+         the audio does not compress; this happens on loud, noise-like 24-bit \
+         material. Write WAV instead (or resample/requantize first). Target \
+         was '{}'",
+        path.display()
+    )))
 }
 
 /// Encodes `audio` to `path` through an external `ffmpeg` process, which picks
