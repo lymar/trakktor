@@ -48,6 +48,10 @@ pub fn plan_windows(
     if n_tokens == 0 || max_content == 0 {
         return Vec::new();
     }
+    // An overlap the size of the window (or larger) would keep the next
+    // window from advancing past the previous one. The public API rejects
+    // such a value; clamping here keeps the loop finite for any caller.
+    let overlap = overlap.min(max_content - 1);
     let mut windows = Vec::new();
     let mut start = 0usize;
     let mut idx = 0usize;

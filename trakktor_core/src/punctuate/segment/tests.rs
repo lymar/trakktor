@@ -37,6 +37,18 @@ fn plan_windows_single_when_short() {
 }
 
 #[test]
+fn plan_windows_survives_an_overlap_as_wide_as_the_window() {
+    // Un-clamped, an overlap >= max_content would keep `start` from ever
+    // advancing — an infinite loop. The clamp caps it at max_content - 1,
+    // the largest stride that still moves forward.
+    for overlap in [4, 5, 300] {
+        let windows = plan_windows(9, 4, overlap);
+        assert_eq!(windows.last(), Some(&Window { start: 5, end: 9 }));
+        assert!(windows.len() <= 9, "one token of progress per window");
+    }
+}
+
+#[test]
 fn stitch_tiles_without_gaps_or_dups() {
     // The overlap seam is split in half: each interior window keeps its half.
     let windows = plan_windows(9, 4, 2);

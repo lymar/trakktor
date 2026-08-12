@@ -167,6 +167,15 @@ impl Structifier {
         text: &str,
         options: &StructifyOptions,
     ) -> Result<Vec<Paragraph>, StructifyError> {
+        if !(0.0..=1.0).contains(&options.threshold) {
+            // The boundary scores are probabilities; a threshold outside
+            // their range silently means "never cut" or "cut everywhere",
+            // which is an input mistake, not a request.
+            return Err(StructifyError::InvalidOptions(format!(
+                "--threshold must be between 0 and 1, got {}",
+                options.threshold
+            )));
+        }
         let chars: Vec<char> = text.chars().collect();
         if chars.is_empty() {
             return Ok(Vec::new());

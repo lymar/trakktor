@@ -107,6 +107,16 @@ impl Punctuator {
         text: &str,
         options: &PunctuateOptions,
     ) -> Result<Vec<String>, PunctuateError> {
+        if options.overlap >= MAX_CONTENT {
+            // An overlap that swallows the whole window would make the
+            // windowing loop stand still: the next window starts where the
+            // previous one did.
+            return Err(PunctuateError::InvalidOptions(format!(
+                "--overlap must be below {MAX_CONTENT} tokens (the window \
+                 minus its two markers), got {}",
+                options.overlap
+            )));
+        }
         if text.is_empty() {
             return Ok(Vec::new());
         }
