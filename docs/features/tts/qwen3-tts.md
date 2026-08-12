@@ -29,7 +29,7 @@ trakktor tts qwen3-tts --text-file article.md --language russian -o article.mp3
 | `--bitrate <rate>` | — | `-b:a` for lossy ffmpeg formats, e.g. `192k`. |
 | `--seed <int>` | `0` | Makes a sampled run repeatable. |
 | `--temperature`, `--top-k`, `--repetition-penalty` | `0.9`, `50`, `1.05` | Sampling controls. |
-| `--greedy` | off | Take the most likely code instead of sampling — deterministic, usually flatter. |
+| `--greedy` | off | Take the most likely code instead of sampling — deterministic, usually flatter. Cannot be combined with the sampling flags (`--seed`, `--temperature`, `--top-k`, `--repetition-penalty`). |
 | `--precision <bf16\|f32>` | `bf16` on candle + Metal, `f32` elsewhere | **Runtime- and device-dependent default.** `bf16` is the format the weights are stored in and what the reference runs — and what keeps `1.7b-customvoice` within a 16 GB machine on Metal; only candle on Metal serves it (the burn runtime and candle's CPU backend compute in `f32`, and asking them for `bf16` is an error rather than a silent downgrade). `f32` doubles the memory and is reproducible. The codec always runs in full precision either way. |
 | `--runtime <candle\|burn>` | `candle` | Inference runtime; burn needs the `burn` build feature and computes in f32 only. |
 | `--device <cpu\|metal>` | `cpu` | Compute device; `metal` needs the `metal` build feature (burn brings its own). |
@@ -46,14 +46,16 @@ Generation **samples** by default, so two runs of the same text differ slightly;
 codec decoder is deterministic either way — with the frames fixed, it
 reproduces the same waveform every time.
 
-The first use downloads the checkpoint (about 2.5 GB for `0.6b-customvoice`,
-4.5 GB for `1.7b-customvoice`, codec included) into the model directory; later
-runs reuse it. `--device metal` is considerably faster than the CPU and is the
-recommended way to run it — the CPU path is impractically slow for anything
-past a short phrase.
+The first use downloads the checkpoint into the model directory — 2.5 GB for
+`0.6b-customvoice`, 4.5 GB for `1.7b-customvoice`, of which 0.7 GB is the
+codec — and later runs reuse it. `--device metal` is considerably faster than
+the CPU and is the recommended way to run it — the CPU path is impractically
+slow for anything past a short phrase.
 
-`1.7b-customvoice` needs roughly 4.5 GB of memory in `bf16` and about twice
-that in `f32`; on a 16 GB machine only `bf16` is practical for it on candle
+Resident memory is a figure of its own, though for `1.7b-customvoice` it
+lands next to the download: `bf16` weights load in the format they are stored
+in, so the model needs roughly 4.5 GB of memory in `bf16` and about twice
+that in `f32`. On a 16 GB machine only `bf16` is practical for it on candle
 with Metal, which is why `bf16` is the default there — it is what keeps the
 large model in memory. On the CPU candle computes in `f32` (its CPU backend
 has no `bf16` arithmetic), and burn does so everywhere; burn still runs the

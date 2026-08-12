@@ -3,12 +3,13 @@
 > Part of [`ocr`](README.md); the shared page model and output shape are
 > described there.
 
-A model that looks at a page and returns the **blocks it is made of**, each with
-a label — document title, section heading, paragraph, abstract, footnote,
-running head, page number, table, formula, picture, caption, stamp, chart,
-among the twenty classes the model tells apart. It
-reads no text. This is the answer to *what is on this page*, not *what does it
-say*.
+A model that looks at a page and returns the **blocks it is made of**, each
+with a label — document title, section heading (`paragraph_title`), paragraph,
+abstract, footnote, running head (`header`), page number (`number`), table,
+formula, picture (`image`), caption (`figure_title`), stamp (`seal`), chart,
+among the twenty classes the model tells apart ([the full list
+below](#the-twenty-labels)). It reads no text. This is the answer to *what is
+on this page*, not *what does it say*.
 
 Both OCR engines run it by default, because it is what turns a list of
 recognized lines into a document. It is also available on its own:
@@ -21,7 +22,8 @@ trakktor ocr layout page.png --crops ./blocks   # each block as its own image
 trakktor ocr layout page.png --boxes boxes.png  # the page, with the blocks drawn on it
 ```
 
-About 130 MB downloaded once, and about a second per page.
+About 130 MB downloaded once, and about a second and a half a page on the
+default runtime (see the table below).
 
 ## Why it exists
 
@@ -124,6 +126,10 @@ lines each one caught:
 there even for a block the model never claimed. A block with no `label` is one
 the geometry worked out on its own.
 
+`kind` takes six values: `figure` — an illustration; `heading` — a heading,
+carrying its `level`; `paragraph` — running text; `footnote` — a footnote;
+`furniture` — a running head or a page number; `caption` — a caption.
+
 ## Its limits, and why they show up as a threshold
 
 The model is trained on Chinese and English documents, and **its confidence
@@ -150,6 +156,33 @@ Two guarantees hold whatever the model says:
 - **a page the model says nothing about reads exactly as `--no-layout`** would
   read it.
 
+## The twenty labels
+
+Every string `label` can hold, in the model's own class order:
+
+| label | what it marks |
+|---|---|
+| `paragraph_title` | a section heading |
+| `image` | a picture |
+| `text` | a paragraph of body text |
+| `number` | a page number |
+| `abstract` | an abstract |
+| `content` | a table of contents |
+| `figure_title` | a caption |
+| `formula` | a display formula |
+| `table` | a table |
+| `reference` | a bibliography |
+| `doc_title` | the document title |
+| `footnote` | a footnote |
+| `header` | a running head |
+| `algorithm` | pseudocode, set as a listing |
+| `footer` | a running foot |
+| `seal` | a stamp or seal |
+| `chart` | a chart |
+| `formula_number` | the number beside a display formula |
+| `aside_text` | text set outside the main flow, in a margin or sidebar |
+| `reference_content` | the entries of a bibliography |
+
 ## Options
 
 ```
@@ -164,6 +197,11 @@ Two guarantees hold whatever the model says:
 `--boxes` is the fastest way to see what the model made of a page: every block
 is drawn where it sits, numbered as the result numbers it and captioned with its
 label, in a second colour where the score is below half.
+
+One thing this command does *not* take is the [photo pipeline](photo.md) —
+there is no `--doc-orientation`, `--sheet` or `--unwarp` here. On a photograph
+the preview therefore sees the page as it was shot, unstraightened, while an
+engine run given those flags marks up the straightened page.
 
 Inside `ocr paddle` and `ocr vl` the stage takes `--no-layout` to skip it,
 `--layout-model` to choose the model, and `--layout-threshold` for the same

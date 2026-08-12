@@ -3,10 +3,11 @@
 `trakktor` is a predictable, automation-friendly Rust CLI toolbox for coding
 agents such as Claude Code and OpenCode (humans are welcome to use it too):
 speech-to-text and text-to-speech, speech enhancement, voice-activity audio
-editing, text off page images, PDF to Markdown, feeds, text structuring, and
-more — machine-readable output, stable flags, and meaningful exit codes. No Python, no virtual environments, no
-drawn-out setup: a single binary that takes care of everything itself,
-downloading and caching the models it needs on first use.
+editing, text off page images, PDF to Markdown, PDF page cutting, feeds, text
+structuring, and more — machine-readable output, stable flags, and meaningful
+exit codes. No Python, no virtual environments, no drawn-out setup: a single
+binary that takes care of everything itself, downloading and caching the
+models it needs on first use.
 
 ## Commands
 
@@ -40,7 +41,7 @@ Each command is documented in full on its own page under
   It reads with the best models it has for the language, which is not one
   generation for all of them — the newest carries no Cyrillic at all, so a
   Russian page is found by the new detector and read by the older recognizer.
-  About 139 MB for an English page and some ten seconds; `--quality fast` trades
+  About 139 MB for an English page and a few seconds; `--quality fast` trades
   that back for 13 MB and a quarter to a third off the time.
   [`vl`](docs/features/ocr/vl.md) is a port of the
   PaddleOCR-VL document model, which **writes out** what it sees instead of
@@ -50,7 +51,8 @@ Each command is documented in full on its own page under
   and tens of seconds a page. Output either way is JSON with every line's box
   and confidence, plain text, or Markdown with paragraphs and a reading order
   worked out from the geometry. A third model
-  ([`layout`](docs/features/ocr/layout.md), 130 MB, about a second a page)
+  ([`layout`](docs/features/ocr/layout.md), 130 MB, about a second and a half
+  a page)
   labels the blocks of the page — title, heading, paragraph, footnote, running
   head, page number, table, formula, picture — so the structure is read rather
   than guessed; it runs by default, `--no-layout` skips it, and `ocr layout`
@@ -76,6 +78,16 @@ Each command is documented in full on its own page under
   paper — fonts that keep their encoding inside the font program, which is what
   turns `first` into `rst` and `≤` into `6` — and reports the two kinds of
   damage that cannot be repaired.
+- [**`pdf` — edit a PDF as a document**](docs/features/pdf/README.md):
+  `pdf cut` cuts a page range out of a PDF and writes it as a new,
+  self-contained PDF — the chapter out of a book, the paper out of a
+  proceedings volume. Everything the kept pages use comes along byte for byte:
+  fonts, images, shared resources. A document-level structure that cannot
+  survive the cut whole — bookmarks into removed pages, user-facing page
+  numbering, a form whose fields lived there — is dropped and named in the
+  output rather than left half-working. An encrypted document opens with
+  `--password`, and the result is written decrypted. Pure Rust, nothing
+  downloaded, hundreds of pages in seconds.
 - [**`enhance` — clean up a speech recording**](docs/features/enhance/README.md):
   a damaged recording in, a repaired one out — room noise and hiss removed,
   reverberation reduced, and, with the right engine, the holes a dropped packet
@@ -92,8 +104,8 @@ Each command is documented in full on its own page under
   want to keep; the second of them does not filter at all but synthesises speech
   from noise, which is why it can widen a band and why it can invent a word.
   Whichever you pick, this repairs damage and does **not** improve a recording
-  that is already good: the page says where each helps and where it hurts,
-  measured against two independent recognisers.
+  that is already good: the page says where the two engines that have been
+  measured — against two independent recognisers — help and where they hurt.
 - [**`vad` — voice-activity audio editing**](docs/features/vad/README.md):
   find the speech in an audio file and report it, cut the silence out, or
   split the recording into clips.
@@ -147,6 +159,11 @@ trakktor --version
 cargo uninstall trakktor
 ```
 
+Working with a coding agent? Install the discovery stub once per project —
+`trakktor skill install claude` — and the agent finds the tool and reads its
+always-current guide from the binary itself (see
+[`skill`](docs/features/skill/README.md)).
+
 On Linux, the build pulls in `reqwest`'s default TLS, which needs OpenSSL
 (`pkg-config` plus `libssl-dev`/`openssl-devel`); macOS uses the system TLS and
 needs nothing extra.
@@ -198,11 +215,13 @@ Apache-licensed — Whisper, GigaAM, Vosk, Qwen3-TTS, F5-TTS and the ESpeech
 checkpoints, Vocos, Silero-VAD, Silero TTS, Silero Stress, SaT / wtpsplit,
 the 1-800-BAD-CODE punctuation model, PaddleOCR (with DB, the detection
 algorithm it builds on), PaddleOCR-VL (with the ERNIE-4.5 decoder it is built
-on) and UVDoc for straightening photographed pages, GTCRN, MP-SENet, UniPASE
+on), PP-DocLayout (built on RT-DETR) for labelling page structure, and UVDoc
+for straightening photographed pages, GTCRN, MP-SENet, UniPASE
 (with WavLM and PASE behind it) and resemble-enhance (with BigVGAN and
 alias-free-torch behind its vocoder) for speech enhancement, on the candle and
-burn runtimes — and, as a library rather than a port, Firecrawl's pdf-inspector
-behind `convert pdf`. The full credits — with licenses, upstream links, and papers — live
+burn runtimes — and, as libraries rather than ports, Firecrawl's pdf-inspector
+behind `convert pdf` and lopdf behind `pdf cut`. The full credits — with
+licenses, upstream links, and papers — live
 in [`docs/acknowledgments.md`](docs/acknowledgments.md); see
 [`NOTICE`](NOTICE) for the complete third-party attributions and license
 notices.

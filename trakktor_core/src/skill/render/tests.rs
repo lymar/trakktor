@@ -90,10 +90,21 @@ fn stub_description_is_a_bounded_trigger_line() {
     );
     // The trigger line must name each capability so an agent discovers the
     // skill for every kind of task; keep it in sync by hand (STUB_DESCRIPTION).
-    assert!(
-        desc.contains("feed") && desc.contains("transcribe"),
-        "got: {desc:?}"
-    );
+    // One keyword per top-level command, so dropping a capability fails here.
+    for keyword in [
+        "Markdown",    // convert
+        "cut pages",   // pdf
+        "feed",        // feed
+        "transcribe",  // asr
+        "aloud",       // tts
+        "recording",   // enhance
+        "silence",     // vad
+        "scans",       // ocr
+        "punctuation", // text
+        "skill show",  // skill
+    ] {
+        assert!(desc.contains(keyword), "missing {keyword:?} in: {desc:?}");
+    }
     assert!(desc.contains("Reach for it whenever"));
     // Strict-frontmatter guarantees: non-empty, bounded, one clean line.
     assert!(!desc.is_empty() && desc.chars().count() <= DESCRIPTION_MAX);

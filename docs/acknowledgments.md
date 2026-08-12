@@ -221,5 +221,14 @@ Apache-licensed:
   [lopdf](https://github.com/J-F-Liu/lopdf) (MIT), which trakktor also uses
   directly for the repair.
 
+- [**`pdf cut`**](features/pdf/README.md) —
+  [lopdf](https://github.com/J-F-Liu/lopdf) (MIT) by Junfeng Liu and
+  contributors: parsing, editing and writing PDF documents in pure Rust. A
+  dependency, not a port: page extraction runs over its document model —
+  loading (with decryption), the page tree, reachability-based garbage
+  collection, and serialization are all the crate's. What trakktor adds on top
+  is the catalog hygiene around a cut and the page-tree surgery that keeps it
+  fast on large documents.
+
 See [`NOTICE`](../NOTICE) for the full third-party attributions and license
 notices.

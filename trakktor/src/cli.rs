@@ -27,8 +27,8 @@ const DEFAULT_MODEL_DIR_NAME: &str = ".trakktor";
 /// A predictable, automation-friendly CLI toolbox for coding agents (Claude
 /// Code, OpenCode, etc.): speech-to-text and text-to-speech, speech
 /// enhancement, voice-activity audio editing, text recognition on page images,
-/// PDF to Markdown, feeds, text structuring, punctuation and Russian stress
-/// marking, and more —
+/// PDF to Markdown, PDF page extraction, feeds, text structuring, punctuation
+/// and Russian stress marking, and more —
 /// machine-readable output, stable flags, and meaningful exit codes. Reach for
 /// it when a task needs one of these helpers, such as fetching a feed's unread
 /// items, transcribing an audio file to timestamped text, reading a text or
@@ -37,7 +37,8 @@ const DEFAULT_MODEL_DIR_NAME: &str = ".trakktor";
 /// up a damaged one (room noise, reverberation, a telephone-narrow band, the
 /// gaps a dropped packet leaves in a call) at 16 kHz or at the full 44.1 kHz
 /// band, turning a PDF made from layout into Markdown without recognizing
-/// anything, reading the text off a scan, a
+/// anything, cutting a page range out of a PDF into a new PDF of its own —
+/// fonts, images and all — reading the text off a scan, a
 /// screenshot or a photograph of a page, page by page, straightening the
 /// photograph first, marking a page up into labelled blocks (title, heading,
 /// paragraph, footnote, table, formula, picture), restoring
@@ -126,7 +127,8 @@ enum Command {
     ///
     /// Which engine: `whisper` for anything but Russian, for translation to
     /// English, or when the language is unknown — its default model `tiny` is
-    /// a quick look, pick a larger one for real work. `gigaam` for Russian:
+    /// a quick look; for real work start at `small`, or `large-v3-turbo` for
+    /// accuracy at speed. `gigaam` for Russian:
     /// its default model writes punctuated, capitalized text. `vosk` streams
     /// with small models — Russian, Bengali, Tajik — the pick for a slow
     /// machine or an hours-long recording. A voice message in `.ogg` is
@@ -201,11 +203,13 @@ enum Command {
     /// **A PDF made from a layout program does not belong here** — its text is
     /// already in the file, and `convert pdf` gets it out exactly and about a
     /// thousand times faster. This command is for a page that only exists as a
-    /// picture. If you are unsure which kind of PDF you have, run
-    /// `convert pdf`: it says so, and names the pages that do need recognizing.
+    /// picture, and it takes *images*, not PDFs: render a scanned PDF's pages
+    /// first (for example `pdftoppm -png scan.pdf page`). If you are unsure
+    /// which kind of PDF you have, run `convert pdf`: it says so, and names
+    /// the pages that do need recognizing.
     ///
     /// Which engine: `paddle` for a page in one writing system it covers —
-    /// about 139 MB and some ten seconds a page, less of both with
+    /// about 139 MB and a few seconds a page, less of both with
     /// `--quality fast`, and the right default. `vl` for a page whose script
     /// it does not cover, for one that mixes scripts, or when a table or a
     /// formula is wanted as structure rather than as lines — about 2 GB
@@ -215,9 +219,9 @@ enum Command {
     /// page — document title, section heading, paragraph, abstract, footnote,
     /// running head, page number, table, formula, picture, caption — so that
     /// the structure is read rather than guessed. It costs 130 MB, downloaded
-    /// once, and about a second a page; `--no-layout` skips it when only the
-    /// lines are wanted. `ocr layout` runs the same model on its own and
-    /// answers "what is on this page" without reading a word of it.
+    /// once, and about a second and a half a page; `--no-layout` skips it
+    /// when only the lines are wanted. `ocr layout` runs the same model on its
+    /// own and answers "what is on this page" without reading a word of it.
     ///
     /// A page **photographed** rather than scanned has three more steps
     /// waiting for it, off by default and shared by both engines: use them
@@ -254,10 +258,28 @@ enum Command {
     /// So the rule is: **a PDF from a layout program is `convert pdf`, a PDF
     /// from a scanner is `ocr`.** You do not have to know which one you have —
     /// `convert pdf` works it out, converts what it can, and names the pages
-    /// that have to be recognized instead.
+    /// that have to be recognized instead. Note that `ocr` reads page
+    /// *images*: render a scanned PDF's pages to images first (for example
+    /// `pdftoppm -png scan.pdf page`) and hand those to `ocr` in order.
     Convert {
         #[command(subcommand)]
         command: ConvertCommand,
+    },
+
+    /// Edit a PDF as a document: cut pages out into a new PDF.
+    ///
+    /// Operations on the document itself — pages are the unit, the file is
+    /// the container — with nothing read and nothing interpreted. `cut`
+    /// writes the selected pages as a new, self-contained PDF: fonts, images
+    /// and shared resources come along byte for byte, so a chapter cut out of
+    /// a book reads exactly as it did in place.
+    ///
+    /// No text comes out of this command. To read a PDF's text, use
+    /// `convert pdf`; to recognize a scanned page, use `ocr`; to cut pages
+    /// out of the file itself, use this.
+    Pdf {
+        #[command(subcommand)]
+        command: PdfCommand,
     },
 
     /// Clean up a speech recording (speech enhancement).
@@ -341,10 +363,12 @@ pub(crate) enum ConvertCommand {
     /// read — a scan, a blank, or text drawn as vector outlines — is reported
     /// rather than converted: it appears in `pages_needing_ocr`, and the
     /// Markdown carries a comment where it would have been. If that is every
-    /// page, the run fails and says to use `ocr` instead. A page that did
-    /// convert can still carry a warning: text mapped into a private use area
-    /// of Unicode is text this file cannot spell out, however confident it
-    /// looks, and only recognizing the page will recover it.
+    /// page, the run fails and says to use `ocr` instead (`ocr` reads page
+    /// images — render those pages first, e.g. with `pdftoppm -png`). A page
+    /// that did convert can still carry a warning: text mapped into a
+    /// private use area of Unicode is text this file cannot spell out,
+    /// however confident it looks, and only recognizing the page will
+    /// recover it.
     Pdf(ConvertPdfArgs),
 }
 
@@ -357,7 +381,9 @@ pub(crate) struct ConvertPdfArgs {
 
     /// Which pages to convert, counting from 1 as the document does: `3`,
     /// `1-5`, or a list like `1-5,12,40-`. A range left open at the end runs
-    /// to the last page. All of them by default.
+    /// to the last page. All of them by default. Page 0 is rejected; a range
+    /// that merely runs past the end is clamped, a selection that starts past
+    /// the end is an error.
     #[arg(long, value_name = "spec")]
     pub(crate) pages: Option<String>,
 
@@ -368,6 +394,55 @@ pub(crate) struct ConvertPdfArgs {
     /// The password of an encrypted document. This is the *user* password, the
     /// one that unlocks the content; an owner password — the one that only
     /// restricts printing and copying — buys nothing here.
+    #[arg(long, value_name = "password")]
+    pub(crate) password: Option<String>,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum PdfCommand {
+    /// Cut pages out of a PDF and write them as a new PDF.
+    ///
+    /// The new file is self-contained: everything the kept pages use — fonts,
+    /// images, shared resources, their own annotations — comes along, byte
+    /// for byte, with nothing re-encoded. A document-level structure that
+    /// cannot survive the cut whole is dropped honestly and named in the
+    /// output's `dropped` list rather than left half-working — the possible
+    /// values are `outlines` (bookmarks that led into removed pages),
+    /// `page_labels` (user-facing page numbering), `struct_tree` (the
+    /// tagged-PDF structure tree), `open_action`, `form_fields` (fields whose
+    /// widgets all sat on removed pages), and `named_destinations`.
+    ///
+    /// An encrypted document opens with `--password`, and the result is
+    /// always written decrypted.
+    Cut(PdfCutArgs),
+}
+
+#[derive(Args)]
+pub(crate) struct PdfCutArgs {
+    /// The PDF to cut pages from.
+    #[arg(value_name = "file")]
+    pub(crate) file: PathBuf,
+
+    /// Which pages to keep, counting from 1 as the document does: `3`, `1-5`,
+    /// or a list like `1-5,12,40-`. A range left open at the end runs to the
+    /// last page; page 0 is rejected, a range that merely runs past the end
+    /// is clamped, and a selection that starts past the end is an error.
+    /// Pages come out in document order (a selection is a set, not a
+    /// reordering), and keeping all of them is allowed — that is a cleaned,
+    /// decrypted copy.
+    #[arg(long, value_name = "spec")]
+    pub(crate) pages: String,
+
+    /// Where to write the new PDF. By default it is named after the input
+    /// with `.cut.pdf` and written into the current directory.
+    #[arg(short, long, value_name = "path")]
+    pub(crate) out: Option<PathBuf>,
+
+    /// The password of an encrypted document — the *user* password, the one
+    /// that unlocks the content. A document carrying only an *owner* password
+    /// (the kind that restricts printing and copying but opens everywhere)
+    /// needs no flag at all: it is opened and decrypted silently. The result
+    /// is always written without encryption.
     #[arg(long, value_name = "password")]
     pub(crate) password: Option<String>,
 }
@@ -403,8 +478,9 @@ pub(crate) enum EnhanceCommand {
     /// decides them apart, which is the one thing it can do that `gtcrn`
     /// cannot — noise scrambles phase, and a multiply can never put it back.
     ///
-    /// The cost is the arithmetic: two million parameters, but they are
-    /// applied to every point of the time-by-frequency grid eight times over,
+    /// The cost is the arithmetic: those two and a quarter million parameters
+    /// are applied to every point of the time-by-frequency grid eight times
+    /// over,
     /// so it costs about twenty-five times `gtcrn`. It wants a GPU, and on one
     /// it is markedly faster on the burn runtime than on the default —
     /// `--runtime burn --device metal` is about three times `--runtime candle
@@ -455,12 +531,13 @@ pub(crate) enum EnhanceCommand {
     /// Denoise a recording at 44.1 kHz — the only masking engine that keeps
     /// the whole band.
     ///
-    /// Every other engine here works at 16 kHz, which is all the bandwidth
-    /// speech needs and exactly what a recogniser wants, but it is not what a
-    /// listener wants from a recording that was never a phone call: a lecture,
-    /// an interview, a podcast. This one is trained at the full rate and
-    /// returns it, so what comes back still has the top two octaves — the air
-    /// on a consonant, the room, the instrument in the background.
+    /// Every engine here but `resemble-enhance` works at 16 kHz, which is all
+    /// the bandwidth speech needs and exactly what a recogniser wants, but it
+    /// is not what a listener wants from a recording that was never a phone
+    /// call: a lecture, an interview, a podcast. This one is trained at the
+    /// full rate and returns it, so what comes back still has the top two
+    /// octaves — the air on a consonant, the room, the instrument in the
+    /// background.
     ///
     /// It is a mask with a twist: it predicts a gain per point of the spectrum
     /// and, separately, a **rotation** of that point's phase. So unlike
@@ -468,7 +545,9 @@ pub(crate) enum EnhanceCommand {
     /// `mpsenet` the phase it produces is a correction of the one that came in
     /// rather than an estimate from nothing. Ten million parameters over an
     /// image-shaped network — a UNet over the whole time-by-frequency plane —
-    /// so it wants a GPU on anything long.
+    /// so on anything long it wants `--runtime burn --device metal`; plain
+    /// `--device metal` on the default runtime buys almost nothing here (see
+    /// the device flag below).
     ///
     /// It is still a mask, so it cannot fill the hole a dropped packet left;
     /// for that, `unipase`. It has not been through the recogniser
@@ -505,7 +584,7 @@ pub(crate) enum EnhanceCommand {
     /// run repeats; `--seed` picks a different draw.
     ///
     /// This is by far the most expensive engine in the toolbox: three hundred
-    /// and fifty million parameters, and the flow model alone runs `--nfe`
+    /// and forty-six million parameters, and the flow model alone runs `--nfe`
     /// times over every chunk — about three times real time on a GPU and eight
     /// on four CPU cores. `--device metal` is therefore worth asking for; it is
     /// nevertheless not the default, because loading three hundred and
@@ -526,7 +605,8 @@ pub(crate) struct EnhanceGtcrnArgs {
     pub(crate) audio: PathBuf,
 
     /// Where to write the result. The container follows the extension — wav
-    /// and flac are written directly, anything else through ffmpeg. Defaults
+    /// and flac are written directly, anything else through an installed
+    /// ffmpeg. Defaults
     /// to the input's name with `.enhanced.wav` in its place, next to it.
     /// Prefer wav: the built-in FLAC encoder codes enhanced audio very badly,
     /// and a size guard will refuse to write the result rather than leave a
@@ -559,7 +639,8 @@ pub(crate) struct EnhanceMpsenetArgs {
     pub(crate) audio: PathBuf,
 
     /// Where to write the result. The container follows the extension — wav
-    /// and flac are written directly, anything else through ffmpeg. Defaults
+    /// and flac are written directly, anything else through an installed
+    /// ffmpeg. Defaults
     /// to the input's name with `.enhanced.wav` in its place, next to it.
     /// Prefer wav: the built-in FLAC encoder codes enhanced audio very badly,
     /// and a size guard will refuse to write the result rather than leave a
@@ -629,7 +710,8 @@ pub(crate) struct EnhanceUnipaseArgs {
     pub(crate) audio: PathBuf,
 
     /// Where to write the result. The container follows the extension — wav
-    /// and flac are written directly, anything else through ffmpeg. Defaults
+    /// and flac are written directly, anything else through an installed
+    /// ffmpeg. Defaults
     /// to the input's name with `.enhanced.wav` in its place, next to it.
     /// Prefer wav: the built-in FLAC encoder codes this model's output very
     /// badly, and a size guard will refuse to write the result rather than
@@ -644,12 +726,15 @@ pub(crate) struct EnhanceUnipaseArgs {
 
     /// Sample rate to write at. Defaults to the recording's own. The pipeline
     /// works at 16 kHz whatever this is, so a higher rate matches the source's
-    /// container rather than adding bandwidth.
+    /// container rather than adding bandwidth — and a narrowband call comes
+    /// back at its own low rate unless you pass `--sample-rate 16000` to keep
+    /// the full band the pipeline produced.
     #[arg(long, value_name = "hz")]
     pub(crate) sample_rate: Option<u32>,
 
     /// Do not conceal lost packets: leave the digital silence a dropped packet
     /// left behind as it is, instead of letting the encoder fill it in.
+    /// Concealment is on by default; this turns it off.
     #[arg(long)]
     pub(crate) no_plc: bool,
 
@@ -701,7 +786,8 @@ pub(crate) struct EnhanceResembleDenoiseArgs {
     pub(crate) audio: PathBuf,
 
     /// Where to write the result. The container follows the extension — wav
-    /// and flac are written directly, anything else through ffmpeg. Defaults
+    /// and flac are written directly, anything else through an installed
+    /// ffmpeg. Defaults
     /// to the input's name with `.enhanced.wav` in its place, next to it.
     /// Prefer wav: the built-in FLAC encoder codes enhanced audio very badly,
     /// and a size guard will refuse to write the result rather than leave a
@@ -773,7 +859,8 @@ pub(crate) struct EnhanceResembleEnhanceArgs {
     pub(crate) audio: PathBuf,
 
     /// Where to write the result. The container follows the extension — wav
-    /// and flac are written directly, anything else through ffmpeg. Defaults
+    /// and flac are written directly, anything else through an installed
+    /// ffmpeg. Defaults
     /// to the input's name with `.enhanced.wav` in its place, next to it.
     /// Prefer wav: the built-in FLAC encoder codes this model's output very
     /// badly, and a size guard will refuse to write the result rather than
@@ -930,16 +1017,18 @@ pub(crate) enum OcrCommand {
     /// The same model runs inside `ocr paddle` and `ocr vl` unless
     /// `--no-layout` turns it off, where the labels drive the Markdown and,
     /// for `ocr vl`, the blocks the model is asked to read. It downloads once,
-    /// about 130 MB, and takes about a second a page.
+    /// about 130 MB, and takes about a second and a half a page on the
+    /// default runtime.
     Layout(Box<OcrLayoutArgs>),
 }
 
-/// What to do to a page before it is read: the two stages that turn a
+/// What to do to a page before it is read: the three stages that turn a
 /// photograph into something a scanner could have produced.
 ///
-/// Both are off by default. On a scan or a rendered PDF they do nothing —
-/// the page is already upright and already flat — and doing nothing costs a
-/// model and a second a page. Turn them on for a photograph.
+/// All three are off by default. On a scan or a rendered PDF they do
+/// nothing — the page is already upright and already flat — and doing
+/// nothing costs two models and about a second a page. Turn them on for a
+/// photograph.
 #[derive(Debug, Args, Clone)]
 pub(crate) struct OcrPreprocessArgs {
     /// Find which of the four right angles the page is at, and turn it
@@ -986,7 +1075,9 @@ pub(crate) struct OcrPreprocessArgs {
     /// A file for a single page, a directory for several. This is the third
     /// of the checking flags, next to `--crops` and `--boxes`: those show what
     /// was read and where it was, this one shows the page the reading was
-    /// done on.
+    /// done on — the first place to look when a photographed page read badly.
+    /// When none of the three stages above ran, there is no straightened page
+    /// and nothing is written.
     #[arg(long, value_name = "file|dir")]
     pub(crate) rectified: Option<PathBuf>,
 }
@@ -1157,7 +1248,7 @@ pub(crate) struct OcrPaddleArgs {
     /// it the two run together in the result.
     ///
     /// Use this when only the lines are wanted and their structure is not, or
-    /// to avoid the 130 MB model. It saves about a second a page.
+    /// to avoid the 130 MB model. It saves about a second and a half a page.
     #[arg(long)]
     pub(crate) no_layout: bool,
 
@@ -1175,7 +1266,9 @@ pub(crate) struct OcrPaddleArgs {
     /// recovers them, but not for free: a picture box covering the whole sheet
     /// passes a low floor too, and a picture swallows the blocks inside it,
     /// which leaves the page with no labels at all. Try a value with
-    /// `ocr layout --boxes` first, where the result can be looked at.
+    /// `ocr layout --boxes` first, where the result can be looked at (note
+    /// that `ocr layout` takes none of the photograph flags, so a photograph
+    /// previews unstraightened there).
     #[arg(long, value_name = "p")]
     pub(crate) layout_threshold: Option<f32>,
 
@@ -1183,7 +1276,8 @@ pub(crate) struct OcrPaddleArgs {
     pub(crate) preprocess: OcrPreprocessArgs,
 
     /// Inference runtime executing the models. This engine serves `candle`
-    /// only; of the OCR engines, `ocr vl` is the one with a burn runtime.
+    /// only; of the OCR commands, `ocr vl` and `ocr layout` are the ones
+    /// with a burn runtime.
     #[arg(
         long,
         value_enum,
@@ -1223,7 +1317,9 @@ pub(crate) struct OcrVlArgs {
 
     /// Form of the text result: `lines` prints the recognized lines as they
     /// were read, `md` assembles Markdown — paragraphs, reading order,
-    /// headings and footnotes worked out from the geometry of the page.
+    /// headings and footnotes worked out from the geometry of the page, and
+    /// the model's table markup turned into a Markdown (or, when cells span,
+    /// HTML) table.
     #[arg(
         long,
         value_enum,
@@ -1272,7 +1368,8 @@ pub(crate) struct OcrVlArgs {
 
     /// Read each page in a single call instead of block by block. Right when
     /// the page already is one block; a way into a repetition loop when it is
-    /// not.
+    /// not. The non-`ocr` tasks (`table`, `formula`, `chart`) already ask
+    /// about the whole page, so this flag changes nothing for them.
     #[arg(long)]
     pub(crate) whole_page: bool,
 
@@ -1359,8 +1456,8 @@ pub(crate) struct OcrVlArgs {
     /// the model whole, as a table, and a formula goes as a formula; without
     /// them a table comes back as strips with its columns doubled.
     ///
-    /// It saves a 130 MB model and about a second a page — next to nothing
-    /// beside this engine's own price.
+    /// It saves a 130 MB model and about a second and a half a page — next
+    /// to nothing beside this engine's own price.
     #[arg(long)]
     pub(crate) no_layout: bool,
 
@@ -1380,7 +1477,9 @@ pub(crate) struct OcrVlArgs {
     /// free: a picture box covering the whole sheet passes a low floor too,
     /// and a picture swallows the blocks inside it — and a picture is not
     /// read. Try a value with `ocr layout --boxes` first, where the result can
-    /// be looked at for the price of a second rather than a page of reading.
+    /// be looked at for the price of a second rather than a page of reading
+    /// (note that `ocr layout` takes none of the photograph flags, so a
+    /// photograph previews unstraightened there).
     #[arg(long, value_name = "p")]
     pub(crate) layout_threshold: Option<f32>,
 
@@ -1389,8 +1488,8 @@ pub(crate) struct OcrVlArgs {
 
     /// Inference runtime executing the model. Both read the pages the same,
     /// at the same precision (f16 on Metal, f32 on the CPU); `burn` needs a
-    /// build with the `burn` feature enabled. The detection stage runs on
-    /// candle either way.
+    /// build with the `burn` feature enabled. The text detector runs on
+    /// candle either way; the layout stage follows this flag.
     #[arg(
         long,
         value_enum,
@@ -1479,7 +1578,9 @@ const DEFAULT_VL_DEVICE: DeviceArg = DeviceArg::Cpu;
 pub(crate) enum OcrTaskArg {
     /// Read the text.
     Ocr,
-    /// Read a table, as markup rather than as lines.
+    /// Read a table, as markup rather than as lines: the checkpoint's cell
+    /// tags come back as they are with `--format lines`, or assembled into a
+    /// Markdown/HTML table with `--format md`.
     Table,
     /// Read a formula as LaTeX.
     Formula,
@@ -1666,8 +1767,9 @@ pub(crate) struct SileroArgs {
 
     /// Model: a published name, downloaded on first use, or a path to a
     /// converted model directory. `cis-base` (the default) and
-    /// `cis-base-nostress` are published under MIT; `cis-ext` and `ru-classic`
-    /// — the five long-standing Russian voices — are under CC BY-NC-SA 4.0 and
+    /// `cis-base-nostress` are published under MIT; `cis-ext`, and
+    /// `ru-classic` (the five long-standing Russian voices), are under CC
+    /// BY-NC-SA 4.0 and
     /// need --allow-non-commercial-models. The license of the model that was
     /// used is reported in the output.
     #[arg(long, default_value = "cis-base", value_name = "name|dir")]
@@ -1767,8 +1869,9 @@ pub(crate) struct SileroArgs {
     pub(crate) runtime: RuntimeArg,
 
     /// Compute device. This model is small enough that the CPU is the intended
-    /// place to run it rather than a fallback; `metal` needs a build with the
-    /// `metal` feature enabled, and is only available on macOS.
+    /// place to run it rather than a fallback; `metal` is macOS-only and needs
+    /// a build with the `metal` feature (for the candle runtime) or the `burn`
+    /// feature (for the burn runtime, which brings its own Metal backend).
     #[arg(
         long,
         value_enum,
@@ -1800,7 +1903,8 @@ pub(crate) struct EspeechArgs {
 
     /// What is said in --ref-audio, word for word. The model aligns the
     /// recording against this text, so a wrong transcript costs quality; mark
-    /// stress in it with `+` as you would in the text to speak.
+    /// stress in it with `+` as you would in the text to speak. Required:
+    /// exactly one of this flag or --ref-text-file must be given.
     #[arg(long, value_name = "text")]
     pub(crate) ref_text: Option<String>,
 
@@ -1923,8 +2027,9 @@ pub(crate) struct EspeechArgs {
     )]
     pub(crate) runtime: RuntimeArg,
 
-    /// Compute device. `metal` needs a build with the `metal` feature enabled,
-    /// and is only available on macOS.
+    /// Compute device. `metal` is macOS-only and needs a build with the
+    /// `metal` feature (for the candle runtime) or the `burn` feature (for
+    /// the burn runtime, which brings its own Metal backend).
     #[arg(
         long,
         value_enum,
@@ -2097,7 +2202,9 @@ pub(crate) struct Qwen3TtsArgs {
 
     /// Always take the most likely code instead of sampling. Deterministic,
     /// and usually flatter; mainly for reproducible comparisons. The
-    /// checkpoint's own repetition penalty still applies.
+    /// checkpoint's own repetition penalty still applies. Cannot be combined
+    /// with the sampling flags (--seed, --temperature, --top-k,
+    /// --repetition-penalty).
     #[arg(long, conflicts_with_all = [
         "seed", "temperature", "top_k", "repetition_penalty"
     ])]
@@ -2116,8 +2223,9 @@ pub(crate) struct Qwen3TtsArgs {
     )]
     pub(crate) runtime: RuntimeArg,
 
-    /// Compute device. `metal` needs a build with the `metal` feature enabled,
-    /// and is only available on macOS.
+    /// Compute device. `metal` is macOS-only and needs a build with the
+    /// `metal` feature (for the candle runtime) or the `burn` feature (for
+    /// the burn runtime, which brings its own Metal backend).
     #[arg(
         long,
         value_enum,
@@ -2130,9 +2238,10 @@ pub(crate) struct Qwen3TtsArgs {
     /// runtime and device: `bf16` on candle with Metal (about half the
     /// memory, the format the weights are stored in, and what keeps the
     /// larger model within a 16 GB machine), and `f32` everywhere else — the
-    /// burn runtime and candle's CPU backend compute in `f32` only. Pass
-    /// `f32` for full precision and reproducible results. The codec always
-    /// runs in full precision either way.
+    /// burn runtime and candle's CPU backend compute in `f32` only, and
+    /// asking them for `bf16` is an error, not a downgrade. Pass `f32` for
+    /// full precision and reproducible results. The codec always runs in
+    /// full precision either way.
     #[arg(long, value_enum, value_name = "precision")]
     pub(crate) precision: Option<TtsPrecisionArg>,
 }
@@ -2205,7 +2314,8 @@ pub(crate) struct GigaamArgs {
     #[arg(long, default_value = "v3_e2e_rnnt", value_name = "name|file")]
     pub(crate) model: String,
 
-    /// Timestamp granularity of the output.
+    /// Timestamp granularity of the output. Word timings are read off the
+    /// emission frames the decode produces anyway, at no extra cost.
     #[arg(
         long,
         value_enum,
@@ -2248,9 +2358,10 @@ pub(crate) struct GigaamArgs {
     pub(crate) precision: PrecisionArg,
 
     /// Audio decoder. `builtin` (the default) is pure Rust and needs no
-    /// external tools; `ffmpeg` shells out to an installed `ffmpeg` and adds
-    /// input formats the built-in decoder does not cover, such as opus, wma,
-    /// and amr.
+    /// external tools — it reads mp3, aac (LC), vorbis, flac, alac, adpcm,
+    /// and PCM, in wav, aiff, caf, ogg, mp4, and mkv containers; `ffmpeg`
+    /// shells out to an installed `ffmpeg` and adds input formats the
+    /// built-in decoder does not cover, such as opus, wma, and amr.
     #[arg(
         long,
         value_enum,
@@ -2260,7 +2371,8 @@ pub(crate) struct GigaamArgs {
     pub(crate) audio_decoder: AudioDecoderArg,
 
     /// Language label to report in the output (a code like `ru`). GigaAM does
-    /// not detect the language; this only annotates the result.
+    /// not detect the language; this only annotates the result — optional,
+    /// and omitting it changes nothing but the reported label.
     #[arg(long, value_name = "lang")]
     pub(crate) language: Option<String>,
 
@@ -2293,9 +2405,10 @@ pub(crate) struct VoskArgs {
     #[arg(long, default_value = "ru", value_name = "name|dir")]
     pub(crate) model: String,
 
-    /// Transducer search. `beam` (the default) is modified beam search, as
-    /// used by the reference; `greedy` is faster and usually slightly less
-    /// accurate.
+    /// Transducer search. `beam` (the default) is modified beam search — a
+    /// pruned beam over the transducer's emissions, as used by the upstream
+    /// reference implementation; `greedy` is faster and usually slightly
+    /// less accurate.
     #[arg(
         long,
         value_enum,
@@ -2304,7 +2417,8 @@ pub(crate) struct VoskArgs {
     )]
     pub(crate) decoding: DecodingArg,
 
-    /// Timestamp granularity of the output.
+    /// Timestamp granularity of the output. Word timings are read off the
+    /// emission frames the decode produces anyway, at no extra cost.
     #[arg(
         long,
         value_enum,
@@ -2348,9 +2462,10 @@ pub(crate) struct VoskArgs {
     pub(crate) precision: PrecisionArg,
 
     /// Audio decoder. `builtin` (the default) is pure Rust and needs no
-    /// external tools; `ffmpeg` shells out to an installed `ffmpeg` and adds
-    /// input formats the built-in decoder does not cover, such as opus, wma,
-    /// and amr.
+    /// external tools — it reads mp3, aac (LC), vorbis, flac, alac, adpcm,
+    /// and PCM, in wav, aiff, caf, ogg, mp4, and mkv containers; `ffmpeg`
+    /// shells out to an installed `ffmpeg` and adds input formats the
+    /// built-in decoder does not cover, such as opus, wma, and amr.
     #[arg(
         long,
         value_enum,
@@ -2360,7 +2475,8 @@ pub(crate) struct VoskArgs {
     pub(crate) audio_decoder: AudioDecoderArg,
 
     /// Language label to report in the output (a code like `ru`). Vosk does
-    /// not detect the language; this only annotates the result.
+    /// not detect the language; this only annotates the result — optional,
+    /// and omitting it changes nothing but the reported label.
     #[arg(long, value_name = "lang")]
     pub(crate) language: Option<String>,
 
@@ -2424,7 +2540,8 @@ pub(crate) struct WhisperArgs {
     /// small.en, medium, medium.en, large-v1, large-v2, large-v3, large,
     /// turbo, large-v3-turbo, plus podlodka and podlodka-turbo — fine-tunes
     /// of large-v3 and turbo specialized for Russian. Larger models are
-    /// slower and more accurate.
+    /// slower and more accurate. The `.en` names are English-only: they take
+    /// no `--task translate` and no other `--language`.
     #[arg(long, default_value = "tiny", value_name = "name|dir")]
     pub(crate) model: String,
 
@@ -2462,9 +2579,10 @@ pub(crate) struct WhisperArgs {
     pub(crate) precision: PrecisionArg,
 
     /// Audio decoder. `builtin` (the default) is pure Rust and needs no
-    /// external tools; `ffmpeg` shells out to an installed `ffmpeg` and adds
-    /// input formats the built-in decoder does not cover, such as opus, wma,
-    /// and amr.
+    /// external tools — it reads mp3, aac (LC), vorbis, flac, alac, adpcm,
+    /// and PCM, in wav, aiff, caf, ogg, mp4, and mkv containers; `ffmpeg`
+    /// shells out to an installed `ffmpeg` and adds input formats the
+    /// built-in decoder does not cover, such as opus, wma, and amr.
     #[arg(
         long,
         value_enum,
@@ -2474,6 +2592,8 @@ pub(crate) struct WhisperArgs {
     pub(crate) audio_decoder: AudioDecoderArg,
 
     /// Transcribe in the source language, or translate into English.
+    /// `translate` renders non-English speech as English text; for English
+    /// audio the plain default `transcribe` already answers in English.
     #[arg(
         long,
         value_enum,
@@ -2530,8 +2650,10 @@ pub(crate) struct WhisperArgs {
     #[arg(long)]
     pub(crate) carry_initial_prompt: bool,
 
-    /// Feed the previous output as context for the next window; `false`
-    /// reduces the chance of failure loops at some cost to consistency.
+    /// Feed the previous output as context for the next window (default
+    /// `true`). The flag takes a value: pass `--condition-on-previous-text
+    /// false` to disable, which reduces the chance of failure loops at some
+    /// cost to consistency.
     #[arg(
         long,
         default_value_t = true,
@@ -2577,6 +2699,7 @@ pub(crate) struct WhisperArgs {
 
     /// Comma-separated `start,end,start,end,...` offsets in seconds of the
     /// clips to transcribe; the last end defaults to the end of the audio.
+    /// The default `0` means the whole recording.
     #[arg(long, default_value = "0", value_name = "csv")]
     pub(crate) clip_timestamps: String,
 
@@ -2637,11 +2760,12 @@ pub(crate) enum TimestampsArg {
     None,
     /// Segment start/end times (the default).
     Segment,
-    /// Segment times plus per-word timings.
+    /// Segment times plus per-word timings: each segment gains a `words`
+    /// array of `{start, end, word}` objects.
     Word,
 }
 
-/// The `--device` value of `asr whisper`.
+/// The `--device` value of the model-backed commands.
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum DeviceArg {
     /// The CPU.
@@ -2650,8 +2774,8 @@ pub(crate) enum DeviceArg {
     Metal,
 }
 
-/// The `--runtime` value of the model-backed commands (`asr` engines and
-/// `text structify`).
+/// The `--runtime` value of the model-backed commands (the `asr`, `tts`,
+/// `ocr`, `enhance`, and `text` families).
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum RuntimeArg {
     /// The candle runtime (the default).
@@ -2660,7 +2784,7 @@ pub(crate) enum RuntimeArg {
     Burn,
 }
 
-/// The `--precision` value of `asr whisper`.
+/// The `--precision` value of the model-backed commands.
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum PrecisionArg {
     /// Half precision: less memory, faster.
@@ -2733,8 +2857,8 @@ impl TaskArg {
     }
 }
 
-/// The `--output-format` value of `asr whisper`: which transcript files to
-/// write.
+/// The `--output-format` value of the `asr` engines: which transcript files
+/// to write.
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum OutputFormatArg {
     /// Plain text: one line per segment.
@@ -2751,7 +2875,7 @@ pub(crate) enum OutputFormatArg {
     All,
 }
 
-/// The `--audio-decoder` value of `asr whisper`.
+/// The `--audio-decoder` value of the `asr` engines.
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum AudioDecoderArg {
     /// Built-in pure-Rust decoder (the default); no external tools.
@@ -2842,7 +2966,8 @@ pub(crate) enum TextCommand {
     /// Restore punctuation and capitalization in raw text.
     ///
     /// Reads a UTF-8 text file of lowercase, unpunctuated text — the typical
-    /// output of the Vosk and GigaAM speech engines — and restores punctuation,
+    /// output of Vosk, and of GigaAM's `v3_ctc`/`v3_rnnt` models (GigaAM's
+    /// default model already punctuates) — and restores punctuation,
     /// capitalization (including acronyms like NATO and U.S.), and sentence
     /// boundaries with a local multilingual model, fully offline. The first use
     /// of a model downloads it into the model directory (~/.trakktor by
@@ -2857,13 +2982,16 @@ pub(crate) enum TextCommand {
     ///
     /// Reads a UTF-8 text file of Russian and gives back the same text with the
     /// stress marked — `+` before the stressed vowel by default, which is what
-    /// `tts espeech` reads — and with the letter ё written where it belongs,
-    /// fully offline. Russian writes neither, and a speech synthesizer needs
-    /// both: an unmarked word is read by guesswork, and a pair like все/всё
-    /// cannot be told apart by a stress mark at all. Words you have already
-    /// marked yourself are never re-marked, and --dict lets you fix the rest
-    /// once and for all. The first use of a model downloads it into the model
-    /// directory (~/.trakktor by default; see --model-dir), and later runs
+    /// `tts espeech` and `tts silero` read (both also mark unmarked text with
+    /// this same model by default) — and with the letter ё written where it
+    /// belongs, fully offline. Run it to review the words the model left
+    /// unmarked and fix them once with --dict. Russian writes neither, and a
+    /// speech synthesizer needs both: an unmarked word is read by
+    /// guesswork, and a pair like все/всё cannot be told apart by a stress
+    /// mark at all. Words you have already marked yourself are never
+    /// re-marked, and --dict lets you fix the rest once and for all. The
+    /// first use of a model downloads it into the model directory (~/.
+    /// trakktor by default; see --model-dir), and later runs
     /// reuse it. Output is JSON by default — the marked text, counts, and the
     /// words left unmarked; pass --text for the marked text alone.
     Stress(StressArgs),
@@ -2920,7 +3048,7 @@ pub(crate) struct StressArgs {
 
     /// Inference runtime executing the model. Both produce the same text;
     /// `burn` needs a build with the `burn` feature enabled, and on the CPU
-    /// computes in f32 only.
+    /// computes in f32 only (this command's default precision already).
     #[arg(
         long,
         value_enum,
@@ -2999,7 +3127,8 @@ pub(crate) struct PunctuateArgs {
 
     /// Inference runtime executing the model. Both produce the same result;
     /// `burn` needs a build with the `burn` feature enabled, and on the CPU
-    /// computes in f32 only.
+    /// computes in f32 only — pair it with `--precision f32` there, because
+    /// `f16` (the default) is rejected rather than downgraded.
     #[arg(
         long,
         value_enum,
@@ -3032,7 +3161,8 @@ pub(crate) struct PunctuateArgs {
 
     /// Overlap between consecutive windows, in tokens, when the text is longer
     /// than one window. The seam is split evenly between the two windows; an
-    /// odd value is rounded down to even.
+    /// odd value is rounded down to even. Must be below 254 (the window minus
+    /// its two markers).
     #[arg(long, default_value_t = 16, value_name = "int")]
     pub(crate) overlap: usize,
 
@@ -3065,7 +3195,8 @@ pub(crate) struct StructifyArgs {
 
     /// Inference runtime executing the model. Both produce the same
     /// paragraphs; `burn` needs a build with the `burn` feature enabled, and
-    /// on the CPU computes in f32 only.
+    /// on the CPU computes in f32 only — pair it with `--precision f32`
+    /// there, because `f16` (the default) is rejected rather than downgraded.
     #[arg(
         long,
         value_enum,
@@ -3127,7 +3258,8 @@ pub(crate) enum VadCommand {
     /// speech). The output copies the decoded original at full quality — its
     /// own sample rate, channels, and bit depth — with a short fade at each
     /// join so edits do not click. With `--max-silence-ms`, long pauses are
-    /// shortened to that length instead of being removed.
+    /// shortened to that length instead of being removed. The file is written
+    /// as `<stem>.<speech|non-speech>.<ext>` into `--output-dir`.
     Cut(VadCutArgs),
 
     /// Write one file per detected speech span (one clip per utterance).
@@ -3135,7 +3267,8 @@ pub(crate) enum VadCommand {
     /// Splits the recording on silence into many files, each holding a single
     /// span, dropping any shorter than `--min-duration-ms`. `--keep non-speech`
     /// splits out the non-speech spans instead. Like `cut`, every clip is the
-    /// full-quality original.
+    /// full-quality original. Files are written as
+    /// `<stem>.<speech|non-speech>.<NNN>.<ext>` into `--output-dir`.
     Split(VadSplitArgs),
 }
 
@@ -3212,7 +3345,8 @@ pub(crate) struct VadShapeArgs {
     /// Output audio format. With the built-in encoder: `wav` (reproduces any
     /// source exactly) or `flac` (smaller, lossless, integer sources up to
     /// 24-bit). With `--audio-encoder ffmpeg`, any format ffmpeg writes by
-    /// extension — for example mp3, aac, m4a, opus, or ogg.
+    /// extension — for example mp3, aac, m4a, opus, or ogg. A non-wav/flac
+    /// format therefore needs `--audio-encoder ffmpeg` (or `auto`) alongside.
     #[arg(long, default_value = "wav", value_name = "format")]
     pub(crate) format: String,
 
@@ -3335,7 +3469,10 @@ enum FeedCommand {
     /// Read a feed and return its publications.
     ///
     /// Accepts a feed URL or a regular page (autodiscovery applies). By
-    /// default only unread publications are returned.
+    /// default only unread publications are returned. The first run has no
+    /// read state yet, so every entry comes back unread; the state lives
+    /// under `--work-dir` (default `./.trakktor`), so ask from the same
+    /// directory to get the same answer.
     Read {
         /// URL of the feed or page.
         #[arg(value_name = "url")]
@@ -3587,6 +3724,12 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
         Command::Convert { command } => match command {
             ConvertCommand::Pdf(args) => {
                 crate::convert::run_pdf(args, global.json(), global.pretty)
+            },
+        },
+
+        Command::Pdf { command } => match command {
+            PdfCommand::Cut(args) => {
+                crate::pdf::run_cut(args, global.json(), global.pretty)
             },
         },
 

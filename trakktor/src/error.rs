@@ -13,6 +13,7 @@ use trakktor_core::{
     feed::FeedError,
     http::HttpError,
     ocr::OcrError,
+    pdf::PdfError,
     punctuate::PunctuateError,
     skill::SkillError,
     stress::StressError,
@@ -58,6 +59,8 @@ pub enum CliError {
     Enhance(EnhanceError),
     /// An error from the document-conversion domain.
     Convert(ConvertError),
+    /// An error from the PDF document operations.
+    Pdf(PdfError),
 }
 
 impl CliError {
@@ -81,6 +84,7 @@ impl CliError {
             CliError::Silero(err) => silero_code(err),
             CliError::Enhance(err) => enhance_code(err),
             CliError::Convert(err) => convert_code(err),
+            CliError::Pdf(err) => pdf_code(err),
         }
     }
 }
@@ -104,6 +108,7 @@ impl std::fmt::Display for CliError {
             CliError::Silero(err) => write!(f, "{err}"),
             CliError::Enhance(err) => write!(f, "{err}"),
             CliError::Convert(err) => write!(f, "{err}"),
+            CliError::Pdf(err) => write!(f, "{err}"),
         }
     }
 }
@@ -170,6 +175,10 @@ impl From<Qwen3TtsError> for CliError {
 
 impl From<ConvertError> for CliError {
     fn from(err: ConvertError) -> Self { CliError::Convert(err) }
+}
+
+impl From<PdfError> for CliError {
+    fn from(err: PdfError) -> Self { CliError::Pdf(err) }
 }
 
 /// Maps a [`WhisperError`] to its stable `code`.
@@ -365,6 +374,17 @@ fn convert_code(err: &ConvertError) -> &'static str {
         ConvertError::NoTextLayer { .. } => "no_text_layer",
         ConvertError::InvalidOptions(_) => "invalid_options",
         ConvertError::Io { .. } => "io_error",
+    }
+}
+
+/// Maps a [`PdfError`] to its stable `code`.
+fn pdf_code(err: &PdfError) -> &'static str {
+    match err {
+        PdfError::InvalidInput(_) => "invalid_input",
+        PdfError::ParseFailed(_) => "parse_failed",
+        PdfError::Encrypted => "encrypted",
+        PdfError::InvalidOptions(_) => "invalid_options",
+        PdfError::Io { .. } => "io_error",
     }
 }
 

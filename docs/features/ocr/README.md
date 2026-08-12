@@ -7,10 +7,18 @@
 Text recognition over page images: scans, photographs of pages, screenshots.
 Two engines, both fully offline once their models are downloaded.
 
+**A PDF made from a layout program does not belong here** — its text is already
+in the file, and [`convert pdf`](../convert/README.md) gets it out exactly and
+about a thousand times faster. `ocr` reads page *images*: a scanned PDF is
+rendered to images first (for example `pdftoppm -png scan.pdf page`), and its
+pages passed in order. If you are unsure which kind of PDF you have, run
+`convert pdf` — it says so, and names the pages that do need recognizing.
+
 - [**`paddle`**](paddle.md) — a port of PaddleOCR's classic pipeline: a detector
   finds the lines, a recognizer reads each one. It reads with the best models it
-  has for the language: about 139 MB and some ten seconds a page, or 13 MB and a
-  quarter to a third less time under `--quality fast`. **The default choice.**
+  has for the language: about 139 MB — plus 130 MB for the layout stage below —
+  and some ten seconds a page, or 13 MB and a quarter to a third less time
+  under `--quality fast`. **The default choice.**
 - [**`vl`**](vl.md) — a port of the PaddleOCR-VL document model, which writes
   out what it sees rather than picking characters from a dictionary. It works
   out the writing system itself, reads scripts `paddle` has no model for, and
@@ -23,7 +31,8 @@ Two stages sit around the engines and are shared by both:
   the blocks of a page — document title, section heading, paragraph, abstract,
   footnote, running head, page number, table, formula, picture, caption and
   more — without reading any text, for about 130 MB downloaded once and about
-  a second per page. `--no-layout` skips it, and `ocr layout` runs it alone;
+  a second and a half per page. `--no-layout` skips it, and `ocr layout` runs
+  it alone;
 - the [**page preprocessing**](photo.md) is **off by default** and is what a
   page you *photographed* needs: `--doc-orientation` turns a page shot sideways
   the right way up, `--sheet` cuts the sheet out of the frame, and `--unwarp`
@@ -76,13 +85,24 @@ JSON (the default) is one object for the run:
           "quad": [[68, 66], [668, 66], [668, 107], [68, 107]],
           "rotated": false
         }
+      ],
+      "blocks": [
+        {
+          "kind": "heading",
+          "label": "doc_title",
+          "score": 0.921,
+          "level": 1,
+          "lines": [0],
+          "quad": [[68, 60], [668, 60], [668, 110], [68, 110]]
+        }
       ]
     }
   ],
   "language": "ru",
   "models": {
     "detection": "PP-OCRv6_medium_det",
-    "recognition": "eslav_PP-OCRv5_mobile_rec"
+    "recognition": "eslav_PP-OCRv5_mobile_rec",
+    "layout": "PP-DocLayout_plus-L"
   }
 }
 ```
@@ -96,11 +116,12 @@ JSON (the default) is one object for the run:
   page is found by the newest detector and read by an older recognizer, because
   the newest generation carries no Cyrillic. `--quality` and `--lang` move them,
   so this field is how to tell which reading a result came from.
-- with the layout stage on (the default) each page also carries `blocks` — the
-  labelled regions, each with its own `quad` — and `models.layout` names the
-  model. `--format md` adds a top-level `markdown` field; `--out` writes it to
-  a file instead (reported as `out`), with any illustrations saved to an
-  `imgs` directory next to it and linked from the Markdown.
+- `blocks` are the layout stage's regions, each with its own `quad` and the
+  lines it caught ([the stage's page](layout.md) explains `kind` against
+  `label`). With `--no-layout` the shape is the same minus `blocks` and
+  `models.layout`. `--format md` adds a top-level `markdown` field; `--out`
+  writes it to a file instead (reported as `out`), with any illustrations
+  saved to an `imgs` directory next to it and linked from the Markdown.
 
 `--text` prints the lines, with the pages separated by a marker that is part of
 the data (`=== page 2 · scan-02.png ===`) — without it the text of a multi-page

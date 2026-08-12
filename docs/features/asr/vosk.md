@@ -52,7 +52,8 @@ modified beam search — the reference's method) and **`greedy`** (one token per
 frame — faster, usually slightly less accurate). The transducer decoder runs
 on the CPU from the encoder output — always in f32, whatever `--precision`
 set for the encoder — so a chunk is one encoder pass plus one read-back on
-the GPU, like GigaAM.
+the GPU, like GigaAM. Word timings with `--timestamps word` are read off the
+emission frames during that decode, at no extra cost.
 
 **Offline** models transcribe audio up to ~25 seconds directly; longer audio
 is split along detected speech into chunks (the same voice-activity

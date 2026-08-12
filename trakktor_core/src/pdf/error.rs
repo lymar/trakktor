@@ -1,12 +1,14 @@
-//! Typed errors for the conversion feature.
+//! Typed errors for the PDF document operations.
 //!
 //! Each variant corresponds to a stable error `code`. The variant → `code` →
 //! exit-code mapping is performed at the CLI boundary; changing an `#[error]`
-//! message must never change the external `code`.
+//! message must never change the external `code`. The vocabulary matches
+//! `convert` on purpose — the same situations are named the same way — but the
+//! type is this domain's own.
 
-/// Errors returned by the conversion operations.
+/// Errors returned by the PDF document operations.
 #[derive(Debug, thiserror::Error)]
-pub enum ConvertError {
+pub enum PdfError {
     /// The input file is missing, unreadable, or is not a PDF at all
     /// (`invalid_input`).
     #[error("{0}")]
@@ -20,24 +22,10 @@ pub enum ConvertError {
     /// The document is encrypted and no usable password was given
     /// (`encrypted`).
     #[error(
-        "this PDF is encrypted; pass the password with --password (an owner \
-         password unlocks nothing here — the text stays out of reach)"
+        "this PDF is encrypted; pass the user password with --password (the \
+         result is written decrypted)"
     )]
     Encrypted,
-
-    /// Not one page of the document carries text to convert (`no_text_layer`).
-    /// The message names the command that can read such a document.
-    #[error(
-        "this PDF has no text layer to convert — its pages are {what}. Read \
-         them with `trakktor ocr` instead: it recognizes the page as a \
-         picture. `ocr` takes images, not PDFs, so render the pages first \
-         (for example `pdftoppm -png`)"
-    )]
-    NoTextLayer {
-        /// What the pages turned out to be, in the plural and in words:
-        /// "scanned images", "text drawn as vector outlines", and so on.
-        what: String,
-    },
 
     /// A flag combination or value the feature cannot honour, such as a page
     /// range that does not parse or points past the end (`invalid_options`).
@@ -55,8 +43,8 @@ pub enum ConvertError {
     },
 }
 
-impl From<crate::pages::SelectionError> for ConvertError {
+impl From<crate::pages::SelectionError> for PdfError {
     fn from(err: crate::pages::SelectionError) -> Self {
-        ConvertError::InvalidOptions(err.to_string())
+        PdfError::InvalidOptions(err.to_string())
     }
 }

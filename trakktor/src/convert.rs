@@ -19,7 +19,7 @@ pub(crate) fn run_pdf(
         .as_deref()
         .map(Selection::parse)
         .transpose()
-        .map_err(CliError::from)?;
+        .map_err(ConvertError::from)?;
 
     let converted = pdf::convert(
         &args.file,

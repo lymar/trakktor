@@ -117,13 +117,15 @@ the complete list with defaults and exact value formats. In brief:
   `--compression-ratio-threshold` (2.4; repetition), `--logprob-threshold`
   (-1.0; confidence), `--no-speech-threshold` (0.6; silence).
 - **Prompting** — `--initial-prompt` (bias the first window toward domain
-  vocabulary or proper nouns), `--carry-initial-prompt`,
-  `--condition-on-previous-text` (on by default).
+  vocabulary or proper nouns), `--carry-initial-prompt` (repeat the prompt on
+  every window, not just the first), `--condition-on-previous-text` (on by
+  default).
 - **Token suppression** — `--suppress-tokens` (default `-1`, which expands to
   a built-in non-speech set).
 - **Word-timestamp tuning** (with `--timestamps word`) —
-  `--prepend-punctuations`, `--append-punctuations`,
-  `--hallucination-silence-threshold` (unset).
+  `--prepend-punctuations` and `--append-punctuations` (which punctuation
+  marks glue to the following/preceding word; the defaults follow the
+  reference implementation), `--hallucination-silence-threshold` (unset).
 - **Partial audio** — `--clip-timestamps` (default `0`, the whole recording)
   to transcribe only selected `start,end` second ranges. For a single range,
   the `--start`/`--end` flags above are usually easier.

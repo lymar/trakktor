@@ -18,6 +18,10 @@ trakktor enhance resemble-denoise lecture.wav      # 44.1 kHz, band kept
 trakktor enhance resemble-enhance lecture.wav      # rebuilt, not filtered
 ```
 
+(The `--device metal` and `--runtime burn` lines need a build with the `metal`
+feature — for the candle runtime — or the `burn` feature; a default build
+accepts the flags and fails at run time.)
+
 ## Which engine
 
 **`gtcrn`, unless you have a reason not to.**
@@ -25,7 +29,7 @@ trakktor enhance resemble-enhance lecture.wav      # rebuilt, not filtered
 | | `gtcrn` (the first choice) | `mpsenet` | `unipase` | `resemble-denoise` | `resemble-enhance` |
 |---|---|---|---|---|---|
 | what it is | a masking network on the spectrum | a transformer on the spectrum with separate magnitude and phase heads | a generative pipeline on a speech encoder's representation | a masking UNet on the spectrum | a generative pipeline: mel → flow → vocoder |
-| parameters | **48 thousand** | 2.3 million | 546 million | 10.8 million | 346 million |
+| parameters | **48 thousand** | 2.26 million | 546 million | 10.8 million | 346 million |
 | download | **580 KB** | 9 MB | 2.17 GB | 713 MB (shared) | 713 MB (shared) |
 | **works at** | 16 kHz | 16 kHz | 16 kHz | **44.1 kHz** | **44.1 kHz** |
 | speed | **about a sixtieth of real time, one CPU core** | about four tenths of real time, on a GPU | about half of real time, on a GPU | **a fifth of real time** on a GPU with the burn runtime | **about three times real time** on a GPU, eight on four CPU cores |
@@ -157,9 +161,10 @@ operation neither of the other two engines has.
 
 The trunk is a dense convolutional encoder and four two-stage blocks. Each block
 runs one transformer along **frequency** and one along **time**, and each of
-those replaces the usual feed-forward layer with a bidirectional recurrence. Two
-million parameters, but they are applied to every point of the
-time-by-frequency grid eight times over — which is where the cost comes from.
+those replaces the usual feed-forward layer with a bidirectional recurrence.
+Two and a quarter million (2.26 M) parameters, but they are applied to every
+point of the time-by-frequency grid eight times over — which is where the cost
+comes from.
 
 Because the attention spans the whole window along both axes, this network
 cannot stream and a long recording has to be cut. Upstream never had to answer
@@ -213,7 +218,10 @@ separately from the gain.
 
 **`resemble-enhance`** has no waveform on its path at all:
 
-1. the recording becomes a mel spectrogram;
+1. the recording becomes a mel spectrogram — a mix of the denoiser's output
+   and the recording as it is, in the proportion `--denoise` names (at its
+   default of 1.0 the flow sees only the denoised one; at 0 the denoiser does
+   not run at all, which is also the cheapest setting);
 2. an autoencoder turns that into a 64-wide latent, and noise is mixed into it
    in the proportion `--temperature` names;
 3. a **flow model** is integrated from that starting point to a description of
@@ -227,6 +235,16 @@ why it is not deterministic upstream: the reference draws both lots of noise
 from a generator its command line never seeds, so two runs of it give two
 different files. This port seeds its own, so a run repeats; `--seed` picks a
 different one.
+
+The knobs and their defaults:
+
+| flag | default | range | what it sets |
+|---|---|---|---|
+| `--nfe` | 64 | 1 to 128 | flow evaluations per chunk; the cost is very nearly proportional |
+| `--solver` | `midpoint` | `euler`, `midpoint`, `rk4` | evaluations spent per step: one, two, four |
+| `--temperature` | 0.5 | 0 to 1 | how much of the walk's starting point is noise |
+| `--denoise` | 1.0 | 0 to 1 | how much of the denoiser's output the flow is conditioned on |
+| `--seed` | 0 | — | fixes the noise this engine draws, and with it the run |
 
 ## Sample rate
 
@@ -242,6 +260,11 @@ For `resemble-enhance` it is more than that: the vocoder synthesises rather than
 filters, so it will put content above what the recording carried — a 32 kHz
 source comes back with something above 16 kHz. Whether that is welcome is a
 question for the listener, not for the engine.
+
+44.1 kHz is also the ceiling. A recording above it — 48 kHz, say — is resampled
+down to 44.1 kHz before the networks run, and the result is resampled back up
+to the recording's own rate (the `--sample-rate` default), so it comes back at
+48 kHz carrying nothing a 44.1 kHz signal could not.
 
 ## Output
 
@@ -267,6 +290,10 @@ trakktor enhance unipase meeting.wav --device metal --pretty
 }
 ```
 
+Every engine emits this same envelope, `packet_loss` and the
+`engine.runtime`/`engine.device` fields included; for `gtcrn`, which has
+neither flag, those two always read `candle` and `cpu`.
+
 `--text` prints the path and a one-line summary instead. The container follows
 the output extension: `wav` and `flac` are written directly, anything else goes
 through an installed `ffmpeg` (`--bitrate` applies there).
@@ -289,10 +316,10 @@ implementation of the same thing. `--model` names the checkpoint (default
 
 `mpsenet` downloads **9 MB** once — `--model dns` (the default, trained on the
 DNS Challenge data) or `--model vb` (VoiceBank+DEMAND). It is small but does a
-great deal of arithmetic per second of audio, so it wants a GPU, and there it is
-the one engine in trakktor where **the burn runtime is markedly faster than the
-default**: `--runtime burn --device metal` runs at about four tenths of real
-time, roughly three times `--runtime candle --device metal`. On the CPU the
+great deal of arithmetic per second of audio, so it wants a GPU, and it is one
+of the engines where **burn on a GPU is markedly faster than the default**:
+`--runtime burn --device metal` runs at about four tenths of real time, roughly
+three times `--runtime candle --device metal`. On the CPU the
 order reverses and burn is much the slower, so the pairing matters. `f32` is the
 default and the only verified mode; `--precision f16` works here and buys no
 speed at all.
@@ -311,7 +338,8 @@ speed option and is a different computation of the same model.
 The `resemble` pair downloads **713 MB** once — one checkpoint holding both
 networks, because that is how upstream publishes them — and converts it into two
 files, so `resemble-denoise` loads ten million parameters rather than three
-hundred and fifty. `--model` names it (default `resemble`) or takes a directory.
+hundred and forty-six. `--model` names it (default `resemble`) or takes a
+directory.
 
 `resemble-denoise` runs at about half of real time on four CPU cores or on
 Metal, and at **a fifth** of real time with `--runtime burn --device metal`,
@@ -327,7 +355,10 @@ nevertheless `cpu`, because loading three hundred and forty-six million
 parameters into GPU buffers takes about a gigabyte and a half out of memory the
 rest of the machine shares. If the GPU has room, ask for it.
 
-`f32` is the default and the only verified mode.
+`resemble-enhance` takes `--runtime burn` as well, behind the `burn` build
+feature and computing in f32 only. For both of the pair, `--precision` is `f32`
+by default and the only mode the port is verified in; `f16` is a candle-only
+speed option.
 
 Every engine is checked against its reference implementation stage by stage:
 `gtcrn`'s waveform lands within 4e-7 of it, `mpsenet`'s within 5e-7 (and its two

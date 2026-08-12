@@ -42,9 +42,9 @@ pass a path to a local `.ckpt`):
 - **`v3_ctc`** — Russian; normalized lowercase text without punctuation.
 - **`v3_rnnt`** — Russian; like `v3_ctc` but with an RNN-T (transducer)
   decoder — usually the most accurate raw text on Russian, slightly slower.
-- **`multilingual_ctc`** — multiple languages (220M).
-- **`multilingual_large_ctc`** — the largest, most accurate multilingual model
-  (600M).
+- **`multilingual_ctc`** — multiple languages.
+- **`multilingual_large_ctc`** — the largest, most accurate multilingual
+  model.
 
 The `v3_e2e_*` models emit readable, punctuated Russian. The plain `v3_ctc`
 and `v3_rnnt` models emit normalized lowercase text without punctuation
@@ -59,13 +59,14 @@ trakktor asr gigaam ru.mp3 --model v3_rnnt --device metal --text
 Unlike Whisper's autoregressive decoder, GigaAM decoding is a single encoder
 pass per chunk followed by one read-back — the CTC models take an argmax over
 frames, and `v3_rnnt` runs its small transducer loop on the CPU from the
-encoder output — so the GPU stays busy through a chunk either way. Audio
-longer than ~25 seconds is
-split along detected speech (voice-activity detection) into chunks, each
-transcribed independently and stitched back onto the original timeline. Chunk
-boundaries are placed by dynamic programming over the pauses between speech —
-the longer a pause, the likelier the cut lands there — so segments tend to fall
-on sentence boundaries while staying near the target length.
+encoder output — so the GPU stays busy through a chunk either way. Word
+timings with `--timestamps word` are read off those same emission frames, at
+no extra cost. Audio longer than ~25 seconds is split along detected speech
+(voice-activity detection) into chunks, each transcribed independently and
+stitched back onto the original timeline. Chunk boundaries are placed by
+dynamic programming over the pauses between speech — the longer a pause, the
+likelier the cut lands there — so segments tend to fall on sentence boundaries
+while staying near the target length.
 
 The whole pipeline is **streaming**: the file is decoded block by block,
 speech detection runs incrementally, and each chunk is transcribed — and its

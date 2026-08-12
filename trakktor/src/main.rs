@@ -12,6 +12,7 @@ mod enhance;
 mod error;
 mod ocr;
 mod output;
+mod pdf;
 mod punctuate;
 mod skill;
 mod stress;

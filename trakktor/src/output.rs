@@ -467,6 +467,44 @@ pub fn print_vad_cut(
     }
 }
 
+/// Prints the result of `pdf cut`. JSON: `source`, the source's `page_count`,
+/// the kept `pages` (their numbers in the source; page N of the result is the
+/// Nth entry), the written `out` path, and `dropped` (omitted when empty).
+/// Text: the written path. The summary is stderr diagnostics either way.
+pub fn print_pdf_cut(
+    cut: &trakktor_core::pdf::Cut,
+    source: &str,
+    out: &Path,
+    json: bool,
+    pretty: bool,
+) {
+    let dropped: Vec<&str> =
+        cut.dropped.iter().map(|dropped| dropped.as_str()).collect();
+    let summary = match dropped.is_empty() {
+        true => String::new(),
+        false => format!("; dropped: {}", dropped.join(", ")),
+    };
+    eprintln!(
+        "kept {} of {} pages{summary}",
+        cut.pages.len(),
+        cut.page_count
+    );
+
+    if json {
+        let mut object = Map::new();
+        object.insert("source".into(), Value::String(source.to_string()));
+        object.insert("page_count".into(), json!(cut.page_count));
+        object.insert("pages".into(), json!(cut.pages));
+        object.insert("out".into(), Value::String(out.display().to_string()));
+        if !dropped.is_empty() {
+            object.insert("dropped".into(), json!(dropped));
+        }
+        print_json(&Value::Object(object), pretty);
+        return;
+    }
+    println!("{}", out.display());
+}
+
 /// Prints the result of `vad split`. JSON: `output_dir`, `format`, `kept`, the
 /// clip `count`, and a `clips` array of `{path,index,start,end,duration}`.
 /// Text: one written path per line.

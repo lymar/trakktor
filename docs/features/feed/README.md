@@ -14,10 +14,12 @@ already seen, so a repeated run returns only what is new.
 trakktor feed discover https://example.com
 ```
 
-Returns the feeds declared on the page (`url`, `type`, `title`). When the page
-declares none, the typical paths — `/feed`, `/feed.xml`, `/rss`, `/rss.xml`,
-`/atom.xml`, `/feed.json` — are probed with extra requests before giving up.
-An empty result is success.
+Returns the feeds declared on the page: each one's `url`, plus `type` and
+`title` when the page declares them (an absent value is omitted, not `null`).
+When the page declares none, the typical paths — `/feed`, `/feed.xml`, `/rss`,
+`/rss.xml`, `/atom.xml`, `/feed.json` — are probed with extra requests before
+giving up. An empty result is success. With `--text`, each feed is one line:
+the `url`, then whichever of `type` and `title` are present, tab-separated.
 
 ## Read a feed
 
@@ -33,10 +35,14 @@ shows as an `is_read` field when `--fields` asks for it (`is_read` or `all`).
 - By default only **unread** publications are returned; `--all` includes read
   ones.
 - `uid` is each publication's **primary key** — the id you pass to `mark-read` —
-  so it is **always** included, independent of `--fields`.
+  so it is **always** included, independent of `--fields`; a literal `uid` in
+  `--fields` is accepted and ignored.
 - `--fields <list>` selects the *additional* fields: a comma-separated list of
   `is_read,title,link,published,updated,summary,content,authors`, or the special
   values `minimal` (default, `title,link`) and `all`.
+- A requested field is omitted from a publication that has no value for it —
+  no `null`s — and an empty `content` or `authors` list is omitted the same
+  way.
 - With `--text`, `uid` is the first column and a `mark-read` hint is printed to
   stderr.
 
@@ -51,7 +57,8 @@ is stable across runs for the same feed + entry.
 trakktor feed mark-read <uid> [<uid>...]
 ```
 
-Idempotent; the reply is `{"marked": n, "already_read": n}`. Read state is
+Idempotent; the reply is `{"marked": n, "already_read": n}` — with `--text`,
+the same two counts as `marked: n` and `already_read: n` lines. Read state is
 stored as plain files under `<work-dir>/feed/` (`./.trakktor` by default —
 `--work-dir` or `TRAKKTOR_DIR` move it), sharded by uid; nothing else is
 needed (no database).
@@ -66,3 +73,10 @@ trakktor feed mark-read <uid1> <uid2>                  # mark them handled
 ```
 
 On the next `read`, marked publications are no longer returned.
+
+Two consequences of where the state lives are worth knowing. The first `read`
+of a feed has no read state yet, so **every** entry comes back unread —
+expect the full backlog, not just what is new today. And the state sits under
+`--work-dir` (default `./.trakktor`), so the same question asked from another
+directory answers differently; pin `--work-dir` (or `TRAKKTOR_DIR`) when a
+workflow is not anchored to one directory.

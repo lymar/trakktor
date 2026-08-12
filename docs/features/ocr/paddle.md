@@ -12,7 +12,15 @@ trakktor runs PaddleOCR's own published artifacts directly — the graph and the
 weights exactly as they are published — so there is no conversion step, no
 Python and no ONNX runtime in the picture. The models are downloaded on first
 use into `~/.trakktor/ocr/paddle/`, and the run says what it is fetching, and
-how much, before the first byte moves.
+how much, before the first byte moves. The layout model and the `vl`
+checkpoint live in sibling subdirectories (`ocr/layout/`, `ocr/vl/`), and the
+global `--model-dir` moves the whole tree at once.
+
+```sh
+trakktor ocr paddle scan.png                  # JSON: pages, lines, boxes, scores
+trakktor ocr paddle scan.png --quality fast   # the small models: 13 MB, faster
+trakktor ocr paddle scan.png --format md --out doc.md   # Markdown, to a file
+```
 
 ## Models
 
@@ -24,11 +32,11 @@ how much, before the first byte moves.
 ```
 
 A detector serves every language: it looks for text as such and does not care
-what script it is. Fourteen recognizers cover the scripts between them — Eastern
-Slavic, wider Cyrillic, Latin, English, Arabic, Devanagari, Korean, Thai, Greek,
-Telugu, Tamil, and Chinese/Japanese. Eleven of them share an architecture and
-differ only in the alphabet they were trained on; the other three are larger
-models of their own.
+what script it is. Recognition is twelve alphabets, read by fourteen models:
+eleven small alphabet-specific ones that share an architecture, and three
+larger models of their own. The alphabets: Eastern Slavic, wider Cyrillic,
+Latin, English, Arabic, Devanagari, Korean, Thai, Greek, Telugu, Tamil, and
+Chinese/Japanese.
 
 **`--quality` is not a pair of model names but a rule**: for the language asked
 for, take the model that reads its alphabet best, or the one that reads it
@@ -201,7 +209,27 @@ where the labels come back thin or not at all. Lowering it is not free in one
 direction: a picture box covering the whole sheet passes a low floor too, and a
 picture swallows the blocks inside it, so the page can end up with fewer labels
 than the defaults gave it. [`ocr layout --boxes`](layout.md) shows what a value
-does to a page in one picture, for a second rather than a page of reading.
+does to a page in one picture, for a second rather than a page of reading. On
+a photograph, mind that `ocr layout` takes none of the photo flags
+(`--doc-orientation`, `--sheet`, `--unwarp`), so its preview sees the page
+unstraightened.
+
+## Writing things out
+
+```
+--out <path>               # the text result to a file as well as the report
+--crops <dir>              # every recognized line as the crop that was read
+--boxes <file|dir>         # the page with each line outlined and numbered
+--rectified <file|dir>     # the straightened page, when the photo flags ran
+```
+
+`--out` writes what was reported — with `--format md`, any illustrations go to
+an `imgs` directory next to it, linked from the Markdown. The other three show
+the reading rather than the result: `--crops` is what the recognizer read,
+`--boxes` is where it was found and in what order (a second colour marks a
+line read with less than half confidence), and `--rectified` is the page the
+reading was done on once `--doc-orientation --sheet --unwarp` have moved it.
+How to read them together: [checking a result](README.md#checking-a-result).
 
 ## Speed
 

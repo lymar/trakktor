@@ -15,6 +15,8 @@ pub mod feed;
 pub mod http;
 #[cfg(feature = "ocr-runtime")]
 pub mod ocr;
+pub mod pages;
+pub mod pdf;
 #[cfg(feature = "punctuate-runtime")]
 pub mod punctuate;
 pub mod skill;

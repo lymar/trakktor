@@ -414,9 +414,9 @@ here: `clipper2-rust` (polygon offsetting for the OCR detector) is under the
 Boost Software License 1.0, and `nalgebra`/`simba`, reached through
 `imageproc`, are Apache-2.0 only rather than dual-licensed.
 
-One crate is called out for a different reason — it is the whole engine of a
-command rather than a component of one, and it carries third-party data of its
-own:
+Two crates are called out for a different reason — each is the whole engine of
+a command rather than a component of one, and the first carries third-party
+data of its own:
 
   pdf-inspector — MIT License
     Copyright (c) 2026 Firecrawl
@@ -436,7 +436,18 @@ own:
         BSD-3-Clause terms; see the crate's `external/bcmaps/LICENSE`.
     trakktor neither redistributes nor relies on those CMap files at run time:
     the code path that reads them is unreachable in the pinned version, and
-    removing the directory leaves trakktor's output byte for byte the same. When distributing compiled binaries, generate the full
+    removing the directory leaves trakktor's output byte for byte the same.
+
+  lopdf — MIT License
+    Copyright (c) 2016 Junfeng Liu
+    https://github.com/J-F-Liu/lopdf
+    `pdf cut` parses, edits and writes PDF documents with this crate — page
+    extraction with resource garbage collection over its document model. It is
+    used as a library — no code is vendored or ported. The same crate parses
+    documents for the Type 1 encoding repair of `convert pdf` (see the
+    pdf-inspector entry above; that crate builds on lopdf as well).
+
+When distributing compiled binaries, generate the full
 set of dependency license texts with a tool such as `cargo about` or
 `cargo bundle-licenses`.
 

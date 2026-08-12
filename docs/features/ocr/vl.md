@@ -12,7 +12,7 @@ That is a different bargain from [`paddle`](paddle.md), not a better one:
 
 | | `paddle` | `vl` |
 |---|---|---|
-| download | ~139 MB, or 13 MB at `--quality fast` | **~2 GB**, once |
+| download | ~139 MB, or 13 MB at `--quality fast` | **~1.9 GB** checkpoint, ~2.1 GB in all, once |
 | a page | some ten seconds, less at `--quality fast` | tens of seconds |
 | alphabet | the recognizer's dictionary | whatever the model knows |
 | tables, formulas | lines of text | markup, LaTeX |
@@ -111,7 +111,9 @@ and the page falls back to the geometry above. Lowering the floor gives the
 labels back, but not for free: a picture box covering the whole sheet passes a
 low floor too, and a picture swallows the blocks inside it — and a picture is
 not read at all. [`ocr layout --boxes`](layout.md) shows what a value does to a
-page for the price of a second.
+page for the price of a second. On a photograph, mind that `ocr layout` takes
+none of the photo flags (`--doc-orientation`, `--sheet`, `--unwarp`), so its
+preview sees the page unstraightened.
 
 The grouping is adjustable:
 
@@ -185,8 +187,8 @@ of one of two shapes:
 - an **HTML `<table>`** with `rowspan`/`colspan`, as soon as one cell covers two
   rows or two columns. A pipe table has neither, so a merged cell could only
   come out as a blank next to the cell that carries the text — and a blank is
-  what the markup already means by its own empty-cell tag. Markdown accepts
-  inline HTML, so the structure survives:
+  what the markup already means by its own empty-cell tag, `<ecel>`. Markdown
+  accepts inline HTML, so the structure survives:
 
 ```html
 <table>
@@ -242,6 +244,52 @@ because this model reflows text and joins words broken across a line break —
 every line of that block gets the block's own rectangle instead. A coarse box is
 reported rather than a made-up precise one.
 
+## What comes out
+
+The JSON envelope is the shared one ([the `ocr`
+page](README.md#what-comes-out)), with two differences worth knowing: there is
+**no `language` key** — the model was never told one — and `models.recognition`
+names the checkpoint:
+
+```json
+{
+  "pages": [
+    {
+      "number": 1,
+      "source": "page.png",
+      "width": 1240,
+      "height": 1754,
+      "text": "…the page's lines…",
+      "lines": [
+        {
+          "text": "The first line",
+          "score": 0.976,
+          "quad": [[96, 132], [1114, 132], [1114, 174], [96, 174]],
+          "rotated": false
+        }
+      ],
+      "blocks": [
+        {
+          "kind": "paragraph",
+          "label": "text",
+          "score": 0.981,
+          "lines": [0],
+          "quad": [[88, 120], [1122, 120], [1122, 186], [88, 186]]
+        }
+      ]
+    }
+  ],
+  "models": {
+    "detection": "PP-OCRv5_server_det",
+    "recognition": "PaddleOCR-VL-1.6",
+    "layout": "PP-DocLayout_plus-L"
+  }
+}
+```
+
+A line cut short — by the repetition guard or at the `--max-tokens` ceiling —
+also carries `"truncated": true`; a line that was not carries no such field.
+
 ## A photograph rather than a scan
 
 This engine takes the shared [page preprocessing](photo.md) too —
@@ -279,8 +327,9 @@ default. `burn` sits behind the `burn` build feature and runs its Metal
 backend with tensor-op fusion turned off — fused, the f16 kernels break on
 this model's mixed-precision chains — and is kept as a second, independently
 written implementation to check the first against, not as a speed play. The
-detection stage runs on candle either way. Of the two OCR engines only `vl`
-has a burn runtime; `ocr paddle --runtime burn` is a validation error.
+text detector runs on candle either way; the layout stage, like the reader,
+follows `--runtime`. Of the two OCR engines only `vl` has a burn runtime;
+`ocr paddle --runtime burn` is a validation error.
 
 ## Languages
 

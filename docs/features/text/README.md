@@ -4,15 +4,16 @@
 > output/exit-code contract are described in
 > [Output and exit codes](../../../README.md#output-and-exit-codes).
 
-Text-processing operations, each with a local model, fully offline. Three ship
-today: `structify` (split into paragraphs), `punctuate` (restore punctuation and
-casing), and `stress` (mark the stressed vowel in Russian).
+Text-processing operations, each with a local model — offline after the
+first-use model download. Three ship today: `structify` (split into
+paragraphs), `punctuate` (restore punctuation and casing), and `stress` (mark
+the stressed vowel in Russian).
 
 ## `text structify` — split text into paragraphs
 
 Turn an unstructured wall of text — for example a speech transcript whose line
 breaks fall on engine segments rather than meaning — into readable paragraphs,
-fully offline:
+offline:
 
 ```sh
 trakktor text structify transcript.txt            # JSON (default): model + paragraphs
@@ -20,7 +21,9 @@ trakktor text structify transcript.txt --text     # paragraphs separated by blan
 trakktor text structify transcript.txt --pretty   # indented JSON
 ```
 
-The one required argument is the path to a UTF-8 text file. Its existing line
+The one required argument is the path to a UTF-8 text file — a real file, for
+this and the other two `text` operations: `-` is not read as standard input
+here (unlike `--text-file -` in [`tts`](../tts/README.md)). Its existing line
 breaks are collapsed first (a transcript's segment breaks are not paragraph
 breaks), then a local **SaT** (Segment any Text) model — an XLM-RoBERTa network
 that scores each position for a boundary — re-groups the text into paragraphs.
@@ -74,16 +77,23 @@ trakktor text structify transcript.txt --model sat-3l-sm --text
 `--device metal` runs on the macOS GPU: on the candle runtime it needs a build
 with the `metal` feature, on burn the `burn` feature brings its own backend
 (as for [`asr`](../asr/README.md#device-and-precision)); without the matching
-feature, `--device metal` is rejected. `--precision
-f16` (the default) uses about half the memory and is faster; `f32` computes in
-full precision for reproducible results — and on the burn CPU backend f32 is
-what runs regardless, as it has no half-precision elements.
+feature, `--device metal` is rejected. `--precision f16` (the default) uses
+about half the memory and is faster; `f32` computes in full precision for
+reproducible results.
 
 The shared `--runtime` flag applies too: `--runtime burn` runs the same
 network on the alternative burn runtime (see the
 [Runtime section under `asr`](../asr/README.md#runtime)
-— the same build feature, backends, and caveats). Both runtimes produce the
-same paragraphs.
+— the same build feature, backends, and caveats). The burn CPU backend
+computes in f32 only, so on the CPU combine `--runtime burn` with
+`--precision f32`; `f16` — the default here and in `punctuate` — is rejected
+there rather than silently downgraded (`text stress` is unaffected: its
+default is already f32). Both runtimes produce the same paragraphs:
+
+```sh
+# The same paragraphs on the burn runtime, CPU
+trakktor text structify transcript.txt --runtime burn --precision f32 --text
+```
 
 ### Segmentation controls
 
@@ -92,6 +102,9 @@ same paragraphs.
 --stride 256      # window step in tokens; a smaller stride overlaps more (steadier, slower)
 --batch-size 32   # windows per forward batch — the main lever on GPU utilization
 ```
+
+`--threshold` is a probability: a value outside 0..=1 is rejected
+(`invalid_options`), not clamped.
 
 ### Output shape
 
@@ -122,9 +135,9 @@ trakktor text structify transcript.txt --text
 
 ## `text punctuate` — restore punctuation and casing
 
-Turn raw ASR output — lowercase text with no punctuation, as the
-[Vosk](../asr/vosk.md) and [GigaAM](../asr/gigaam.md) engines emit — into
-readable text: restore punctuation, capitalization
+Turn raw ASR output — lowercase text with no punctuation, as
+[Vosk](../asr/vosk.md) and [GigaAM](../asr/gigaam.md)'s `v3_ctc`/`v3_rnnt`
+models emit — into readable text: restore punctuation, capitalization
 (including acronyms like `NATO` and `U.S.`), and sentence boundaries, fully
 offline:
 
@@ -178,7 +191,10 @@ borderline token.
 ```
 
 Inputs longer than the model's window (256 tokens) are split into overlapping
-windows and stitched back together; these tune that.
+windows and stitched back together; these tune that. At each seam the overlap
+is split in half between the two windows, so an odd `--overlap` rounds down;
+the value must stay below 254 (the window minus its two markers) — anything
+higher is rejected.
 
 ### Output shape
 
@@ -234,8 +250,10 @@ that names the stressed vowel and any hidden `ё`. **A word you have marked
 yourself is never re-marked**, so marking part of the text by hand and leaving
 the rest to the model is the normal way to work.
 
-The natural consumer is [`tts espeech`](../tts/espeech.md), which reads `+` as a
-real input — and which calls this operation itself by default.
+The natural consumers are [`tts espeech`](../tts/espeech.md) and
+[`tts silero`](../tts/silero.md): both read `+` as a real input, and both call
+this operation themselves by default. `silero` needs no reference recording,
+so it is the one to try with no setup at all.
 
 ### Mark form
 
@@ -269,8 +287,9 @@ character.
 ```
 
 Names, terms, rare words, and the three-way homographs the model cannot express
-(`с+ела` / `сел+а` / `с+ёла`) belong here. One marked word per line, `#` starts a
-comment:
+(`с+ела` / `сел+а` / `с+ёла`) belong here. One marked word per line, written
+with `+` — an entry in the acute form is an error, whatever `--marker` says —
+and `#` starts a comment:
 
 ```
 # names and terms
@@ -282,7 +301,11 @@ comment:
 The key is the line with the marks removed, lowercased and with `ё` folded into
 `е` — so `Корол+ёв` covers both `Королев` and `Королёв`. An entry wins over the
 model, keeps the case of the text it is applied to, and is written in before the
-model runs. A malformed line is an error, not a silent skip.
+model runs. A malformed line is an error, not a silent skip, and four things
+malform one: more than one word on the line; anything but Russian letters and
+`+` (so `Римский-К+орсаков` fails on its hyphen); an entry that marks nothing —
+no `+` and no `ё`; and a key that appears twice, in one file or across your
+`--dict` files.
 
 This is the way to fix a word the model gets wrong. On its own it reads
 `Он показал мне киноварь` as `к+иноварь`; with the entry above it reads
@@ -338,8 +361,22 @@ ordinary prose a word or two, usually a proper name.
 `--text` prints the marked text alone.
 
 ```sh
-# from raw speech to marked-up text, ready to speak
+# from raw speech to spoken audio: transcribe, punctuate, mark, speak
 trakktor asr gigaam talk.mp3 --model v3_rnnt --timestamps none --text > raw.txt
 trakktor text punctuate raw.txt --text > punctuated.txt
 trakktor text stress punctuated.txt --text > marked.txt
+trakktor tts silero --text-file marked.txt --stress off -o out.wav
 ```
+
+`--stress off` on the last step is not required, only frugal: the marks are
+already in the text, and without it the synthesizer still loads the stress
+model.
+
+## Credits
+
+The three models are ported from
+[SaT / wtpsplit](https://github.com/segment-any-text/wtpsplit) (MIT), the
+[1-800-BAD-CODE multilingual punctuation/true-casing model](https://huggingface.co/1-800-BAD-CODE/xlm-roberta_punctuation_fullstop_truecase)
+(Apache-2.0), and [Silero Stress](https://github.com/snakers4/silero-stress)
+(MIT). See [`docs/acknowledgments.md`](../../acknowledgments.md) and
+[`NOTICE`](../../../NOTICE).

@@ -23,20 +23,20 @@ const DESCRIPTION_MAX: usize = 1024;
 /// so a new feature does not reach skill discovery on its own.
 const STUB_DESCRIPTION: &str =
     "Use {name}, a predictable, automation-friendly CLI toolbox for coding \
-     agents. Documents: a PDF made from layout goes straight to Markdown, no \
-     OCR; it names the pages that need it. Feeds: discover a page's \
+     agents; self-documenting (`{name} skill show`). Documents: a PDF made \
+     from layout goes straight to Markdown, no OCR; it names the pages that \
+     need it; cut pages into a new PDF. Feeds: discover a page's \
      RSS/Atom/JSON feeds, read unread entries, track read state. Speech: \
-     transcribe audio with a local Whisper, GigaAM or Vosk model, or \
-     translate to English; read text or Markdown aloud, Russian too, in a \
-     preset or cloned voice; clean up a damaged recording (noise, reverb, \
-     lost packets), 16 kHz or full-band. Audio: by voice-activity detection, \
-     cut silence, split, or report the speech timeline. Images: read text off \
-     scans, screenshots and photos, or with a document model that reads \
-     tables, formulas and any script; label page blocks; straighten a skewed \
-     photo. Text: restore punctuation and casing, split paragraphs, mark \
-     Russian stress — offline. Reach for it whenever a task involves a PDF, a \
-     feed URL, audio to transcribe, text aloud, a cloned voice, dead air, \
-     text off a scan, punctuation, or Russian stress.";
+     transcribe (or translate to English) with a local Whisper, GigaAM or \
+     Vosk model; read text or Markdown aloud, Russian too, preset or cloned \
+     voice; repair a damaged recording (noise, reverb, lost packets), 16 kHz \
+     or full-band. Audio: cut silence by voice-activity detection, split, or \
+     map the speech timeline. Images: read text off scans, screenshots, \
+     photos — a document model reads tables, formulas, any script; label page \
+     blocks; straighten a photo. Text: restore punctuation and casing, split \
+     paragraphs, mark Russian stress — offline. Reach for it whenever a task \
+     involves a PDF, a feed, audio, text aloud, a cloned voice, dead air, a \
+     scan, or Russian stress.";
 
 /// Renders the agent-facing guide (`trakktor skill show`).
 ///

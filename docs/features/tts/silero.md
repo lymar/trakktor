@@ -34,6 +34,25 @@ the voice's height.
 trakktor tts silero --text-file article.md --rate 0.9 --pitch 1.05 -o slower.wav
 ```
 
+| Flag | Default | Meaning |
+|---|---|---|
+| `<text>` / `--text-file <path\|->` | — | The text to speak, as the argument or from a file (`-` reads standard input); at most one. Only `--voice list` needs neither. |
+| `--voice <name\|list>` | `ru_zhadyra` | The speaker — and with it the language, named by the prefix (see [Languages](#languages)). `list` prints the selected model's voices and exits. |
+| `--model <name\|dir>` | `cis-base` | `cis-base`, `cis-base-nostress`, `cis-ext`, `ru-classic`, or a converted model directory (see [Voices and models](#voices-and-models)). |
+| `--allow-non-commercial-models` | off | Required for the CC BY-NC-SA 4.0 models (`cis-ext`, `ru-classic`). Grants no license — it records that the choice was deliberate. |
+| `--sample-rate <48000\|24000\|8000>` | `48000` | What the model produces: 48 kHz is synthesized, the lower two come from its own filterbank (see [Sample rate](#sample-rate)). |
+| `--rate <float>` | `1.0` | Speech rate as a multiplier: below 1 slower, above 1 faster — it repaces the reading rather than replaying it at another speed. |
+| `--pitch <float>` | `1.0` | Pitch as a multiplier, scaled by the speaker's own range, so the voice stays itself; useful values sit between 0.75 and 1.25. |
+| `--stress <auto\|off>` | `auto` | Whether to mark the stress before speaking (see [Stress](#stress)). Marks you wrote yourself are never moved. |
+| `--pause-ms <ms>` | `500` | Gap between paragraphs (half that inside a split paragraph). |
+| `--levels <match\|keep>` | `match` | Bring the pieces to a common loudness before joining, or keep the levels the model gave them. |
+| `-o, --output <path>` | `speech.wav` | Where to write the audio; the container follows the extension. |
+| `--text-format <auto\|txt\|md>` | `auto` | Where paragraphs end and whether markup is stripped. |
+| `--audio-encoder <auto\|builtin\|ffmpeg>` | `auto` | Who writes the file: the built-in wav/flac encoder, or ffmpeg for everything else. |
+| `--bitrate <rate>` | — | `-b:a` for lossy ffmpeg formats, e.g. `192k`. |
+| `--runtime <candle\|burn>` | `candle` | Inference runtime; burn needs the `burn` build feature (see [Speed](#speed)). |
+| `--device <cpu\|metal>` | `cpu` | Compute device; this model is meant for the CPU rather than falling back to it. The `metal` feature covers the candle runtime; `--runtime burn` brings its own Metal backend. |
+
 ## Languages
 
 **The language is not a flag — it is the voice.** Each speaker was trained for
@@ -127,15 +146,35 @@ The flag grants no license — trakktor is not a party to it, and the file
 travels from its publisher to you. It records that the choice was deliberate
 and makes it reproducible in a script. Whichever model runs, its license is
 reported in the output, so the constraint is visible where the decision is
-made.
+made. Here is what the first example on this page reports:
+
+```json
+{
+  "output": "hello.wav", "format": "wav", "sample_rate": 48000,
+  "duration": 1.54, "chunks": 1,
+  "voice": { "kind": "preset", "name": "ru_zhadyra" },
+  "engine": { "name": "silero", "model": "cis-base", "runtime": "candle" },
+  "silero": { "license": "MIT", "symbols": 25, "frames": 135,
+              "rate": 1.0, "pitch": 1.0,
+              "stressed_text": "Прим+ер с+интеза р+ечи." }
+}
+```
+
+`stressed_text` is what the model actually read, present when the automatic
+marker ran; `dropped_characters` and `skipped_paragraphs` appear when the
+frontend removed anything (see [What the text loses](#what-the-text-loses));
+`utterances` — the utterance types given to the intonation head (`statement`,
+`question`, and so on) — only with `ru-classic`, the one model that has one.
+Note there is no `language` field, unlike the other two engines: here the
+language is the voice.
 
 ## Sample rate
 
 The model synthesizes 48 kHz, and it derives 24 kHz and 8 kHz from that with a
 filterbank of its own rather than by resampling — a different signal, not the
-same one interpolated. `--sample-rate` picks which the model produces; the
-output file's container and codec are still chosen by the extension of
-`--output`.
+same one interpolated. `--sample-rate <48000|24000|8000>` picks which of the
+three the model produces; the output file's container and codec are still
+chosen by the extension of `--output`.
 
 ## What the text loses
 
@@ -176,9 +215,10 @@ the model:
 | burn | metal | 9.9 s | 14× |
 
 `--runtime burn` is the alternative runtime, available in builds with the
-`burn` feature; `--device metal` needs the `metal` feature. The four combinations
-agree with each other to within a cosine similarity of 0.99999998 — they are
-the same reading, not four different ones.
+`burn` feature; for `--device metal`, the `metal` feature covers the candle
+runtime, and `--runtime burn` brings its own Metal backend. The four
+combinations agree with each other to within a cosine similarity of
+0.99999998 — they are the same reading, not four different ones.
 
 ## Long text
 

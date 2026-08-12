@@ -51,10 +51,15 @@ built-in decoder does not cover:
 
 ```sh
 trakktor asr whisper voice.opus --audio-decoder ffmpeg
+trakktor asr gigaam voice.ogg --audio-decoder ffmpeg    # .ogg is usually opus
 ```
 
-It requires `ffmpeg` on your `PATH`; without it the command fails with a clear
-error. The default build never needs ffmpeg.
+Watch the `.ogg` extension: an `.ogg` voice message is usually opus, which the
+built-in decoder does not read — the container is supported, but not that
+codec inside it.
+
+The `ffmpeg` decoder requires `ffmpeg` on your `PATH`; without it the command
+fails with a clear error. The default build never needs ffmpeg.
 
 ## Model storage
 
@@ -62,8 +67,9 @@ Models are downloaded **on first use** and reused on later runs; first-run
 download progress is printed to stderr.
 
 A checkpoint is gigabytes, so the download is built to survive the trip. It
-runs over four parallel connections — measurably about three times faster than
-one — and **resumes** if it is interrupted: a run that dies at 90 % costs the
+runs over up to four parallel connections — measurably about three times
+faster than one, for a large file on a server that accepts range requests —
+and **resumes** if it is interrupted: a run that dies at 90 % costs the
 remaining 10 % next time, not the whole file again. Transient failures (a
 dropped connection, a stalled transfer, a 5xx) are retried, and a file only
 gets its final name once it is complete and matches its published checksum, so
@@ -97,7 +103,8 @@ page.
     --features metal trakktor
   ```
 
-  Without that feature, `--device metal` is rejected. (The alternative burn
+  Without that feature, `--device metal` is rejected — at run time, when the
+  model is about to load, not at argument parsing. (The alternative burn
   runtime is the exception — it ships its own Metal backend; see below.)
 
 - **`--precision f16`** (the default) uses about half the memory and is faster;
@@ -113,8 +120,9 @@ page.
 
 All three engines execute their network on the [candle](https://github.com/huggingface/candle)
 runtime by default (as do [`text structify`](../text/README.md) and
-[`text punctuate`](../text/README.md), and both TTS engines,
-[`tts qwen3-tts`](../tts/qwen3-tts.md) and [`tts espeech`](../tts/espeech.md)).
+[`text punctuate`](../text/README.md), and all three TTS engines,
+[`tts qwen3-tts`](../tts/qwen3-tts.md), [`tts silero`](../tts/silero.md), and
+[`tts espeech`](../tts/espeech.md)).
 An alternative [burn](https://github.com/tracel-ai/burn)
 runtime is available behind the `burn` build feature and selected per run with
 `--runtime burn` (candle needs nothing extra; burn brings its own Metal
@@ -155,10 +163,12 @@ backend, independent of the `metal` feature). What to know about it:
 The default output is a single JSON object: the transcript `text`, the
 `language` (whisper detects it when omitted; gigaam and vosk only report one
 when `--language` is given), the audio `duration` (seconds), the `engine`, and —
-unless `--timestamps none` — a `segments` array. Each segment carries its
-`id`, `start`, `end`, `text`, and (with `--timestamps word`) a `words` array;
-whisper segments also carry decoder quality signals under `whisper`. A whisper
-result:
+unless `--timestamps none` — a `segments` array; with whisper's `--vad`, a
+top-level `vad` block with the detected speech spans is added (see
+[the whisper page](whisper.md#voice-activity-detection-vad)). Each segment
+carries its `id`, `start`, `end`, `text`, and (with `--timestamps word`) a
+`words` array; whisper segments also carry decoder quality signals under
+`whisper`. A whisper result:
 
 ```json
 {
